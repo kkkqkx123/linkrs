@@ -1,0 +1,6 @@
+----name
+lsqb/q8
+----query
+MATCH (:Comment_)-[r:REPLYOF_COMMENT]->(:Comment_) RETURN count(r)
+----expected
+108027

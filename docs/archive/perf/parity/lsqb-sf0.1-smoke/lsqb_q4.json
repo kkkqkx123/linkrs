@@ -1,0 +1,9 @@
+{
+  "name": "lsqb/q4",
+  "status": "ok",
+  "threads": 32,
+  "execution_times_ms": [51.653, 51.689, 51.745],
+  "execution_ms": 51.671,
+  "median_ms": 51.689,
+  "query": "MATCH (:Person)-[k:KNOWS]->(:Person) RETURN count(k)"
+}

@@ -1,0 +1,3 @@
+# dataset/group/name  reason
+# None yet. Add queries that cannot be semantically aligned with Ladybug
+# (see docs/release/benchmark/parity-benchmark.md section on the skip list).

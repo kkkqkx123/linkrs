@@ -1,0 +1,9 @@
+{
+  "name": "lsqb/q2",
+  "status": "ok",
+  "threads": 32,
+  "execution_times_ms": [101.116, 101.219, 100.376],
+  "execution_ms": 100.746,
+  "median_ms": 101.116,
+  "query": "MATCH (n:Comment_) RETURN count(n)"
+}

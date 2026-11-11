@@ -1,0 +1,9 @@
+{
+  "name": "lsqb/q8",
+  "status": "ok",
+  "threads": 32,
+  "execution_times_ms": [1054.992, 1055.283, 1113.327],
+  "execution_ms": 1055.137,
+  "median_ms": 1055.283,
+  "query": "MATCH (:Comment_)-[r:REPLYOF_COMMENT]->(:Comment_) RETURN count(r)"
+}

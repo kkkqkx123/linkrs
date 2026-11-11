@@ -1,0 +1,6 @@
+----name
+lsqb/q5
+----query
+MATCH (:Comment_)-[h:HASCREATOR_COMMENT]->(:Person) RETURN count(h)
+----expected
+215488

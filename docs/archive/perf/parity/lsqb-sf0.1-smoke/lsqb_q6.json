@@ -1,0 +1,9 @@
+{
+  "name": "lsqb/q6",
+  "status": "ok",
+  "threads": 32,
+  "execution_times_ms": [1077.707, 1146.249, 1081.959],
+  "execution_ms": 1079.833,
+  "median_ms": 1081.959,
+  "query": "MATCH (:Post)-[h:HASCREATOR_POST]->(:Person) RETURN count(h)"
+}

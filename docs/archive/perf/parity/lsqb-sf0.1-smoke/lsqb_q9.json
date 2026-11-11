@@ -1,0 +1,9 @@
+{
+  "name": "lsqb/q9",
+  "status": "ok",
+  "threads": 32,
+  "execution_times_ms": [526.139, 525.633, 525.330],
+  "execution_ms": 525.481,
+  "median_ms": 525.633,
+  "query": "MATCH (:Forum)-[c:CONTAINEROF]->(:Post) RETURN count(c)"
+}

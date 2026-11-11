@@ -1,0 +1,9 @@
+{
+  "name": "lsqb/q5",
+  "status": "ok",
+  "threads": 32,
+  "execution_times_ms": [1385.229, 1394.445, 1405.118],
+  "execution_ms": 1389.837,
+  "median_ms": 1394.445,
+  "query": "MATCH (:Comment_)-[h:HASCREATOR_COMMENT]->(:Person) RETURN count(h)"
+}

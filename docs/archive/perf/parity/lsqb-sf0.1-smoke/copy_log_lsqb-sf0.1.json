@@ -1,0 +1,28 @@
+{
+  "dataset": "lsqb-sf0.1",
+  "version": "unknown",
+  "statements": [
+    {"statement": "CREATE SPACE IF NOT EXISTS lsqb (vid_type=INT64)", "kind": "CREATE SPACE", "elapsed_ms": 20.074, "rows": 0},
+    {"statement": "USE lsqb", "kind": "USE", "elapsed_ms": 0.354, "rows": 1},
+    {"statement": "CREATE TAG IF NOT EXISTS Person(id: INT64)", "kind": "DDL", "elapsed_ms": 0.508, "rows": 0},
+    {"statement": "CREATE TAG IF NOT EXISTS Comment_(id: INT64)", "kind": "DDL", "elapsed_ms": 3.918, "rows": 0},
+    {"statement": "CREATE TAG IF NOT EXISTS Post(id: INT64)", "kind": "DDL", "elapsed_ms": 0.754, "rows": 0},
+    {"statement": "CREATE TAG IF NOT EXISTS Forum(id: INT64)", "kind": "DDL", "elapsed_ms": 0.734, "rows": 0},
+    {"statement": "CREATE EDGE IF NOT EXISTS KNOWS() FROM Person TO Person", "kind": "DDL", "elapsed_ms": 1.193, "rows": 0},
+    {"statement": "CREATE EDGE IF NOT EXISTS HASCREATOR_COMMENT() FROM Comment_ TO Person", "kind": "DDL", "elapsed_ms": 1.321, "rows": 0},
+    {"statement": "CREATE EDGE IF NOT EXISTS HASCREATOR_POST() FROM Post TO Person", "kind": "DDL", "elapsed_ms": 1.500, "rows": 0},
+    {"statement": "CREATE EDGE IF NOT EXISTS REPLYOF_COMMENT() FROM Comment_ TO Comment_", "kind": "DDL", "elapsed_ms": 1.705, "rows": 0},
+    {"statement": "CREATE EDGE IF NOT EXISTS REPLYOF_POST() FROM Comment_ TO Post", "kind": "DDL", "elapsed_ms": 1.911, "rows": 0},
+    {"statement": "CREATE EDGE IF NOT EXISTS CONTAINEROF() FROM Forum TO Post", "kind": "DDL", "elapsed_ms": 2.132, "rows": 0},
+    {"statement": "COPY TAG Person FROM '/data/kkkqkx/linkrs/parity/lsqb-sf0.1-v4/prepare/Person.csv' WITH (HEADER true, DELIMITER '|')", "kind": "COPY VERTEX person", "elapsed_ms": 62.651, "rows": 1700},
+    {"statement": "COPY TAG Comment_ FROM '/data/kkkqkx/linkrs/parity/lsqb-sf0.1-v4/prepare/Comment.csv' WITH (HEADER true, DELIMITER '|')", "kind": "COPY VERTEX comment_", "elapsed_ms": 4203.585, "rows": 215488},
+    {"statement": "COPY TAG Post FROM '/data/kkkqkx/linkrs/parity/lsqb-sf0.1-v4/prepare/Post.csv' WITH (HEADER true, DELIMITER '|')", "kind": "COPY VERTEX post", "elapsed_ms": 4098.239, "rows": 172438},
+    {"statement": "COPY TAG Forum FROM '/data/kkkqkx/linkrs/parity/lsqb-sf0.1-v4/prepare/Forum.csv' WITH (HEADER true, DELIMITER '|')", "kind": "COPY VERTEX forum", "elapsed_ms": 2406.615, "rows": 17043},
+    {"statement": "COPY EDGE KNOWS FROM '/data/kkkqkx/linkrs/parity/lsqb-sf0.1-v4/prepare/Person_knows_Person.csv' WITH (HEADER true, DELIMITER '|')", "kind": "COPY EDGE knows", "elapsed_ms": 3870.787, "rows": 18135},
+    {"statement": "COPY EDGE HASCREATOR_COMMENT FROM '/data/kkkqkx/linkrs/parity/lsqb-sf0.1-v4/prepare/Comment_hasCreator_Person.csv' WITH (HEADER true, DELIMITER '|')", "kind": "COPY EDGE hascreator_comment", "elapsed_ms": 20847.924, "rows": 215488},
+    {"statement": "COPY EDGE HASCREATOR_POST FROM '/data/kkkqkx/linkrs/parity/lsqb-sf0.1-v4/prepare/Post_hasCreator_Person.csv' WITH (HEADER true, DELIMITER '|')", "kind": "COPY EDGE hascreator_post", "elapsed_ms": 24098.178, "rows": 172438},
+    {"statement": "COPY EDGE REPLYOF_COMMENT FROM '/data/kkkqkx/linkrs/parity/lsqb-sf0.1-v4/prepare/Comment_replyOf_Comment.csv' WITH (HEADER true, DELIMITER '|')", "kind": "COPY EDGE replyof_comment", "elapsed_ms": 21720.973, "rows": 108027},
+    {"statement": "COPY EDGE REPLYOF_POST FROM '/data/kkkqkx/linkrs/parity/lsqb-sf0.1-v4/prepare/Comment_replyOf_Post.csv' WITH (HEADER true, DELIMITER '|')", "kind": "COPY EDGE replyof_post", "elapsed_ms": 26461.261, "rows": 107461},
+    {"statement": "COPY EDGE CONTAINEROF FROM '/data/kkkqkx/linkrs/parity/lsqb-sf0.1-v4/prepare/Forum_containerOf_Post.csv' WITH (HEADER true, DELIMITER '|')", "kind": "COPY EDGE containerof", "elapsed_ms": 31418.412, "rows": 172438}
+  ]
+}

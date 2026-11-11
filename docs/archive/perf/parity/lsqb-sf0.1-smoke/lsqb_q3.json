@@ -1,0 +1,9 @@
+{
+  "name": "lsqb/q3",
+  "status": "ok",
+  "threads": 32,
+  "execution_times_ms": [81.349, 81.879, 81.703],
+  "execution_ms": 81.526,
+  "median_ms": 81.703,
+  "query": "MATCH (n:Post) RETURN count(n)"
+}

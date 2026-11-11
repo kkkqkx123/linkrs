@@ -1,0 +1,9 @@
+{
+  "name": "lsqb/q1",
+  "status": "ok",
+  "threads": 32,
+  "execution_times_ms": [1.050, 1.018, 1.017],
+  "execution_ms": 1.018,
+  "median_ms": 1.018,
+  "query": "MATCH (n:Person) RETURN count(n)"
+}

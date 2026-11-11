@@ -1,0 +1,6 @@
+----name
+lsqb/q9
+----query
+MATCH (:Forum)-[c:CONTAINEROF]->(:Post) RETURN count(c)
+----expected
+172438

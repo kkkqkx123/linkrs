@@ -206,6 +206,11 @@ name = "linkrs-server"
 path = "src/main.rs"
 required-features = ["server"]
 
+[[bin]]
+name = "linkrs-parity-bench"
+path = "src/bin/linkrs_parity_bench.rs"
+required-features = ["embedded"]
+
 [dependencies]
 linkrs-core = { version = "0.1.0", path = "crates/linkrs-core" }
 linkrs-metrics = { version = "0.1.0", path = "crates/linkrs-metrics" }
@@ -246,8 +251,10 @@ embedding = ["vector", "linkrs-sync/embedding", "linkrs-server/embedding"]
 rerank = ["vector", "linkrs-sync/rerank", "linkrs-server/rerank"]
 vector-qdrant = ["vector", "dep:vector-client", "linkrs-api/vector-qdrant", "linkrs-server/vector-qdrant", "linkrs-config/vector-qdrant", "linkrs-sync/vector-qdrant", "linkrs-query/vector-qdrant"]
 grpc = ["linkrs-server/grpc"]
-embedded = ["linkrs-api/embedded", "linkrs-api/c_api", "linkrs-config/embedded"]
+embedded = ["linkrs-api/embedded", "linkrs-config/embedded"]
 c_api = ["linkrs-api/embedded", "linkrs-api/c_api", "linkrs-config/embedded"]
+# Opt-in online schema migration orchestration through the API layer.
+migration = ["linkrs-api/migration"]
 # Compile the `test_utils` helpers into the lib for integration tests.
 # Unit tests inside the crate see the module via `cfg(test)`; this feature
 # exists so `tests/` targets can enable it through the self dev-dependency

@@ -1,0 +1,6 @@
+----name
+lsqb/q2
+----query
+MATCH (n:Comment_) RETURN count(n)
+----expected
+215488

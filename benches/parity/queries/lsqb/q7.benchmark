@@ -1,0 +1,6 @@
+----name
+lsqb/q7
+----query
+MATCH (:Comment_)-[r:REPLYOF_POST]->(:Post) RETURN count(r)
+----expected
+107461

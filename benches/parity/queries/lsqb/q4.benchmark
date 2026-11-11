@@ -1,0 +1,6 @@
+----name
+lsqb/q4
+----query
+MATCH (:Person)-[k:KNOWS]->(:Person) RETURN count(k)
+----expected
+18135

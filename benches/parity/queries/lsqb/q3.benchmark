@@ -1,0 +1,6 @@
+----name
+lsqb/q3
+----query
+MATCH (n:Post) RETURN count(n)
+----expected
+172438

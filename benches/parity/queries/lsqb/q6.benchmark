@@ -1,0 +1,6 @@
+----name
+lsqb/q6
+----query
+MATCH (:Post)-[h:HASCREATOR_POST]->(:Person) RETURN count(h)
+----expected
+172438

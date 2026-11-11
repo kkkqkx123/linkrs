@@ -1,0 +1,6 @@
+----name
+lsqb/q1
+----query
+MATCH (n:Person) RETURN count(n)
+----expected
+1700
