@@ -2,9 +2,9 @@
 
 use linkrs_core::types::expr::Expression;
 use linkrs_core::types::{FulltextEngineType, ReadYourWritesConfig};
-use linkrs_fulltext::query::FulltextQuery;
-
-use crate::parser::ast::fulltext::{AlterIndexAction, IndexFieldDef, IndexOptions};
+use crate::parser::ast::fulltext::{
+    AlterIndexAction, FulltextQueryExpr, IndexFieldDef, IndexOptions,
+};
 
 /// Fulltext index DDL command payload.
 #[derive(Debug, Clone)]
@@ -56,7 +56,7 @@ pub enum FulltextSpec {
         space_name: String,
         space_id: u64,
         index_name: String,
-        structured_query: FulltextQuery,
+        structured_query: FulltextQueryExpr,
         tag_name: String,
         field_name: String,
         limit: Option<usize>,
@@ -67,7 +67,7 @@ pub enum FulltextSpec {
         space_name: String,
         space_id: u64,
         index_name: String,
-        structured_query: FulltextQuery,
+        structured_query: FulltextQueryExpr,
         tag_name: String,
         field_name: String,
         limit: Option<usize>,
@@ -80,7 +80,7 @@ pub enum FulltextSpec {
         match_expr: Expression,
         match_field: Option<String>,
         /// Structured query built from the fulltext match condition.
-        structured_query: FulltextQuery,
+        structured_query: FulltextQueryExpr,
         tag_name: String,
         field_name: String,
         limit: Option<usize>,

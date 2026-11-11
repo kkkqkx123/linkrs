@@ -677,11 +677,12 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_fulltext_search
     node: &crate::planning::plan::core::nodes::search::fulltext::data_access::FulltextSearchNode,
     exec_ctx: &ExecutionContext,
 ) -> Result<FulltextSpec, PlanBuildError> {
+    validate_fulltext_query_fields(&node.query, &node.field_name)?;
     Ok(FulltextSpec::FulltextSearch {
         space_name: exec_ctx.space_name.clone().unwrap_or_default(),
         space_id: exec_ctx.current_space_id().unwrap_or(0),
         index_name: node.index_name.clone(),
-        structured_query: fulltext_query_to_structured(&node.query, &node.field_name)?,
+        structured_query: node.query.clone(),
         tag_name: node.tag_name.clone(),
         field_name: node.field_name.clone(),
         limit: node.limit,
@@ -697,7 +698,7 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_fulltext_lookup
         space_name: exec_ctx.space_name.clone().unwrap_or_default(),
         space_id: exec_ctx.current_space_id().unwrap_or(0),
         index_name: node.index_name.clone(),
-        structured_query: linkrs_fulltext::query::FulltextQuery::Simple(node.query.clone()),
+        structured_query: crate::parser::ast::fulltext::FulltextQueryExpr::Simple(node.query.clone()),
         tag_name: node.tag_name.clone(),
         field_name: node.field_name.clone(),
         limit: node.limit,
@@ -717,7 +718,7 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_match_fulltext_
             node.fulltext_condition.field, node.fulltext_condition.query
         ))),
         match_field: Some(node.field_name.clone()),
-        structured_query: linkrs_fulltext::query::FulltextQuery::Simple(
+        structured_query: crate::parser::ast::fulltext::FulltextQueryExpr::Simple(
             node.fulltext_condition.query.clone(),
         ),
         tag_name: node.tag_name.clone(),
@@ -914,43 +915,33 @@ fn resolve_param_to_vector(
         )),
     }
 }
-fn fulltext_query_to_structured(
+fn validate_fulltext_query_fields(
     expr: &crate::parser::ast::fulltext::FulltextQueryExpr,
     expected_field: &str,
-) -> Result<linkrs_fulltext::query::FulltextQuery, PlanBuildError> {
+) -> Result<(), PlanBuildError> {
     use crate::parser::ast::fulltext::FulltextQueryExpr;
-    use linkrs_fulltext::query::FulltextQuery;
     match expr {
-        FulltextQueryExpr::Simple(text) => Ok(FulltextQuery::Simple(text.clone())),
-        FulltextQueryExpr::Phrase(text) => Ok(FulltextQuery::Phrase(text.clone())),
-        FulltextQueryExpr::Prefix(text) => Ok(FulltextQuery::Prefix(text.clone())),
-        FulltextQueryExpr::Fuzzy(text, distance) => {
-            Ok(FulltextQuery::Fuzzy(text.clone(), *distance))
-        }
-        FulltextQueryExpr::Wildcard(text) => Ok(FulltextQuery::Wildcard(text.clone())),
+        FulltextQueryExpr::Simple(_)
+        | FulltextQueryExpr::Phrase(_)
+        | FulltextQueryExpr::Prefix(_)
+        | FulltextQueryExpr::Fuzzy(_, _)
+        | FulltextQueryExpr::Wildcard(_) => Ok(()),
         FulltextQueryExpr::Boolean {
             must,
             should,
             must_not,
         } => {
-            let convert = |items: &[FulltextQueryExpr]| {
-                items
-                    .iter()
-                    .map(|q| fulltext_query_to_structured(q, expected_field))
-                    .collect::<Result<Vec<_>, _>>()
-            };
-            Ok(FulltextQuery::Boolean {
-                must: convert(must)?,
-                should: convert(should)?,
-                must_not: convert(must_not)?,
-            })
+            for q in must.iter().chain(should.iter()).chain(must_not.iter()) {
+                validate_fulltext_query_fields(q, expected_field)?;
+            }
+            Ok(())
         }
         FulltextQueryExpr::Range {
             field,
-            lower,
-            upper,
-            include_lower,
-            include_upper,
+            lower: _,
+            upper: _,
+            include_lower: _,
+            include_upper: _,
         } => {
             if !field.is_empty() && field != expected_field {
                 return Err(PlanBuildError::capability(
@@ -961,14 +952,9 @@ fn fulltext_query_to_structured(
                     ),
                 ));
             }
-            Ok(FulltextQuery::Range {
-                lower: lower.clone(),
-                upper: upper.clone(),
-                include_lower: *include_lower,
-                include_upper: *include_upper,
-            })
+            Ok(())
         }
-        FulltextQueryExpr::Field(field, text) => {
+        FulltextQueryExpr::Field(field, _) => {
             if field != expected_field {
                 return Err(PlanBuildError::capability(
                     "fulltext-field-mismatch",
@@ -978,11 +964,10 @@ fn fulltext_query_to_structured(
                     ),
                 ));
             }
-            Ok(FulltextQuery::Simple(text.clone()))
+            Ok(())
         }
         FulltextQueryExpr::MultiField(fields) => {
-            let mut matched = Vec::with_capacity(fields.len());
-            for (field, text) in fields {
+            for (field, _) in fields {
                 if field != expected_field {
                     return Err(PlanBuildError::capability(
                         "fulltext-field-mismatch",
@@ -992,13 +977,8 @@ fn fulltext_query_to_structured(
                         ),
                     ));
                 }
-                matched.push(FulltextQuery::Simple(text.clone()));
             }
-            Ok(FulltextQuery::Boolean {
-                must: vec![],
-                should: matched,
-                must_not: vec![],
-            })
+            Ok(())
         }
     }
 }
@@ -1144,6 +1124,44 @@ mod tests {
                 assert_eq!(space_id, 7);
             }
             other => panic!("expected FulltextManageCommand::Create, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn fulltext_field_validation_accepts_matching_fields() {
+        use crate::parser::ast::fulltext::FulltextQueryExpr;
+        assert!(validate_fulltext_query_fields(
+            &FulltextQueryExpr::Simple("hello".to_string()),
+            "content"
+        )
+        .is_ok());
+        assert!(validate_fulltext_query_fields(
+            &FulltextQueryExpr::Field("content".to_string(), "hello".to_string()),
+            "content"
+        )
+        .is_ok());
+        assert!(validate_fulltext_query_fields(
+            &FulltextQueryExpr::Boolean {
+                must: vec![FulltextQueryExpr::Simple("a".to_string())],
+                should: vec![],
+                must_not: vec![],
+            },
+            "content"
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn fulltext_field_validation_rejects_wrong_field() {
+        use crate::parser::ast::fulltext::FulltextQueryExpr;
+        match validate_fulltext_query_fields(
+            &FulltextQueryExpr::Field("title".to_string(), "hello".to_string()),
+            "content",
+        ) {
+            Err(PlanBuildError::CapabilityUnavailable { capability, .. }) => {
+                assert_eq!(capability, "fulltext-field-mismatch");
+            }
+            other => panic!("expected capability error, got {other:?}"),
         }
     }
 }

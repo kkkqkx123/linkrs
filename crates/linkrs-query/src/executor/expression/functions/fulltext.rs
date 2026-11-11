@@ -9,6 +9,7 @@
 use crate::executor::expression::functions::signature::{FunctionSignature, ValueType};
 use crate::executor::expression::{ExpressionError, ExpressionErrorType};
 use linkrs_core::Value;
+#[cfg(feature = "fulltext")]
 use linkrs_fulltext::FulltextSearchEntry;
 use std::collections::HashMap;
 
@@ -457,6 +458,7 @@ impl FulltextExecutionContext {
     }
 
     /// Create context from search result entry
+    #[cfg(feature = "fulltext")]
     pub fn from_search_entry(entry: &FulltextSearchEntry) -> Self {
         Self {
             score: entry.score,

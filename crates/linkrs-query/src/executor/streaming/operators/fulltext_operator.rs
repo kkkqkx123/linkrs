@@ -63,6 +63,92 @@ fn map_engine_type(engine: linkrs_core::types::FulltextEngineType) -> linkrs_ful
     }
 }
 
+/// Convert a plan-time query into the engine query type.
+///
+/// Plans carry the local AST so they build without the fulltext backend.
+/// Field ownership is validated at plan time; the mismatch arms below only
+/// guard the feature boundary and mirror the plan-time messages verbatim.
+#[cfg(feature = "fulltext")]
+fn into_engine_query(
+    expr: &crate::parser::ast::fulltext::FulltextQueryExpr,
+    expected_field: &str,
+) -> Result<linkrs_fulltext::query::FulltextQuery, QueryError> {
+    use crate::parser::ast::fulltext::FulltextQueryExpr;
+    use linkrs_fulltext::query::FulltextQuery;
+    match expr {
+        FulltextQueryExpr::Simple(text) => Ok(FulltextQuery::Simple(text.clone())),
+        FulltextQueryExpr::Phrase(text) => Ok(FulltextQuery::Phrase(text.clone())),
+        FulltextQueryExpr::Prefix(text) => Ok(FulltextQuery::Prefix(text.clone())),
+        FulltextQueryExpr::Fuzzy(text, distance) => {
+            Ok(FulltextQuery::Fuzzy(text.clone(), *distance))
+        }
+        FulltextQueryExpr::Wildcard(text) => Ok(FulltextQuery::Wildcard(text.clone())),
+        FulltextQueryExpr::Boolean {
+            must,
+            should,
+            must_not,
+        } => {
+            let convert = |items: &[FulltextQueryExpr]| {
+                items
+                    .iter()
+                    .map(|q| into_engine_query(q, expected_field))
+                    .collect::<Result<Vec<_>, _>>()
+            };
+            Ok(FulltextQuery::Boolean {
+                must: convert(must)?,
+                should: convert(should)?,
+                must_not: convert(must_not)?,
+            })
+        }
+        FulltextQueryExpr::Range {
+            field,
+            lower,
+            upper,
+            include_lower,
+            include_upper,
+        } => {
+            if !field.is_empty() && field != expected_field {
+                return Err(QueryError::execution(format!(
+                    "Range query targets field '{}' but index serves field '{}'",
+                    field, expected_field
+                )));
+            }
+            Ok(FulltextQuery::Range {
+                lower: lower.clone(),
+                upper: upper.clone(),
+                include_lower: *include_lower,
+                include_upper: *include_upper,
+            })
+        }
+        FulltextQueryExpr::Field(field, text) => {
+            if field != expected_field {
+                return Err(QueryError::execution(format!(
+                    "Query targets field '{}' but index serves field '{}'",
+                    field, expected_field
+                )));
+            }
+            Ok(FulltextQuery::Simple(text.clone()))
+        }
+        FulltextQueryExpr::MultiField(fields) => {
+            let mut matched = Vec::with_capacity(fields.len());
+            for (field, text) in fields {
+                if field != expected_field {
+                    return Err(QueryError::execution(format!(
+                        "Multi-field query targets field '{}' but index serves field '{}'",
+                        field, expected_field
+                    )));
+                }
+                matched.push(FulltextQuery::Simple(text.clone()));
+            }
+            Ok(FulltextQuery::Boolean {
+                must: vec![],
+                should: matched,
+                must_not: vec![],
+            })
+        }
+    }
+}
+
 /// Render parsed index options as the opaque engine-config document stored
 /// in fulltext index metadata.
 ///
@@ -143,7 +229,7 @@ pub enum FulltextOperatorKind {
         space_name: String,
         space_id: u64,
         index_name: String,
-        structured_query: linkrs_fulltext::query::FulltextQuery,
+        structured_query: crate::parser::ast::fulltext::FulltextQueryExpr,
         tag_name: String,
         field_name: String,
         limit: Option<usize>,
@@ -157,7 +243,7 @@ pub enum FulltextOperatorKind {
         space_name: String,
         space_id: u64,
         index_name: String,
-        structured_query: linkrs_fulltext::query::FulltextQuery,
+        structured_query: crate::parser::ast::fulltext::FulltextQueryExpr,
         tag_name: String,
         field_name: String,
         limit: Option<usize>,
@@ -173,7 +259,7 @@ pub enum FulltextOperatorKind {
         match_expr: Expression,
         match_field: Option<String>,
         /// Structured query built from the fulltext match condition.
-        structured_query: linkrs_fulltext::query::FulltextQuery,
+        structured_query: crate::parser::ast::fulltext::FulltextQueryExpr,
         tag_name: String,
         field_name: String,
         limit: Option<usize>,
@@ -624,7 +710,7 @@ impl FulltextOperator {
                                     *space_id,
                                     tag_name,
                                     field_name,
-                                    structured_query,
+                                    &into_engine_query(structured_query, field_name)?,
                                     search_limit,
                                 ),
                             )?;
@@ -685,7 +771,7 @@ impl FulltextOperator {
                                     *space_id,
                                     tag_name,
                                     field_name,
-                                    structured_query,
+                                    &into_engine_query(structured_query, field_name)?,
                                     search_limit,
                                 ),
                             )?;
@@ -748,7 +834,7 @@ impl FulltextOperator {
                                     *space_id,
                                     tag_name,
                                     field_name,
-                                    structured_query,
+                                    &into_engine_query(structured_query, field_name)?,
                                     search_limit,
                                 ),
                             )?;

@@ -13,7 +13,7 @@ linkrs-core = { version = "0.1.0", path = "../linkrs-core" }
 linkrs-metrics = { version = "0.1.0", path = "../linkrs-metrics" }
 linkrs-storage = { version = "0.1.0", path = "../linkrs-storage" }
 linkrs-migration = { version = "0.1.0", path = "../linkrs-migration", optional = true }
-linkrs-fulltext = { version = "0.1.0", path = "../linkrs-fulltext" }
+linkrs-fulltext = { version = "0.1.0", path = "../linkrs-fulltext", optional = true }
 linkrs-sync = { version = "0.1.0", path = "../linkrs-sync" }
 serde.workspace = true
 serde_json.workspace = true
@@ -44,7 +44,7 @@ migration = ["dep:linkrs-migration"]
 vector = ["dep:simvec", "linkrs-sync/vector"]
 vector-qdrant = ["vector", "linkrs-sync/vector-qdrant"]
 embedding = ["linkrs-sync/embedding"]
-fulltext = ["linkrs-fulltext/fulltext", "linkrs-sync/fulltext"]
+fulltext = ["dep:linkrs-fulltext", "linkrs-fulltext/fulltext", "linkrs-sync/fulltext"]
 
 [dev-dependencies]
 criterion.workspace = true
