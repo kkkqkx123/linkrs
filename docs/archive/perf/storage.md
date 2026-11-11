@@ -54,7 +54,8 @@ batch_512 写入约 7.9ms；5000 条目顺序重放约 50.6µs。
 
 B4（5 万顶点，持久事务单边写，HDD fsync-bound，median-of-2）：5000 边行写入 362.8s（约 72ms/edge）、commit 35.9ms、abort 0.59ms；10000 边行写入 467.4s（约 47ms/edge）、commit 101.9ms、abort 0.79ms。25000 边行未能在 90 分钟超时内完成（median-of-2 使墙钟约翻倍）。结论：abort/commit 相对写入可忽略（<0.1%），写入是 durability-bound；25000 行需更大时间预算或 SSD 环境，暂记为 open。
 
-B4 根因与修复（b4_probe 专项，devs 同机 5000 顶点 / 200 边）：分段计时确认每边 40ms 几乎全是表级 WAL `sync_data`（`wal_append` 中位 39.7ms，其余阶段 <0.1ms），即显式事务 eager apply 的逐边 fsync。修复后显式事务单边 415µs（约 96 倍加速），批量 274µs，自动提交单边 53.4ms（每语句一次提交，正确成本）。回归：`linkrs-storage` lib 1395 + 集成 83（wal_recovery/transaction_isolation/crash 各套件）全绿。B4 全量重跑与默认 5 万顶点 probe 待安静窗口：5 万顶点 setup 在共享宿主上被邻居大构建 IO 拖住（与修复无关，旧二进制同样停滞，顶点自动提交逐次 fsync 属正确成本）。
+B4 根因与修复（b4_probe 专项，devs 同机 5000 顶点 / 200 边）：分段计时确认每边 40ms 几乎全是表级 WAL `sync_data`（`wal_append` 中位 39.7ms，其余阶段 <0.1ms），即显式事务 eager apply 的逐边 fsync。修复后显式事务单边 415µs（约 96 倍加速），批量 274µs，自动提交单边 53.4ms（每语句一次提交，正确成本）。回归：`linkrs-storage` lib 1395 + 集成 83（wal_recovery/transaction_isolation/crash 各套件）全绿。B4 全量重跑与默认 5 万顶点 probe：在批量 fixture 下全流程 21 秒一次跑通
+（显式事务单边 3.1ms、批量 559µs、自动提交单边 69.4ms，共享宿主争用）。
 
 ## neighbor_batch_bench（目标达成）
 

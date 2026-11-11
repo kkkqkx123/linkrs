@@ -1386,7 +1386,7 @@ fusion = "linear_weighted"
         assert!(Config::default().validate().is_ok());
     }
 
-    /// The development example from `docs/release/07_configuration_reference.md`
+    /// The development example from `docs/release/statements/07_configuration_reference.md`
     /// must load and validate as-is: it is the contract of the reference doc.
     #[cfg(all(feature = "server", feature = "vector"))]
     #[test]
