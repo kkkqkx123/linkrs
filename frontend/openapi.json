@@ -4539,6 +4539,37 @@
         }
       }
     },
+    "/v1/statistics/stream": {
+      "get": {
+        "tags": [
+          "Statistics"
+        ],
+        "summary": "SSE endpoint streaming aggregated monitoring overview snapshots.",
+        "description": "Each `snapshot` event carries an `OverviewResponse` JSON payload; the\nstream runs until the client disconnects. A collection failure emits an\n`error` event and keeps the stream alive so a transient stats hiccup\ndoes not tear down live monitoring.",
+        "operationId": "get_v1_statistics_stream",
+        "parameters": [
+          {
+            "name": "interval_ms",
+            "in": "query",
+            "description": "Snapshot push interval in milliseconds (clamped to 500..30000)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Monitoring overview snapshot event stream",
+            "content": {
+              "text/event-stream": {}
+            }
+          }
+        }
+      }
+    },
     "/v1/statistics/system": {
       "get": {
         "tags": [
@@ -8590,6 +8621,48 @@
                 "properties": {
                   "value": {
                     "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "String prefix over the field value; arrays match on any string element.",
+            "required": [
+              "StartsWith"
+            ],
+            "properties": {
+              "StartsWith": {
+                "type": "object",
+                "description": "String prefix over the field value; arrays match on any string element.",
+                "required": [
+                  "prefix"
+                ],
+                "properties": {
+                  "prefix": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Negation of one nested condition for OR branches.",
+            "required": [
+              "Not"
+            ],
+            "properties": {
+              "Not": {
+                "type": "object",
+                "description": "Negation of one nested condition for OR branches.",
+                "required": [
+                  "condition"
+                ],
+                "properties": {
+                  "condition": {
+                    "$ref": "#/components/schemas/FilterCondition"
                   }
                 }
               }

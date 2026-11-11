@@ -16,6 +16,7 @@ pub mod freeze;
 pub mod migration;
 pub mod overview;
 pub mod query;
+pub mod stream;
 pub mod system;
 
 pub use database::database;
@@ -23,4 +24,5 @@ pub use freeze::{freeze_stats, trigger_freeze};
 pub use migration::migration;
 pub use overview::overview;
 pub use query::{queries, query_profile_detail, search, session, QueryStatsParams};
+pub use stream::{statistics_stream, StatisticsStreamQuery};
 pub use system::system;

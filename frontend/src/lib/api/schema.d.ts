@@ -1541,6 +1541,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/statistics/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * SSE endpoint streaming aggregated monitoring overview snapshots.
+         * @description Each `snapshot` event carries an `OverviewResponse` JSON payload; the
+         *     stream runs until the client disconnects. A collection failure emits an
+         *     `error` event and keeps the stream alive so a transient stats hiccup
+         *     does not tear down live monitoring.
+         */
+        get: operations["get_v1_statistics_stream"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/statistics/system": {
         parameters: {
             query?: never;
@@ -2897,6 +2920,16 @@ export interface components {
         } | {
             Contains: {
                 value: string;
+            };
+        } | {
+            /** @description String prefix over the field value; arrays match on any string element. */
+            StartsWith: {
+                prefix: string;
+            };
+        } | {
+            /** @description Negation of one nested condition for OR branches. */
+            Not: {
+                condition: components["schemas"]["FilterCondition"];
             };
         };
         /** @description Single configuration item payload. */
@@ -8899,6 +8932,29 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    get_v1_statistics_stream: {
+        parameters: {
+            query?: {
+                /** @description Snapshot push interval in milliseconds (clamped to 500..30000) */
+                interval_ms?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Monitoring overview snapshot event stream */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": unknown;
+                };
             };
         };
     };

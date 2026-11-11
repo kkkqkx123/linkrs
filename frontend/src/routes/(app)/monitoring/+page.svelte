@@ -19,6 +19,10 @@
 	import SearchPanel from '$components/business/monitoring/SearchPanel.svelte';
 	import PageHeader from '$components/layout/PageHeader.svelte';
 	import { formatCount } from '$utils/metricsFormat';
+	import {
+		TREND_RANGES,
+		type TrendRange,
+	} from '$utils/timeWindow';
 
 	const monitorState = fromStore(monitoringStore);
 	const snapshots = $derived(
@@ -75,15 +79,32 @@
 	);
 
 	onMount(() => {
-		monitoringStore.startPolling();
-		return () => monitoringStore.stopPolling();
+		monitoringStore.start();
+		return () => monitoringStore.stop();
 	});
 
-	onDestroy(() => monitoringStore.stopPolling());
+	onDestroy(() => monitoringStore.stop());
 </script>
 
 <div class="ui-page-doc animate-fade-in">
 	<PageHeader title={t('sidebar.monitoring')}>
+		{#if monitorState.current.streamStatus === 'live'}
+			<span class="flex items-center gap-1.5 text-xs font-medium text-success">
+				<span class="relative flex h-2 w-2">
+					<span
+						class="absolute inline-flex h-full w-full animate-ping rounded-full bg-success opacity-60"
+					></span>
+					<span class="relative inline-flex h-2 w-2 rounded-full bg-success"></span>
+				</span>
+				{t('monitoring.streamLive')}
+			</span>
+		{:else if monitorState.current.streamStatus === 'connecting'}
+			<span class="text-xs text-muted">{t('monitoring.streamConnecting')}</span>
+		{:else if monitorState.current.streamStatus === 'unavailable'}
+			<span class="text-xs text-warning" title={t('monitoring.streamUnavailableHint')}>
+				{t('monitoring.streamUnavailable')}
+			</span>
+		{/if}
 		{#if monitorState.current.lastRefreshAt}
 			<span class="text-sm text-muted">
 				{t('monitoring.lastRefresh')}: {new Date(
@@ -91,6 +112,21 @@
 				).toLocaleTimeString()}
 			</span>
 		{/if}
+		<label class="flex items-center gap-1 text-sm text-muted">
+			{t('monitoring.range')}
+			<select
+				class="ui-input ui-input-sm"
+				value={monitorState.current.timeRange}
+				onchange={(event) =>
+					monitoringStore.setTimeRange(
+						event.currentTarget.value as TrendRange,
+					)}
+			>
+				{#each TREND_RANGES as range (range)}
+					<option value={range}>{t(`monitoring.range_${range}`)}</option>
+				{/each}
+			</select>
+		</label>
 		<button class="ui-btn ui-btn-soft ui-btn-sm" onclick={togglePaused}>
 			{monitorState.current.paused ? t('monitoring.resume') : t('monitoring.pause')}
 		</button>
@@ -163,6 +199,7 @@
 		system={system}
 		database={database}
 		queries={queries}
+		timeRange={monitorState.current.timeRange}
 	/>
 
 	<!-- Resources + Storage -->

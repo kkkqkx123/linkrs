@@ -38,6 +38,25 @@ pub async fn overview<
 >(
     State(state): State<AppState<S>>,
 ) -> Result<JsonResponse<OverviewResponse>, HttpError> {
+    Ok(JsonResponse(collect_overview(&state).await?))
+}
+
+/// Assemble the aggregated monitoring overview snapshot.
+///
+/// Shared by the one-shot `GET /v1/statistics/overview` handler and the
+/// SSE snapshot stream so both transports report identical payloads.
+pub(super) async fn collect_overview<
+    S: StorageClient
+        + StorageSchemaContextOps
+        + StorageSyncContextOps
+        + StorageOperationContextOps
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+>(
+    state: &AppState<S>,
+) -> Result<OverviewResponse, HttpError> {
     let stats_manager = state.server.get_stats_manager();
     let storage = state.server.get_storage();
 
@@ -88,7 +107,7 @@ pub async fn overview<
         })
         .collect::<Vec<_>>();
 
-    Ok(JsonResponse(OverviewResponse {
+    Ok(OverviewResponse {
         system,
         database,
         query_latency_us: LatencyPercentilesUs {
@@ -116,5 +135,5 @@ pub async fn overview<
         },
         sync: sync_summary,
         timeseries,
-    }))
+    })
 }

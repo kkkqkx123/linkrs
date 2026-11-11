@@ -37,7 +37,7 @@ use super::{
         },
         statistics::{
             database, freeze_stats, overview, queries, query_profile_detail,
-            search as search_stats, session, system, trigger_freeze,
+            search as search_stats, session, statistics_stream, system, trigger_freeze,
         },
         stream::execute_stream,
         sync, transaction,
@@ -167,6 +167,7 @@ pub fn create_router<
         .route("/statistics/queries", get(queries))
         .route("/statistics/queries/{trace_id}", get(query_profile_detail))
         .route("/statistics/overview", get(overview))
+        .route("/statistics/stream", get(statistics_stream))
         .route("/statistics/database", get(database))
         .route("/statistics/system", get(system))
         .route("/statistics/search", get(search_stats))

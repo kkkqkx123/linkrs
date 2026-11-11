@@ -8,6 +8,7 @@
 		formatQps,
 		formatUptimeSecs,
 	} from '$utils/metricsFormat';
+	import { sliceTrendWindow, type TrendRange } from '$utils/timeWindow';
 	import type {
 		DatabaseOverviewResponse,
 		OverviewResponse,
@@ -20,14 +21,18 @@
 		system,
 		database,
 		queries,
+		timeRange = 'live',
 	}: {
 		overview: OverviewResponse | null;
 		system: SystemResourceResponse | null;
 		database: DatabaseOverviewResponse | null;
 		queries: QueryStatsResponse | null;
+		timeRange: TrendRange;
 	} = $props();
 
-	const trendPoints = $derived(overview?.timeseries ?? []);
+	const trendPoints = $derived(
+		sliceTrendWindow(overview?.timeseries ?? [], timeRange),
+	);
 </script>
 
 <section class="ui-card shadow-sm p-6">

@@ -368,9 +368,7 @@
 				>
 			{/if}
 			{#if isExpanding}
-				<span class="text-xs font-normal text-info"
-					>Expanding…</span
-				>
+				<span class="text-xs font-normal text-info">{t('graph.expanding')}</span>
 			{/if}
 		</h2>
 		<div class="flex items-center gap-2 ml-auto flex-wrap">
@@ -701,9 +699,9 @@
 				<div
 					class="absolute bottom-2 right-2 text-xs text-muted bg-surface/80 px-2 py-1 rounded"
 				>
-					Layout: {layoutDuration.toFixed(0)}ms | Sync: {syncDuration.toFixed(
-						0,
-					)}ms
+					{t('graph.perfLayout')}: {layoutDuration.toFixed(0)}ms |
+					{t('graph.perfSync')}:
+					{syncDuration.toFixed(0)}ms
 				</div>
 			{:else if initError}
 				<div class="absolute inset-0 flex items-center justify-center">
@@ -731,8 +729,8 @@
 				<div class="flex items-center justify-between mb-4">
 					<h2 class="text-base font-semibold text-ink">
 						{detailType === 'node'
-							? t('graph.selectNode')
-							: t('graph.selectEdge')} Detail
+							? t('graph.detailNode')
+							: t('graph.detailEdge')}
 					</h2>
 					<IconButton
 						onclick={() => graphStore.hideDetail()}
@@ -787,7 +785,7 @@
 								class="w-full ui-btn ui-btn-ghost"
 								onclick={() => retryExpand(detailData.id)}
 							>
-								Retry Expand
+								{t('graph.retryExpand')}
 							</button>
 						</div>
 					{/if}

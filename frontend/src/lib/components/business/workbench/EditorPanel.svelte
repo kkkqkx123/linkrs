@@ -2,10 +2,10 @@
 	import { onDestroy } from 'svelte';
 	import { fromStore, get } from 'svelte/store';
 	import { t } from '$i18n';
-	import { History, Star } from '@lucide/svelte';
 	import CypherEditor from '$components/common/CypherEditor.svelte';
 	import QueryToolbar from '$components/business/QueryToolbar.svelte';
 	import ParametersPanel from '$components/business/ParametersPanel.svelte';
+	import PlanPanel from '$components/business/workbench/result/PlanPanel.svelte';
 	import { consoleStore } from '$stores/console';
 	import { streamStore } from '$stores/stream';
 	import { cursorStore } from '$stores/cursor';
@@ -183,6 +183,12 @@
 	let planOpen = $state(false);
 	let planResult = $state<QueryResult | null>(null);
 	let planError = $state<QueryError | null>(null);
+	// Plan metadata that travels with the explain outcome but is not part of
+	// the result rows.
+	let planMeta = $state<{
+		planNodeCount?: number;
+		stages?: Record<string, number>;
+	} | null>(null);
 
 	/** Plan the statement under the cursor (or full buffer) without executing it. */
 	async function handleExplain() {
@@ -191,10 +197,15 @@
 		isExplaining = true;
 		planResult = null;
 		planError = null;
+		planMeta = null;
 		try {
 			const outcome = await queryService.explain({ query: target });
 			if (outcome.success && outcome.data) {
 				planResult = outcome.data;
+				planMeta = {
+					planNodeCount: outcome.planNodeCount,
+					stages: outcome.stages,
+				};
 				planOpen = true;
 			} else {
 				planError = outcome.error ?? {
@@ -287,18 +298,6 @@
 		onPreferenceChange={(pref) => consoleStore.setExecutionPreference(pref)}
 		onThresholdChange={(val) => consoleStore.setAutoStreamThreshold(val)}
 	/>
-	<button
-		class="ui-btn ui-btn-ghost"
-		onclick={onToggleHistory}
-	>
-		<History size={16} /> {t('console.history')} ({history.length})
-	</button>
-	<button
-		class="ui-btn ui-btn-ghost"
-		onclick={onToggleFavorites}
-	>
-		<Star size={16} /> {t('console.favorites')} ({favoritesCount})
-	</button>
 </div>
 <ParametersPanel
 	{parameters}
@@ -352,36 +351,11 @@
 					{/if}
 				</div>
 			{:else if planResult}
-				{#if planResult.columns.length > 0}
-					<div
-						class="overflow-x-auto bg-surface rounded border border-alt/40"
-					>
-						<table class="ui-table w-full border-collapse">
-							<thead>
-								<tr class="bg-alt-light/50">
-									{#each planResult.columns as col (col)}
-										<th>{col}</th>
-									{/each}
-								</tr>
-							</thead>
-							<tbody>
-								{#each planResult.rows as row, i (i)}
-									<tr class="even:bg-alt-light/50">
-										{#each planResult.columns as col (col)}
-											<td class="font-mono max-w-md truncate"
-												>{String(row[col] ?? '')}</td
-											>
-										{/each}
-									</tr>
-								{/each}
-							</tbody>
-						</table>
-					</div>
-				{:else}
-					<div class="text-xs text-success">
-						{t('common.ok')}
-					</div>
-				{/if}
+				<PlanPanel
+					payload={{ data: planResult.rows, columns: planResult.columns }}
+					planNodeCount={planMeta?.planNodeCount}
+					stages={planMeta?.stages}
+				/>
 			{/if}
 		</div>
 	</div>

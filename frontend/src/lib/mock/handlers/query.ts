@@ -10,6 +10,24 @@ import { demoVertices } from '../fixtures';
 
 const SELECT_COLUMNS = ['vid', 'name', 'age'];
 
+// Plan fixture shaped like the backend table renderer: a single `plan`
+// column whose value is the whole ASCII plan, with a deps chain the workbench
+// can turn into a collapsible operator tree.
+const MOCK_PLAN_TABLE = [
+	'Execution Model: Batch Pull',
+	'Parallel Workers: requested=1',
+	'',
+	'+------+------------------+------------+--------------------------------------------------+--------------------------------------------------+------------------+',
+	'| id   | name             | deps       | profiling_data                                    | operator_info                                    | output_var       |',
+	'+------+------------------+------------+--------------------------------------------------+--------------------------------------------------+------------------+',
+	'|    0 | ResultSink       | 1          | -                                                | est_rows:2                                       | __Value_2        |',
+	'+------+------------------+------------+--------------------------------------------------+--------------------------------------------------+------------------+',
+	'|    1 | Filter           | 2          | -                                                | predicate:(n.age > 30),est_rows:12               | __Filter_1       |',
+	'+------+------------------+------------+--------------------------------------------------+--------------------------------------------------+------------------+',
+	'|    2 | ScanVertices     | -          | -                                                | table:Person,est_rows:100                        | __Value_0        |',
+	'+------+------------------+------------+--------------------------------------------------+--------------------------------------------------+------------------+',
+].join('\n');
+
 function resultRows(): Record<string, unknown>[] {
 	if (scenarioIsEmpty()) return [];
 	return demoVertices.map((v) => ({
@@ -121,11 +139,34 @@ export const queryHandlers: MockRegistry = {
 	'POST /v1/query/explain': ((ctx) => {
 		const body = (ctx.body ?? {}) as { query?: unknown };
 		const query = typeof body.query === 'string' ? body.query : '';
-		const base = queryResponse(query) as Record<string, unknown>;
+		if (query.trim().toUpperCase().startsWith('INVALID')) {
+			return {
+				success: false,
+				error: {
+					code: 'PARSE_ERROR',
+					message: 'Mock fixture: unparsable statement',
+				},
+			};
+		}
 		return {
-			...base,
-			metadata: { ...(base.metadata as Record<string, unknown>), plan_node_count: 8 },
-			plan: { nodes: 8, edges: 3, estimated_rows: 4 },
+			success: true,
+			data: {
+				columns: ['plan'],
+				rows: [{ plan: MOCK_PLAN_TABLE }],
+				row_count: 1,
+			},
+			metadata: {
+				execution_time_ms: 4,
+				result_row_count: 1,
+				plan_node_count: 3,
+				stages: {
+					parse_ms: 0.25,
+					validate_ms: 0.1,
+					plan_ms: 1.2,
+					optimize_ms: 0.8,
+					execute_ms: 1.5,
+				},
+			},
 		};
 	}) satisfies MockEntry,
 

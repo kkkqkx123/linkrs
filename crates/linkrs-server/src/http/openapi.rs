@@ -87,6 +87,7 @@ use utoipa::OpenApi;
         crate::http::handlers::statistics::query::queries,
         crate::http::handlers::statistics::query::query_profile_detail,
         crate::http::handlers::statistics::overview::overview,
+        crate::http::handlers::statistics::stream::statistics_stream,
         crate::http::handlers::statistics::database::database,
         crate::http::handlers::statistics::system::system,
         crate::http::handlers::statistics::query::search,
