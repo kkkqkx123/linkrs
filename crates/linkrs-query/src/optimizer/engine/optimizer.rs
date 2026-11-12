@@ -1,3 +1,4 @@
+use crate::optimizer::cost::CostCalculator;
 use crate::optimizer::cost_based::subquery_unnesting::UnnestDecision;
 use crate::optimizer::cost_based::{
     AggregateStrategySelector, IndexSelector, SortEliminationOptimizer,
@@ -6,6 +7,7 @@ use crate::optimizer::partitioning::PartitioningLayoutInfo;
 use crate::optimizer::stats::StatsView;
 use crate::planning::plan::ExecutionPlan;
 use crate::planning::plan::PlanNodeEnum;
+use std::sync::Arc;
 
 use super::OptimizerEngine;
 use crate::optimizer::error::{OptimizeError, OptimizeResult};
@@ -113,7 +115,8 @@ impl OptimizerEngine {
         // heuristic produces, so an earlier decision would only ever see an
         // unpartitionable plan. The spec still reaches the physical build and
         // the plan-cache fingerprint, which both run after the optimizer.
-        current_plan = self.apply_partitioning_selection(current_plan, space, layout);
+        let stats = StatsView::new(&self.stats_manager, space);
+        current_plan = self.apply_partitioning_selection(current_plan, layout, &stats);
         Self::mark_opt_stage("partitioning", stage_start, stage_timing);
 
         // Row estimates are collected last so the per-node map keys match the
@@ -122,10 +125,7 @@ impl OptimizerEngine {
         // mid-pipeline map misses them (scan est_rows=1, filter est_rows=0.5
         // fallbacks in EXPLAIN). Decisions already consumed direct estimator
         // calls, so only the writeback map and feedback baselines move here.
-        {
-            let stats = StatsView::new(&self.stats_manager, space);
-            self.apply_row_estimates(&mut current_plan, &stats);
-        }
+        self.apply_row_estimates(&mut current_plan, &stats);
         Self::mark_opt_stage("row_estimates", stage_start, stage_timing);
 
         Ok(current_plan)
@@ -212,8 +212,8 @@ impl OptimizerEngine {
     fn apply_partitioning_selection(
         &self,
         mut plan: ExecutionPlan,
-        space: Option<&str>,
         layout: &PartitioningLayoutInfo,
+        stats: &StatsView,
     ) -> ExecutionPlan {
         if plan.partition_spec().is_some() {
             return plan;
@@ -221,12 +221,13 @@ impl OptimizerEngine {
         let Some(root) = plan.root.as_ref() else {
             return plan;
         };
-        let stats = StatsView::new(&self.stats_manager, space);
         let decision = self
             .partitioning_planner
-            .decide_with_layout(root, &stats, layout);
+            .decide_with_layout(root, stats, layout);
         if let Some(spec) = decision.partition_spec {
-            log::debug!("Selected partition layout: {}", decision.reason);
+            plan.diagnostics
+                .notes
+                .push(format!("partitioning: {}", decision.reason));
             plan.set_partition_spec(spec);
         } else if !decision.reason.is_empty() {
             if plan.diagnostics.fallback_reason.is_empty() {
@@ -334,6 +335,11 @@ impl OptimizerEngine {
             .diagnostics
             .notes
             .push("fast_shape: linear scan/expand chain takes the reduced rule batch".to_string());
+        // One shared statistics view and cost calculator for every stage
+        // below: the gated chain is walked several times and each stage
+        // would otherwise build its own identical instances.
+        let stats = StatsView::new(&self.stats_manager, space);
+        let calculator = self.cost_calculator_for(space);
 
         current_plan = self.apply_remove_factorization(current_plan)?;
         Self::mark_opt_stage("remove_factorization", stage_start, stage_timing);
@@ -343,7 +349,7 @@ impl OptimizerEngine {
         }
         Self::mark_opt_stage("logical_heuristic", stage_start, stage_timing);
 
-        current_plan = self.apply_cost_based_fast(current_plan, space)?;
+        current_plan = self.apply_cost_based_fast(current_plan, space, &stats, &calculator)?;
         Self::mark_opt_stage("cost_based_fast", stage_start, stage_timing);
 
         current_plan = self.apply_factorization(current_plan)?;
@@ -358,13 +364,10 @@ impl OptimizerEngine {
         }
         Self::mark_opt_stage("fast_heuristic", stage_start, stage_timing);
 
-        current_plan = self.apply_partitioning_selection(current_plan, space, layout);
+        current_plan = self.apply_partitioning_selection(current_plan, layout, &stats);
         Self::mark_opt_stage("partitioning", stage_start, stage_timing);
 
-        {
-            let stats = StatsView::new(&self.stats_manager, space);
-            self.apply_row_estimates(&mut current_plan, &stats);
-        }
+        self.apply_row_estimates(&mut current_plan, &stats);
         Self::mark_opt_stage("row_estimates", stage_start, stage_timing);
 
         Ok(current_plan)
@@ -378,25 +381,24 @@ impl OptimizerEngine {
         &self,
         plan: ExecutionPlan,
         space: Option<&str>,
+        stats: &StatsView,
+        calculator: &Arc<CostCalculator>,
     ) -> OptimizeResult<ExecutionPlan> {
         let mut plan = plan;
-        let stats = StatsView::new(&self.stats_manager, space);
         if plan.logical_plan().is_some() {
-            self.apply_join_order_logical(&stats, space, &mut plan);
-            self.apply_index_selection_logical(space, &mut plan);
+            self.apply_join_order_logical(stats, &mut plan, calculator);
+            self.apply_index_selection_logical(space, &mut plan, calculator);
         } else if let Some(root) = plan.root.take() {
             use crate::optimizer::cost_based::index_selection::rewrite_index_scans;
-            let selector = IndexSelector::new(
-                self.cost_calculator_for(space),
-                self.selectivity_estimator.clone(),
-            );
+            let selector =
+                IndexSelector::new(calculator.clone(), self.selectivity_estimator.clone());
             let mut notes = Vec::new();
             let rewritten =
                 rewrite_index_scans(&root, &selector, &self.stats_manager, space, &mut notes);
             plan.set_root(rewritten);
             plan.diagnostics.notes.extend(notes);
         }
-        self.apply_precompute_notes(space, &mut plan);
+        self.apply_precompute_notes(calculator, &mut plan);
         Ok(plan)
     }
 
@@ -452,12 +454,12 @@ impl OptimizerEngine {
     ) -> OptimizeResult<()> {
         self.apply_unnesting(plan, stats);
         self.apply_unnesting_logical(plan);
-        self.apply_join_order_logical(stats, space, plan);
-        self.apply_index_selection_logical(space, plan);
+        self.apply_join_order_logical(stats, plan, &self.cost_calculator_for(space));
+        self.apply_index_selection_logical(space, plan, &self.cost_calculator_for(space));
         self.apply_topn_wiring(space, plan, stats);
         self.apply_topn_wiring_logical(stats, space, plan);
         self.apply_aggregate_strategy_logical(stats, space, plan);
-        self.apply_precompute_notes(space, plan);
+        self.apply_precompute_notes(&self.cost_calculator_for(space), plan);
         Ok(())
     }
 
@@ -510,7 +512,7 @@ impl OptimizerEngine {
             plan.diagnostics.notes.extend(notes);
         }
 
-        self.apply_precompute_notes(space, plan);
+        self.apply_precompute_notes(&self.cost_calculator_for(space), plan);
         Ok(())
     }
 
@@ -573,8 +575,8 @@ impl OptimizerEngine {
     pub(super) fn apply_join_order_logical(
         &self,
         stats: &StatsView,
-        space: Option<&str>,
         plan: &mut ExecutionPlan,
+        calculator: &Arc<CostCalculator>,
     ) {
         use crate::optimizer::cost_based::join_order_rewriter::walk_and_optimize_joins_logical;
 
@@ -596,10 +598,9 @@ impl OptimizerEngine {
             return;
         }
 
-        let calculator = self.cost_calculator_for(space);
         let mut notes = Vec::new();
         let rewritten_logical =
-            walk_and_optimize_joins_logical(logical.root(), stats, &calculator, &mut notes);
+            walk_and_optimize_joins_logical(logical.root(), stats, calculator, &mut notes);
         plan.diagnostics.notes.extend(notes);
 
         let mut updated_logical = logical;
@@ -612,24 +613,26 @@ impl OptimizerEngine {
                 crate::optimizer::cost_based::join_order_rewriter::walk_and_optimize_joins(
                     &root,
                     stats,
-                    &calculator,
+                    calculator,
                     &mut scratch,
                 );
             plan.set_root(rewritten);
         }
     }
 
-    fn apply_index_selection_logical(&self, space: Option<&str>, plan: &mut ExecutionPlan) {
+    fn apply_index_selection_logical(
+        &self,
+        space: Option<&str>,
+        plan: &mut ExecutionPlan,
+        calculator: &Arc<CostCalculator>,
+    ) {
         use crate::optimizer::cost_based::index_selection::rewrite_index_scans_logical;
 
         let Some(logical) = plan.logical_plan().cloned() else {
             return;
         };
 
-        let selector = IndexSelector::new(
-            self.cost_calculator_for(space),
-            self.selectivity_estimator.clone(),
-        );
+        let selector = IndexSelector::new(calculator.clone(), self.selectivity_estimator.clone());
 
         let mut notes = Vec::new();
         let rewritten_logical = rewrite_index_scans_logical(
@@ -735,9 +738,9 @@ impl OptimizerEngine {
         }
     }
 
-    fn apply_precompute_notes(&self, space: Option<&str>, plan: &mut ExecutionPlan) {
+    fn apply_precompute_notes(&self, calculator: &Arc<CostCalculator>, plan: &mut ExecutionPlan) {
         if let Some(root) = plan.root.as_ref() {
-            let optimizer = crate::optimizer::cost_based::expression_precomputation::ExpressionPrecomputationOptimizer::new(self.cost_calculator_for(space));
+            let optimizer = crate::optimizer::cost_based::expression_precomputation::ExpressionPrecomputationOptimizer::new(calculator.clone());
             let notes =
                 crate::optimizer::cost_based::precomputation_wiring::collect_precompute_notes(
                     root, &optimizer,

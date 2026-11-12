@@ -67,6 +67,10 @@ impl OptimizerEngine {
         let fast_heuristic = PhysicalHeuristicOptimizer::from_registry(
             crate::optimizer::heuristic::rule_enum::RuleRegistry::fast_shape(),
         );
+        // The fast batch runs on gated linear chains whose second chain
+        // pass never applies a rule; a single pass keeps the verified
+        // fixed-point result while skipping the pure re-verification pass.
+        fast_heuristic.set_max_chain_passes(1);
 
         Self {
             expression_context,

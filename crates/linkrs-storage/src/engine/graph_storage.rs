@@ -48,10 +48,12 @@ use linkrs_core::types::{
 };
 use linkrs_core::{Edge, RoleType, StorageError, StorageResult, Value};
 use linkrs_metrics::StatsManager;
+use linkrs_transaction::wal::recovery::RecoveryStats;
 
 #[derive(Clone)]
 pub struct GraphStorage {
     ctx: Arc<GraphStorageContext>,
+    last_recovery_stats: Arc<parking_lot::RwLock<Option<RecoveryStats>>>,
 }
 
 impl std::fmt::Debug for GraphStorage {
@@ -151,6 +153,7 @@ impl GraphStorage {
     ) -> StorageResult<Self> {
         Ok(Self {
             ctx: Arc::new(window.bind_statement()?),
+            last_recovery_stats: self.last_recovery_stats.clone(),
         })
     }
 
@@ -193,6 +196,7 @@ impl GraphStorage {
     pub fn new() -> StorageResult<Self> {
         Ok(Self {
             ctx: Arc::new(GraphStorageContext::new()),
+            last_recovery_stats: Arc::new(parking_lot::RwLock::new(None)),
         })
     }
 
@@ -202,11 +206,15 @@ impl GraphStorage {
     ) -> StorageResult<Self> {
         Ok(Self {
             ctx: Arc::new(GraphStorageContext::new_with_config(config)?),
+            last_recovery_stats: Arc::new(parking_lot::RwLock::new(None)),
         })
     }
 
     pub fn new_with_path(path: PathBuf) -> StorageResult<Self> {
-        GraphStorageContext::new_with_path(path).map(|ctx| Self { ctx: Arc::new(ctx) })
+        GraphStorageContext::new_with_path(path).map(|ctx| Self {
+            ctx: Arc::new(ctx),
+            last_recovery_stats: Arc::new(parking_lot::RwLock::new(None)),
+        })
     }
 
     /// Open a persistent storage instance and load the on-disk state.
@@ -238,13 +246,16 @@ impl GraphStorage {
         config: PersistenceConfig,
     ) -> StorageResult<Self> {
         let storage = Self::new_with_persistence(path, config)?;
-        let _recovery_stats = persistence::initialize_with_recovery(&storage.ctx)?;
+        let recovery_stats = persistence::initialize_with_recovery(&storage.ctx)?;
+        *storage.last_recovery_stats.write() = recovery_stats;
         Ok(storage)
     }
 
     pub fn new_with_persistence(path: PathBuf, config: PersistenceConfig) -> StorageResult<Self> {
-        GraphStorageContext::new_with_persistence(path, config)
-            .map(|ctx| Self { ctx: Arc::new(ctx) })
+        GraphStorageContext::new_with_persistence(path, config).map(|ctx| Self {
+            ctx: Arc::new(ctx),
+            last_recovery_stats: Arc::new(parking_lot::RwLock::new(None)),
+        })
     }
 
     /// Begin a bulk-load session: suspend threshold/time-based checkpoint and
@@ -278,7 +289,8 @@ impl GraphStorage {
         config.enable_wal = enable_wal;
         config.sync_policy = sync_policy;
         let storage = Self::new_with_persistence(path, config)?;
-        let _recovery_stats = persistence::initialize_with_recovery(&storage.ctx)?;
+        let recovery_stats = persistence::initialize_with_recovery(&storage.ctx)?;
+        *storage.last_recovery_stats.write() = recovery_stats;
         Ok(storage)
     }
 
@@ -286,6 +298,12 @@ impl GraphStorage {
         let new_ctx = Arc::new((*self.ctx).clone().with_index_gc(config));
         self.ctx = new_ctx;
         self
+    }
+
+    /// Breakdown of the most recent open-time WAL recovery, if one ran.
+    /// Empty when the open needed no recovery.
+    pub fn last_recovery_stats(&self) -> Option<RecoveryStats> {
+        self.last_recovery_stats.read().clone()
     }
 
     /// number of staged-WAL entries held for in-flight transactions.
@@ -513,6 +531,7 @@ impl crate::AutoCommitBatchOps for GraphStorage {
         let bound = window.bind_statement()?;
         Ok(Box::new(GraphStorage {
             ctx: Arc::new(bound),
+            last_recovery_stats: self.last_recovery_stats.clone(),
         }))
     }
 }
@@ -660,18 +679,21 @@ impl StorageOperationContextOps for GraphStorage {
     fn bind_auto_commit_context(&self) -> StorageResult<Self> {
         Ok(Self {
             ctx: Arc::new(self.ctx.with_auto_commit_context()?),
+            last_recovery_stats: self.last_recovery_stats.clone(),
         })
     }
 
     fn bind_read_operation_context(&self) -> StorageResult<Self> {
         Ok(Self {
             ctx: Arc::new(self.ctx.with_read_operation_context()?),
+            last_recovery_stats: self.last_recovery_stats.clone(),
         })
     }
 
     fn bind_operation_context(&self, context: StorageOperationContext) -> Self {
         Self {
             ctx: Arc::new(self.ctx.with_operation_context(context)),
+            last_recovery_stats: self.last_recovery_stats.clone(),
         }
     }
 

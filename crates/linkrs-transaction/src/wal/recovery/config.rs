@@ -42,4 +42,13 @@ pub struct RecoveryStats {
     pub last_lsn: Lsn,
     pub max_timestamp: Timestamp,
     pub max_transaction_id: u64,
+    /// Wall time spent parsing WAL files, including parallel parse.
+    pub parse_time_ms: u64,
+    /// Wall time spent on dry-replay consistency filtering and the
+    /// derived per-recovery counters.
+    pub filter_time_ms: u64,
+    /// Wall time spent restoring the checkpoint baseline.
+    pub restore_time_ms: u64,
+    /// Wall time spent applying redo entries through the applier.
+    pub apply_time_ms: u64,
 }

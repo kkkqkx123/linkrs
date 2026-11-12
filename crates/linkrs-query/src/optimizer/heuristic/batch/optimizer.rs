@@ -25,6 +25,8 @@ pub struct BatchOptimizer {
     batch_rules: HashMap<OptimizationBatch, Vec<RewriteRule>>,
     /// Global maximum iterations across all batches
     max_iterations: AtomicUsize,
+    /// Maximum number of whole-chain passes over all batches
+    max_chain_passes: AtomicUsize,
     /// Enable diagnostics tracking
     enable_diagnostics: bool,
 }
@@ -69,6 +71,7 @@ impl BatchOptimizer {
         Self {
             batch_rules: HashMap::new(),
             max_iterations: AtomicUsize::new(100),
+            max_chain_passes: AtomicUsize::new(MAX_CHAIN_PASSES),
             enable_diagnostics: true,
         }
     }
@@ -186,6 +189,14 @@ impl BatchOptimizer {
         self.max_iterations.store(max, Ordering::Relaxed);
     }
 
+    /// Set the maximum number of whole-chain passes (interior mutability
+    /// via `AtomicUsize`). Values below one clamp to a single pass: an
+    /// optimizer that runs zero passes would return the input untouched
+    /// while reporting success.
+    pub fn set_max_chain_passes(&self, max: usize) {
+        self.max_chain_passes.store(max.max(1), Ordering::Relaxed);
+    }
+
     /// Set whether to enable diagnostics
     pub fn with_diagnostics(mut self, enable: bool) -> Self {
         self.enable_diagnostics = enable;
@@ -251,7 +262,7 @@ impl BatchOptimizer {
         // across batches instead of converging.
         let mut boundary_fingerprints: Vec<u64> = Vec::new();
 
-        for pass in 0..MAX_CHAIN_PASSES {
+        for pass in 0..self.max_chain_passes.load(Ordering::Relaxed) {
             let boundary_fp = Self::calculate_fingerprint(&current_plan);
             match classify_boundary_repeat(&boundary_fingerprints, boundary_fp) {
                 BoundaryOutcome::Converged => {

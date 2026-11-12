@@ -179,9 +179,13 @@ pub(crate) fn initialize_with_recovery(
     let stats = recover_from_wal(ctx)?;
 
     log::info!(
-        "WAL recovery completed: {} entries replayed in {}ms",
+        "WAL recovery completed: {} entries replayed in {}ms (parse={} filter={} restore={} apply={})",
         stats.wal_entries_replayed,
-        stats.recovery_time_ms
+        stats.recovery_time_ms,
+        stats.parse_time_ms,
+        stats.filter_time_ms,
+        stats.restore_time_ms,
+        stats.apply_time_ms
     );
 
     // Seed SERIAL counters after replay so the column max includes replayed

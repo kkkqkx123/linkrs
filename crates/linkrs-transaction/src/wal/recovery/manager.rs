@@ -28,7 +28,11 @@ impl RecoveryManager {
         self.stats = RecoveryStats::default();
         self.stats.last_lsn = self.config.start_lsn.unwrap_or(Lsn::ZERO);
 
+        let parse_start = std::time::Instant::now();
         let wal_result = self.parse_wal_files()?;
+        self.stats.parse_time_ms = parse_start.elapsed().as_millis() as u64;
+
+        let filter_start = std::time::Instant::now();
         let (wal_result, dry_stats) = self.apply_dry_replay_filter(wal_result)?;
         if let Some(dry) = dry_stats {
             log::info!(
@@ -58,6 +62,7 @@ impl RecoveryManager {
         self.stats.errors_encountered = wal_result
             .corrupted_count
             .saturating_add(wal_result.skipped_count);
+        self.stats.filter_time_ms = filter_start.elapsed().as_millis() as u64;
         if self.stats.errors_encountered > 0 {
             log::warn!(
                 "WAL recovery found {} recoverable tail/corruption markers",
@@ -65,8 +70,12 @@ impl RecoveryManager {
             );
         }
 
+        let restore_start = std::time::Instant::now();
         self.restore_from_checkpoint(&wal_result)?;
+        self.stats.restore_time_ms = restore_start.elapsed().as_millis() as u64;
+        let apply_start = std::time::Instant::now();
         self.replay_wal_entries(&wal_result, applier)?;
+        self.stats.apply_time_ms = apply_start.elapsed().as_millis() as u64;
         self.stats.recovery_time_ms = start.elapsed().as_millis() as u64;
 
         Ok(self.stats.clone())

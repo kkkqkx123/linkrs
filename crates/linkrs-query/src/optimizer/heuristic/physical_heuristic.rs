@@ -52,6 +52,11 @@ impl PhysicalHeuristicOptimizer {
         self.batch.set_max_iterations(max);
     }
 
+    /// Override the whole-chain pass budget of the wrapped batches.
+    pub fn set_max_chain_passes(&self, max: usize) {
+        self.batch.set_max_chain_passes(max);
+    }
+
     /// Access the wrapped batch optimizer.
     pub fn batch(&self) -> &BatchOptimizer {
         &self.batch

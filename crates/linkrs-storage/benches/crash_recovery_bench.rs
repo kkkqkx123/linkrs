@@ -153,11 +153,28 @@ fn bench_restart(c: &mut Criterion) {
         // One-shot wall measurement (outside criterion) for the report.
         // Warm the page cache with one open first: that open's drop drains
         // the background checkpoint scheduler, so the timed open below
-        // measures recovery and not first-touch I/O.
-        {
+        // measures recovery and not first-touch I/O. The warm open is also
+        // the one that replays the WAL tail (the timed open that follows
+        // finds a fresh checkpoint and has nothing to replay), so the
+        // segment breakdown is read from it.
+        let breakdown = {
             let settled = open_settled(tmp.path());
+            let breakdown = settled
+                .last_recovery_stats()
+                .map(|stats| {
+                    format!(
+                        "replayed={} parse={}ms filter={}ms restore={}ms apply={}ms",
+                        stats.wal_entries_replayed,
+                        stats.parse_time_ms,
+                        stats.filter_time_ms,
+                        stats.restore_time_ms,
+                        stats.apply_time_ms
+                    )
+                })
+                .unwrap_or_else(|| "no recovery ran".to_string());
             drop(settled);
-        }
+            breakdown
+        };
         let start = Instant::now();
         let opened = open_settled(tmp.path());
         let wall = start.elapsed();
@@ -200,6 +217,7 @@ fn bench_restart(c: &mut Criterion) {
             label,
             wall.as_secs_f64() * 1000.0
         ));
+        report.push_str(&format!("recovery breakdown ({label}): {breakdown}\n"));
     }
 
     let path = write_results_report("crash_recovery_bench", "results.txt", &report);

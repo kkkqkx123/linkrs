@@ -1010,7 +1010,7 @@ fn hinted_logical_plan_skips_join_order_review() {
     // Unhinted twin: the reviewer reorders small-first and says so.
     let mut plain = ExecutionPlan::new(None);
     plain.set_logical_plan(LogicalPlan::new(join_chain()));
-    engine.apply_join_order_logical(&stats_view, None, &mut plain);
+    engine.apply_join_order_logical(&stats_view, &mut plain, &engine.cost_calculator_for(None));
     assert_eq!(
         left_leaf_tag(plain.logical_plan().expect("logical").root()).as_deref(),
         Some("small")
@@ -1030,7 +1030,7 @@ fn hinted_logical_plan_skips_join_order_review() {
     let mut logical = LogicalPlan::new(join_chain());
     logical.join_order_hinted = true;
     hinted.set_logical_plan(logical);
-    engine.apply_join_order_logical(&stats_view, None, &mut hinted);
+    engine.apply_join_order_logical(&stats_view, &mut hinted, &engine.cost_calculator_for(None));
     assert_eq!(
         left_leaf_tag(hinted.logical_plan().expect("logical").root()).as_deref(),
         Some("big")
@@ -1105,7 +1105,7 @@ fn stats_backed_logical_plan_skips_join_order_review() {
     }));
     logical.stats_backed = true;
     backed.set_logical_plan(logical);
-    engine.apply_join_order_logical(&stats_view, None, &mut backed);
+    engine.apply_join_order_logical(&stats_view, &mut backed, &engine.cost_calculator_for(None));
     assert!(
         backed
             .diagnostics
@@ -1623,6 +1623,79 @@ mod fast_shape_tests {
     fn fast_path_matches_full_path_on_one_hop() {
         full_vs_fast(project_var(one_hop_chain(), "b"));
         full_vs_fast(one_hop_chain());
+    }
+
+    #[test]
+    fn partitioned_plan_carries_partition_note() {
+        use crate::optimizer::partitioning::PartitioningConfig;
+        let mut engine = engine_with_person_stats();
+        engine.set_partitioning_config(PartitioningConfig {
+            enabled: true,
+            min_rows_per_partition: 1_000,
+            max_partitions: 4,
+            vertex_id_range: Some(0i64..10_000),
+            max_workers: 4,
+            max_buffered_chunks: 10,
+            fixed_overhead_rows: 0,
+            per_partition_rows: 0,
+            exchange_row_per_mille: 0,
+        });
+        let plan = engine
+            .optimize(
+                ExecutionPlan::new(Some(person_scan("n"))),
+                Some("test"),
+            )
+            .expect("optimization should succeed");
+        assert!(
+            plan.partition_spec().is_some(),
+            "ten thousand rows must partition, notes: {:?}",
+            plan.diagnostics.notes
+        );
+        assert!(
+            plan.diagnostics
+                .notes
+                .iter()
+                .any(|note| note.starts_with("partitioning: ")),
+            "partitioned plan must surface the decision, notes: {:?}",
+            plan.diagnostics.notes
+        );
+    }
+
+    #[test]
+    fn fast_path_matches_full_path_on_edge_scans() {
+        let bare = PlanNodeEnum::ScanEdges(ScanEdgesNode::new(1, "follows"));
+        full_vs_fast(bare);
+        let filtered = prop_eq_filter(
+            PlanNodeEnum::ScanEdges(ScanEdgesNode::new(1, "follows")),
+            "e",
+            "weight",
+            Value::Double(1.5),
+        );
+        full_vs_fast(filtered);
+        full_vs_fast(project_var(
+            prop_eq_filter(person_scan("n"), "n", "value", Value::Double(1.0)),
+            "n",
+        ));
+    }
+
+    #[test]
+    fn fast_path_runs_single_chain_pass() {
+        use crate::optimizer::partitioning::PartitioningLayoutInfo;
+        let engine = engine_with_person_stats();
+        let layout = PartitioningLayoutInfo::default();
+        let chain = prop_eq_filter(person_scan("n"), "n", "name", Value::String("a".into()));
+        let _ = engine
+            .optimize_fast_shape(
+                ExecutionPlan::new(Some(chain)),
+                Some("test"),
+                &layout,
+                &mut None,
+                false,
+            )
+            .expect("fast optimization should succeed");
+        // Five batches carry fast-shape rules; a second chain pass would
+        // append five more entries without applying anything.
+        assert_eq!(engine.last_batch_statistics().len(), 5);
     }
 
     #[test]

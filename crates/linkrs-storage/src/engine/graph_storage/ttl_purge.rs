@@ -51,6 +51,7 @@ impl TtlPurgeScheduler {
         // leaves the sweep pinning the storage context alive.
         let storage = GraphStorage {
             ctx: Arc::new(ctx.clone_for_ttl_purge()),
+            last_recovery_stats: Arc::new(parking_lot::RwLock::new(None)),
         };
         let running = Arc::new(AtomicBool::new(false));
         // Warn-only bound for one sweep; a sweep slower than its own
