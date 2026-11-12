@@ -1,5 +1,10 @@
 //! Connection Order Optimizer Module
 //!
+//! Second-stage join reordering over already planned join chains. The first
+//! stage is planning-time dynamic programming over the pattern query graph
+//! (`planning::join_order`); this stage never replaces it and only reorders
+//! built chains by cost.
+//!
 //! Cost-based optimization of the join order to select the optimal sequence of joins for multiple tables
 //!
 //! ## Algorithm Support

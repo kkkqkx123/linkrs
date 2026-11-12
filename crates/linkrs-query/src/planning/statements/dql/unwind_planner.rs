@@ -89,6 +89,9 @@ impl Planner for UnwindPlanner {
             column_types: vec![],
         };
 
+        // Statement-level exit uses the single logical-root conversion entry,
+        // which builds the physical tree through the shared mapper.
+        // This keeps the same exit contract as the clause planner dual build.
         let logical_root = LogicalNodeEnum::Unwind(unwind_node);
         Ok(SubPlan::from_logical_root(logical_root))
     }

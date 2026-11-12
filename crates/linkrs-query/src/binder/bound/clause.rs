@@ -21,6 +21,9 @@ pub struct BoundOrderByItem {
 /// The two clauses bind through the same path and differ only in whether
 /// undefined variables are rejected eagerly (RETURN) or deferred (YIELD);
 /// the bound shape, including the optional sampling clause, is identical.
+/// Statement-level `BoundReturnStatement` and `BoundYield` intentionally keep
+/// their own shapes because top-level statement semantics differ from
+/// embedded clauses; no further merge is planned.
 #[derive(Debug, Clone)]
 pub struct BoundProjectionClause {
     pub items: Vec<BoundProjectionItem>,

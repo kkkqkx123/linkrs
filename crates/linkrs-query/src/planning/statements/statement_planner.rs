@@ -1,5 +1,10 @@
 //! Statement-level planner
 //!
+//! Exit contract: all statement and clause planners build dual roots via
+//! `SubPlan::from_dual` (physical root plus logical mirror) and never
+//! assemble plan structs directly. Independent statements and embedded
+//! clauses intentionally keep separate planner types; only the exit is unified.
+//!
 //! Provide a unified interface for statement-level planners that handles the planning logic of entire statements.
 //! Architecture: Planner trait -> StatementPlanner trait -> ClausePlanner
 //!

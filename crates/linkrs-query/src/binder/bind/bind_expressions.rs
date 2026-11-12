@@ -30,27 +30,33 @@ impl Binder {
     /// Walk an expression and reject any variable reference that is not
     /// defined in the current binding scope.
     ///
-    /// Used by clause binders that must validate their output variables
-    /// (e.g. RETURN), where an undefined reference is a user error rather
-    /// than a silently-null value.
+    /// Scope-sensitive existence check and the only such implementation.
+    /// The generic `walk_expr` validator covers scope-free structural
+    /// checks; this check keeps explicit scope push for lambdas,
+    /// comprehensions, predicates and reduce, so the two traversals do not
+    /// overlap. Used by clause binders that must validate their output
+    /// variables (e.g. RETURN), where an undefined reference is a user error
+    /// rather than a silently-null value.
     pub(crate) fn ensure_variables_defined(&self, expr: &ContextualExpression) -> DBResult<()> {
-        fn check(scope: &BinderScope, e: &Expression) -> DBResult<()> {
+        fn check(scope: &BinderScope, e: &Expression, depth: usize) -> DBResult<()> {
+            if depth > linkrs_core::types::expr::MAX_EXPR_DEPTH {
+                return Err(super::super::error::invalid_query(
+                    "expressions are nested too deeply in levels".to_string(),
+                ));
+            }
             match e {
                 Expression::Variable(name) => {
                     if !scope.contains(name) {
-                        return Err(super::super::error::invalid_query(format!(
-                            "Undefined variable: {}",
-                            name
-                        )));
+                        return Err(super::super::error::undefined_variable(name));
                     }
                     Ok(())
                 }
-                Expression::Property { object, .. } => check(scope, object),
+                Expression::Property { object, .. } => check(scope, object, depth + 1),
                 Expression::Binary { left, right, .. } => {
-                    check(scope, left)?;
-                    check(scope, right)
+                    check(scope, left, depth + 1)?;
+                    check(scope, right, depth + 1)
                 }
-                Expression::Unary { operand, .. } => check(scope, operand),
+                Expression::Unary { operand, .. } => check(scope, operand, depth + 1),
                 Expression::Function { name, args } => {
                     let lower = name.to_ascii_lowercase();
                     let is_higher_order = matches!(
@@ -72,7 +78,7 @@ impl Binder {
                             // iteration variables.
                             for arg in args {
                                 if !matches!(arg.as_expr(), Expression::Lambda { .. }) {
-                                    check(scope, arg.as_expr())?;
+                                    check(scope, arg.as_expr(), depth + 1)?;
                                 }
                             }
                             if let Expression::Lambda { params, body } = lambda_arg.as_expr() {
@@ -80,79 +86,86 @@ impl Binder {
                                 for param in params {
                                     inner.define_variable(local_variable(param));
                                 }
-                                return check(&inner, body);
+                                return check(&inner, body, depth + 1);
                             }
                             return Ok(());
                         }
                     }
-                    args.iter().try_for_each(|a| check(scope, a.as_expr()))
+                    args.iter()
+                        .try_for_each(|a| check(scope, a.as_expr(), depth + 1))
                 }
                 Expression::Aggregate { args, filter, .. } => {
-                    args.iter().try_for_each(|a| check(scope, a))?;
+                    args.iter().try_for_each(|a| check(scope, a, depth + 1))?;
                     if let Some(f) = filter {
-                        check(scope, f)?;
+                        check(scope, f, depth + 1)?;
                     }
                     Ok(())
                 }
-                Expression::List(items) => items.iter().try_for_each(|i| check(scope, i)),
-                Expression::Map(pairs) => pairs.iter().try_for_each(|(_, v)| check(scope, v)),
+                Expression::List(items) => {
+                    items.iter().try_for_each(|i| check(scope, i, depth + 1))
+                }
+                Expression::Map(pairs) => pairs
+                    .iter()
+                    .try_for_each(|(_, v)| check(scope, v, depth + 1)),
                 Expression::Case {
                     test_expr,
                     conditions,
                     default,
                 } => {
                     if let Some(t) = test_expr {
-                        check(scope, t)?;
+                        check(scope, t, depth + 1)?;
                     }
                     for (c, v) in conditions {
-                        check(scope, c)?;
-                        check(scope, v)?;
+                        check(scope, c, depth + 1)?;
+                        check(scope, v, depth + 1)?;
                     }
                     if let Some(d) = default {
-                        check(scope, d)?;
+                        check(scope, d, depth + 1)?;
                     }
                     Ok(())
                 }
-                Expression::TypeCast { expression, .. } => check(scope, expression),
+                Expression::TypeCast { expression, .. } => check(scope, expression, depth + 1),
                 Expression::Subscript { collection, index } => {
-                    check(scope, collection)?;
-                    check(scope, index)
+                    check(scope, collection, depth + 1)?;
+                    check(scope, index, depth + 1)
                 }
-                Expression::Range { collection, .. } => check(scope, collection),
-                Expression::Path(items) => items.iter().try_for_each(|i| check(scope, i)),
+                Expression::Range { collection, .. } => check(scope, collection, depth + 1),
+                Expression::Path(items) => {
+                    items.iter().try_for_each(|i| check(scope, i, depth + 1))
+                }
                 Expression::ListComprehension {
                     variable,
                     source,
                     filter,
                     map,
                 } => {
-                    check(scope, source)?;
+                    check(scope, source, depth + 1)?;
                     let inner = inner_scope_with_variable(scope, variable);
                     if let Some(f) = filter {
-                        check(&inner, f)?;
+                        check(&inner, f, depth + 1)?;
                     }
                     if let Some(m) = map {
-                        check(&inner, m)?;
+                        check(&inner, m, depth + 1)?;
                     }
                     Ok(())
                 }
-                Expression::LabelTagProperty { tag, .. } => check(scope, tag),
+                Expression::LabelTagProperty { tag, .. } => check(scope, tag, depth + 1),
                 Expression::Predicate { args, .. } => {
                     // First argument is the locally bound iteration variable;
                     // the source is checked in the outer scope and the
                     // predicate condition in a scope where it is bound.
                     let Some(Expression::Variable(variable)) = args.first() else {
-                        return args.iter().try_for_each(|a| check(scope, a));
+                        return args.iter().try_for_each(|a| check(scope, a, depth + 1));
                     };
                     let Some(source_expr) = args.get(1) else {
-                        return args.iter().try_for_each(|a| check(scope, a));
+                        return args.iter().try_for_each(|a| check(scope, a, depth + 1));
                     };
                     let Some(predicate_expr) = args.get(2) else {
-                        return args.iter().try_for_each(|a| check(scope, a));
+                        return args.iter().try_for_each(|a| check(scope, a, depth + 1));
                     };
-                    check(scope, source_expr)?;
+                    check(scope, source_expr, depth + 1)?;
                     let inner = inner_scope_with_variable(scope, variable);
-                    check(&inner, predicate_expr)
+                    check(&inner, predicate_expr, depth + 1)
                 }
                 Expression::Reduce {
                     accumulator,
@@ -161,41 +174,47 @@ impl Binder {
                     source,
                     mapping,
                 } => {
-                    check(scope, initial)?;
-                    check(scope, source)?;
+                    check(scope, initial, depth + 1)?;
+                    check(scope, source, depth + 1)?;
                     let mut inner = inner_scope_with_variable(scope, variable);
                     inner.define_variable(local_variable(accumulator));
-                    check(&inner, mapping)
+                    check(&inner, mapping, depth + 1)
                 }
-                Expression::PathBuild(items) => items.iter().try_for_each(|i| check(scope, i)),
+                Expression::PathBuild(items) => {
+                    items.iter().try_for_each(|i| check(scope, i, depth + 1))
+                }
                 Expression::WindowFunction {
                     args,
                     over_partition_by,
                     over_order_by,
                     ..
                 } => {
-                    args.iter().try_for_each(|a| check(scope, a))?;
-                    over_partition_by.iter().try_for_each(|a| check(scope, a))?;
-                    over_order_by.iter().try_for_each(|a| check(scope, a))
+                    args.iter().try_for_each(|a| check(scope, a, depth + 1))?;
+                    over_partition_by
+                        .iter()
+                        .try_for_each(|a| check(scope, a, depth + 1))?;
+                    over_order_by
+                        .iter()
+                        .try_for_each(|a| check(scope, a, depth + 1))
                 }
-                Expression::StructField { base, .. } => check(scope, base),
-                Expression::Exists { body } => check_subquery_body(scope, body),
-                Expression::CountSubquery { body } => check_subquery_body(scope, body),
-                Expression::ScalarSubquery { body } => check_subquery_body(scope, body),
+                Expression::StructField { base, .. } => check(scope, base, depth + 1),
+                Expression::Exists { body } => check_subquery_body(scope, body, depth + 1),
+                Expression::CountSubquery { body } => check_subquery_body(scope, body, depth + 1),
+                Expression::ScalarSubquery { body } => check_subquery_body(scope, body, depth + 1),
                 Expression::In {
                     expr: inner_expr,
                     subquery,
                     ..
                 } => {
-                    check(scope, inner_expr)?;
-                    check_subquery_body(scope, subquery)
+                    check(scope, inner_expr, depth + 1)?;
+                    check_subquery_body(scope, subquery, depth + 1)
                 }
                 Expression::Lambda { params, body } => {
                     let mut inner = BinderScope::with_parent(scope.clone());
                     for param in params {
                         inner.define_variable(local_variable(param));
                     }
-                    check(&inner, body)
+                    check(&inner, body, depth + 1)
                 }
                 Expression::Label(_)
                 | Expression::TagProperty { .. }
@@ -209,19 +228,20 @@ impl Binder {
         fn check_subquery_body(
             scope: &BinderScope,
             body: &linkrs_core::types::expr::SubqueryBody,
+            depth: usize,
         ) -> DBResult<()> {
             if let Some(where_clause) = body.where_clause.as_ref() {
-                check(scope, where_clause)?;
+                check(scope, where_clause, depth + 1)?;
             }
             if let Some(return_expr) = body.return_expr.as_ref() {
-                check(scope, return_expr)?;
+                check(scope, return_expr, depth + 1)?;
             }
             Ok(())
         }
         let Some(inner) = expr.get_expression() else {
             return Ok(());
         };
-        check(&self.scope, &inner)
+        check(&self.scope, &inner, 0)
     }
 
     pub(crate) fn bind_inner_expr(
@@ -667,6 +687,11 @@ impl Binder {
         }
     }
 
+    /// Sole property-type entry for expression binding: scope first, then schema fallback.
+    ///
+    /// Branches must not bypass this entry with direct scope lookups, so scope
+    /// and catalog semantics stay in one place. The pure scope part lives in
+    /// `ExpressionBinder::resolve_property_type`.
     fn resolve_property_type(&self, var_name: &str, property: &str) -> DataType {
         let scope_type =
             ExpressionBinder::new(&self.scope).resolve_property_type(var_name, property);
@@ -708,7 +733,7 @@ impl Binder {
 
     // ── Clause helpers ─────────────────────────────────────────────────────
 
-    fn bind_projection_expression(
+    pub(crate) fn bind_projection_expression(
         &mut self,
         expression: &ContextualExpression,
         alias: Option<String>,
@@ -725,7 +750,7 @@ impl Binder {
         })
     }
 
-    fn bind_order_by_clause(
+    pub(crate) fn bind_order_by_clause(
         &mut self,
         order_by: Option<&crate::parser::ast::OrderByClause>,
     ) -> DBResult<Option<Vec<BoundOrderByItem>>> {

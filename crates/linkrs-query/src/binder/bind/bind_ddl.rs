@@ -25,11 +25,9 @@ impl Binder {
                 // INSERT EDGE (see docs/release/statements/02_dml_data_manipulation.md
                 // section 1 and section 2); no automatic schema creation is
                 // performed for CREATE data patterns.
-                Err(linkrs_core::error::DBError::from(
-                    linkrs_core::error::QueryError::invalid_query(
-                        "CREATE data patterns are not supported; use INSERT VERTEX / INSERT EDGE (see docs/release/statements/02_dml_data_manipulation.md)"
-                            .to_string(),
-                    ),
+                Err(crate::binder::error::invalid_query(
+                    "CREATE data patterns are not supported; use INSERT VERTEX / INSERT EDGE (see docs/release/statements/02_dml_data_manipulation.md)"
+                        .to_string(),
                 ))
             }
             _ => {

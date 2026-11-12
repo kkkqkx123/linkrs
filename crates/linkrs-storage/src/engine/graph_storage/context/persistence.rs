@@ -56,13 +56,13 @@ impl GraphStorageContext {
         Ok(())
     }
 
-    pub(crate) fn ensure_edge_table_for_restore(
-        &self,
-        key: EdgeTableKey,
-    ) -> StorageResult<Arc<parking_lot::RwLock<EdgeStore>>> {
-        if let Some(arc) = self.persistent.data_store.try_get_edge_table_mut(&key) {
-            return Ok(arc);
-        }
+    /// Schema for rebuilding an edge partition found on disk: cloned from
+    /// an in-memory template when one exists, otherwise synthesized from
+    /// the schema manager. Returns `None` when no in-memory template and no
+    /// schema entry know the label yet; that happens when a flush persisted
+    /// tables whose schema lives only in WAL entries that have not been
+    /// replayed yet.
+    fn edge_schema_for_restore(&self, key: EdgeTableKey) -> Option<EdgeSchema> {
         let template_schema = self.persistent.data_store.with_edge_tables(|tables| {
             if let Some(arc) = tables.get(&EdgeTableKey::new(0, 0, key.edge_label)) {
                 return Some(arc.read().schema().clone());
@@ -72,31 +72,40 @@ impl GraphStorageContext {
                 .find(|(c, _)| c.edge_label == key.edge_label)
                 .map(|(_, a)| a.read().schema().clone())
         });
-        let schema = if let Some(mut s) = template_schema {
+        if let Some(mut s) = template_schema {
             s.src_label = key.src_label;
             s.dst_label = key.dst_label;
-            s
-        } else if let Some((_, info)) = self
-            .persistent
-            .schema_manager
-            .find_edge_type_by_id(key.edge_label)
-        {
-            EdgeSchema {
-                label_id: key.edge_label,
-                label_name: info.edge_type_name.clone(),
-                src_label: key.src_label,
-                dst_label: key.dst_label,
-                properties: info
-                    .properties
-                    .iter()
-                    .map(StoragePropertyDef::from_core)
-                    .collect(),
-                oe_strategy: info.oe_strategy,
-                ie_strategy: info.ie_strategy,
-                schema_version: 1,
-                record_form: crate::edge::RecordForm::default(),
-            }
+            Some(s)
         } else {
+            self.persistent
+                .schema_manager
+                .find_edge_type_by_id(key.edge_label)
+                .map(|(_, info)| EdgeSchema {
+                    label_id: key.edge_label,
+                    label_name: info.edge_type_name.clone(),
+                    src_label: key.src_label,
+                    dst_label: key.dst_label,
+                    properties: info
+                        .properties
+                        .iter()
+                        .map(StoragePropertyDef::from_core)
+                        .collect(),
+                    oe_strategy: info.oe_strategy,
+                    ie_strategy: info.ie_strategy,
+                    schema_version: 1,
+                    record_form: crate::edge::RecordForm::default(),
+                })
+        }
+    }
+
+    pub(crate) fn ensure_edge_table_for_restore(
+        &self,
+        key: EdgeTableKey,
+    ) -> StorageResult<Arc<parking_lot::RwLock<EdgeStore>>> {
+        if let Some(arc) = self.persistent.data_store.try_get_edge_table_mut(&key) {
+            return Ok(arc);
+        }
+        let Some(schema) = self.edge_schema_for_restore(key) else {
             return Err(StorageError::deserialize_error(format!(
                 "checkpoint holds unknown edge partition {}_{}_{}",
                 key.src_label, key.dst_label, key.edge_label
@@ -788,6 +797,21 @@ impl GraphStorageContext {
                                     parts[2].parse::<LabelId>(),
                                 ) {
                                     let key = EdgeTableKey::new(src_label, dst_label, edge_label);
+                                    if self.edge_schema_for_restore(key).is_none()
+                                        && super::super::persistence::needs_recovery(self)
+                                    {
+                                        // A flush snapshot is advisory: it can persist
+                                        // tables whose schema lives only in WAL entries
+                                        // that are replayed after this restore. Skip the
+                                        // partition and let the pending replay rebuild
+                                        // it; a clean open with nothing left to replay
+                                        // still fails loudly inside `ensure` below.
+                                        log::warn!(
+                                            "Skipping restore of edge partition {}_{}_{} with no schema yet; WAL replay is pending",
+                                            src_label, dst_label, edge_label
+                                        );
+                                        continue;
+                                    }
                                     let arc = self.ensure_edge_table_for_restore(key)?;
                                     let mut table = arc.write();
                                     table.load(&path)?;

@@ -1,7 +1,11 @@
-//! Clause contexts produced by the binder and consumed by planners.
+//! Clause kinds and planning contexts.
 //!
 //! The bound statement is the single source of truth; these contexts carry
-//! resolved clause inputs for planning.
+//! resolved clause inputs for planning. `CypherClauseKind` is the retained
+//! identifier shared by statement planners for supported-clause reporting.
+//! The context structs are test and diagnostic carriers and are not read on
+//! the production bound-to-plan path, which consumes `BoundStatement`
+//! directly. Kept intentionally; not a legacy validator.
 
 use std::collections::HashMap;
 

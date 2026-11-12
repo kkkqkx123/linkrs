@@ -6,6 +6,11 @@
 //! [`CardinalityEstimator`], the [`JoinOrderEnumerator`], and the join-hint
 //! [`JoinTree`] support.
 //!
+//! Two-stage join ordering: this module enumerates pattern-graph orders at
+//! plan time with dynamic programming; the optimizer later reorders already
+//! built join chains by cost. The cost types are documented at each stage
+//! and must not be merged into one implementation.
+//!
 //! Status: fully implemented and wired into MATCH planning.
 //! `MatchStatementPlanner::try_join_order_plan` routes conjunctive MATCH
 //! patterns through `JoinOrderEnumerator`, which runs DP enumeration over

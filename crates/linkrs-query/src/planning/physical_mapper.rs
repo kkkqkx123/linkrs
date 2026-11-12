@@ -1,5 +1,10 @@
 //! Full logical-to-physical plan mapping.
 //!
+//! The optimizer calls this mapping at the physical phase by design; the
+//! logical-to-physical direction stays single-owner here and the reverse
+//! bridge remains diagnostic-only. Later module splits must keep this
+//! direction and not introduce cycles.
+//!
 //! Converts a logical plan tree into a physical plan tree in one pass,
 //! honoring the cost-based index hints recorded on logical scan nodes and
 //! preserving factorization operators. The optimizer engine merges the

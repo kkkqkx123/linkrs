@@ -299,6 +299,8 @@ impl Planner for SetOperationPlanner {
 }
 
 impl SetOperationPlanner {
+    // Nested set operations recurse here for depth protection.
+    // Non-set branches use the shared routing table, so no second routing exists.
     fn plan_bound_subquery(
         &mut self,
         ctx: &crate::planning::context::PlanContext<'_>,

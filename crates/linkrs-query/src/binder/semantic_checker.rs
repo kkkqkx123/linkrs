@@ -1,12 +1,16 @@
 //! Semantic validation for the Binder.
 //!
-//! This module consolidates expression-level validation that was previously
-//! scattered across the validator crate.  The Binder now performs these
-//! checks during binding (binding = validation).
+//! Structural checks live here. Pure type deduction lives in
+//! [`crate::binder::expr_binder::ExpressionBinder`] and in
+//! `Expression::deduce_type`, which never raise structural errors.
+//! Binding-time resolution errors live in `bind_inner_expr`.
+//! This module may call deduction as a read-only helper, but deduction
+//! must never depend on this module. `bind_expr` is the sole entry that
+//! runs structural validation before binding.
 
 use std::collections::HashSet;
 
-use linkrs_core::error::{DBError, DBResult, QueryError};
+use linkrs_core::error::DBResult;
 use linkrs_core::types::expr::contextual::ContextualExpression;
 use linkrs_core::types::expr::Expression;
 use linkrs_core::types::expr::{walk_expr, ExprValidator, MAX_EXPR_DEPTH};
@@ -28,9 +32,9 @@ const MAX_COLLECTION_ELEMENTS: usize = 10_000;
 /// - Duplicate map keys
 pub fn validate_expression(expr: &ContextualExpression) -> DBResult<()> {
     let Some(expr_meta) = expr.expression() else {
-        return Err(DBError::from(QueryError::invalid_query(
+        return Err(super::error::invalid_query(
             "Expression not found in context".to_string(),
-        )));
+        ));
     };
     let inner = expr_meta.inner();
 
@@ -52,9 +56,9 @@ impl CompositeValidator {
 impl ExprValidator for CompositeValidator {
     fn validate(&mut self, expr: &Expression, depth: usize) -> DBResult<()> {
         if depth > MAX_EXPR_DEPTH {
-            return Err(DBError::from(QueryError::invalid_query(
+            return Err(super::error::invalid_query(
                 "expressions are nested too deeply in levels".to_string(),
-            )));
+            ));
         }
         self.check_division_by_zero(expr)?;
         self.check_subscript_types(expr, depth)?;
@@ -80,9 +84,9 @@ impl CompositeValidator {
                 Expression::Literal(linkrs_core::Value::Int(0))
                     | Expression::Literal(linkrs_core::Value::Float(0.0))
             ) {
-                return Err(DBError::from(QueryError::invalid_query(
+                return Err(super::error::invalid_query(
                     "The divisor cannot be 0".to_string(),
-                )));
+                ));
             }
         }
         Ok(())
@@ -98,10 +102,10 @@ impl CompositeValidator {
                         && idx_type != DataType::Empty
                         && idx_type != DataType::Unknown
                     {
-                        return Err(DBError::from(QueryError::invalid_query(format!(
+                        return Err(super::error::invalid_query(format!(
                             "List subscripts need to be of integer type, but get: {:?}",
                             idx_type
-                        ))));
+                        )));
                     }
                 }
                 DataType::Map(_) => {
@@ -109,18 +113,18 @@ impl CompositeValidator {
                         && idx_type != DataType::Empty
                         && idx_type != DataType::Unknown
                     {
-                        return Err(DBError::from(QueryError::invalid_query(format!(
+                        return Err(super::error::invalid_query(format!(
                             "Mapping keys requires a string type, but gets: {:?}",
                             idx_type
-                        ))));
+                        )));
                     }
                 }
                 DataType::Empty | DataType::Unknown => {}
                 _ => {
-                    return Err(DBError::from(QueryError::invalid_query(format!(
+                    return Err(super::error::invalid_query(format!(
                         "Unsupported types for subscript operations: {:?}",
                         col_type
-                    ))));
+                    )));
                 }
             }
         }
@@ -130,9 +134,9 @@ impl CompositeValidator {
     fn check_case_when(&mut self, expr: &Expression) -> DBResult<()> {
         if let Expression::Case { conditions, .. } = expr {
             if conditions.is_empty() {
-                return Err(DBError::from(QueryError::invalid_query(
+                return Err(super::error::invalid_query(
                     "CASE expressions must have at least one WHEN clause.".to_string(),
-                )));
+                ));
             }
         }
         Ok(())
@@ -142,15 +146,15 @@ impl CompositeValidator {
         match expr {
             Expression::Function { name, .. } => {
                 if name.is_empty() {
-                    return Err(DBError::from(QueryError::invalid_query(
+                    return Err(super::error::invalid_query(
                         "Function name cannot be null".to_string(),
-                    )));
+                    ));
                 }
             }
             Expression::Property { property, .. } if property.is_empty() => {
-                return Err(DBError::from(QueryError::invalid_query(
+                return Err(super::error::invalid_query(
                     "Attribute name cannot be null".to_string(),
-                )));
+                ));
             }
             _ => {}
         }
@@ -165,10 +169,10 @@ impl CompositeValidator {
         };
 
         if arg_count > MAX_FUNCTION_ARGS {
-            return Err(DBError::from(QueryError::invalid_query(format!(
+            return Err(super::error::invalid_query(format!(
                 "The function {:?} has too many arguments: {}",
                 name, arg_count
-            ))));
+            )));
         }
 
         let registry = crate::executor::expression::functions::global_registry_ref().read();
@@ -177,32 +181,32 @@ impl CompositeValidator {
             let variadic = func.is_variadic();
             if variadic {
                 if arg_count < expected {
-                    return Err(DBError::from(QueryError::invalid_query(format!(
+                    return Err(super::error::invalid_query(format!(
                         "Function '{}' expects at least {} arguments, got {}",
                         name, expected, arg_count
-                    ))));
+                    )));
                 }
             } else if arg_count != expected {
-                return Err(DBError::from(QueryError::invalid_query(format!(
+                return Err(super::error::invalid_query(format!(
                     "Function '{}' expects {} arguments, got {}",
                     name, expected, arg_count
-                ))));
+                )));
             }
         } else if let Some(func) = registry.get_custom(name) {
             let expected = func.arity;
             let variadic = func.is_variadic;
             if variadic {
                 if arg_count < expected {
-                    return Err(DBError::from(QueryError::invalid_query(format!(
+                    return Err(super::error::invalid_query(format!(
                         "Function '{}' expects at least {} arguments, got {}",
                         name, expected, arg_count
-                    ))));
+                    )));
                 }
             } else if arg_count != expected {
-                return Err(DBError::from(QueryError::invalid_query(format!(
+                return Err(super::error::invalid_query(format!(
                     "Function '{}' expects {} arguments, got {}",
                     name, expected, arg_count
-                ))));
+                )));
             }
         }
         Ok(())
@@ -212,15 +216,15 @@ impl CompositeValidator {
         match expr {
             Expression::List(items) => {
                 if items.len() > MAX_COLLECTION_ELEMENTS {
-                    return Err(DBError::from(QueryError::invalid_query(
+                    return Err(super::error::invalid_query(
                         "Too many list expression elements".to_string(),
-                    )));
+                    ));
                 }
             }
             Expression::Map(pairs) if pairs.len() > MAX_COLLECTION_ELEMENTS => {
-                return Err(DBError::from(QueryError::invalid_query(
+                return Err(super::error::invalid_query(
                     "Mapping expressions with too many key-value pairs".to_string(),
-                )));
+                ));
             }
             _ => {}
         }
@@ -232,10 +236,10 @@ impl CompositeValidator {
             let mut keys = HashSet::new();
             for (key, _) in pairs {
                 if !keys.insert(key) {
-                    return Err(DBError::from(QueryError::invalid_query(format!(
+                    return Err(super::error::invalid_query(format!(
                         "There are duplicate keys in the mapping expression: {:?}",
                         key
-                    ))));
+                    )));
                 }
             }
         }

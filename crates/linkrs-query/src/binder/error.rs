@@ -18,3 +18,20 @@ pub(crate) fn undefined_struct_field(field: &str, base_type: &DataType) -> DBErr
         field, base_type
     ))
 }
+
+/// Create an undefined variable error.
+///
+/// Sole construction point for unbound variable references found by the
+/// scope-sensitive existence check. Callers must not format this message
+/// inline so client parsing stays stable.
+pub(crate) fn undefined_variable(name: &str) -> DBError {
+    invalid_query(format!("Undefined variable: {}", name))
+}
+
+/// Create a duplicate variable error.
+///
+/// Sole construction point for pattern and CTE variable redefinition.
+/// Callers must not format this message inline.
+pub(crate) fn duplicate_variable(name: &str) -> DBError {
+    invalid_query(format!("Duplicate variable: {}", name))
+}

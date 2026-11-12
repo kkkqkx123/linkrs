@@ -6,6 +6,12 @@
 //! Unlike the Validator's `ExpressionAnalyzer`, it does **not** mutate the
 //! `ExpressionAnalysisContext`. It is a pure function from `Expression` →
 //! `DataType`, designed to be called from `Binder::bind_inner_expr()`.
+//!
+//! `resolve_property_type` here is the pure scope half of property typing.
+//! The schema-aware half lives in `Binder::resolve_property_type`, which
+//! checks scope first and then the catalog. Expression branches must call
+//! the binder entry so the order stays in one place. The polymorphic
+//! function-name table appears once in `deduce_function_return_type`.
 
 use crate::binder::scope::BinderScope;
 use linkrs_core::types::expr::Expression;

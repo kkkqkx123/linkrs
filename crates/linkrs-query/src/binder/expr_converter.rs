@@ -1,3 +1,10 @@
+//! Bound-to-AST bridge for isolated consumers.
+//!
+//! Intentional boundary: only projection-column building and explain paths
+//! convert resolved expressions back to syntax for type-preserving display.
+//! Planners consume `BoundStatement` directly; this bridge must not grow
+//! into a general reverse mapping.
+
 use std::sync::Arc;
 
 use linkrs_core::types::expr::contextual::ContextualExpression;

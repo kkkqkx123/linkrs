@@ -1,6 +1,5 @@
 use crate::parser::ast::ReturnItem;
 use linkrs_core::types::semantic::AliasType;
-use linkrs_core::DBError;
 use linkrs_core::DBResult;
 
 use crate::binder::bound::*;
@@ -18,31 +17,12 @@ impl Binder {
             .iter()
             .map(|item| match item {
                 ReturnItem::Expression { expression, alias } => {
-                    self.bind_expr(expression).map(|be| BoundProjectionItem {
-                        expression: be,
-                        alias: alias.clone(),
-                    })
+                    self.bind_projection_expression(expression, alias.clone(), false)
                 }
             })
             .collect::<DBResult<Vec<_>>>()?;
 
-        let order_by = stmt
-            .order_by
-            .as_ref()
-            .map(|ob| {
-                ob.items
-                    .iter()
-                    .map(|item| {
-                        self.bind_expr(&item.expression).map(|be| {
-                            super::super::bound::BoundOrderByItem {
-                                expression: be,
-                                direction: item.direction,
-                            }
-                        })
-                    })
-                    .collect::<DBResult<Vec<_>>>()
-            })
-            .transpose()?;
+        let order_by = self.bind_order_by_clause(stmt.order_by.as_ref())?;
 
         Ok(BoundStatement::Return(BoundReturnStatement {
             items,
@@ -62,10 +42,7 @@ impl Binder {
             .iter()
             .map(|item| match item {
                 ReturnItem::Expression { expression, alias } => {
-                    self.bind_expr(expression).map(|be| BoundProjectionItem {
-                        expression: be,
-                        alias: alias.clone(),
-                    })
+                    self.bind_projection_expression(expression, alias.clone(), false)
                 }
             })
             .collect::<DBResult<Vec<_>>>()?;
@@ -112,27 +89,21 @@ impl Binder {
         use crate::parser::ast::stmt::SetOperationType;
 
         if stmt.recursive && stmt.ctes.is_empty() {
-            return Err(DBError::from(
-                linkrs_core::error::QueryError::invalid_query(
-                    "WITH RECURSIVE requires at least one CTE (`name AS (anchor UNION ALL step)`)"
-                        .to_string(),
-                ),
+            return Err(crate::binder::error::invalid_query(
+                "WITH RECURSIVE requires at least one CTE (`name AS (anchor UNION ALL step)`)"
+                    .to_string(),
             ));
         }
         if stmt.ctes.len() > 1 {
-            return Err(DBError::from(
-                linkrs_core::error::QueryError::invalid_query(
-                    "Only a single CTE per WITH statement is supported".to_string(),
-                ),
+            return Err(crate::binder::error::invalid_query(
+                "Only a single CTE per WITH statement is supported".to_string(),
             ));
         }
         let mut bound = Vec::with_capacity(stmt.ctes.len());
         for cte in &stmt.ctes {
             if cte.name.trim().is_empty() {
-                return Err(DBError::from(
-                    linkrs_core::error::QueryError::invalid_query(
-                        "CTE name must not be empty".to_string(),
-                    ),
+                return Err(crate::binder::error::invalid_query(
+                    "CTE name must not be empty".to_string(),
                 ));
             }
             if stmt.recursive {
@@ -143,12 +114,10 @@ impl Binder {
                         (setop.left.as_ref(), setop.right.as_ref())
                     }
                     _ => {
-                        return Err(DBError::from(
-                            linkrs_core::error::QueryError::invalid_query(format!(
-                                "Recursive CTE '{}' body must be `anchor UNION ALL step`",
-                                cte.name
-                            )),
-                        ));
+                        return Err(crate::binder::error::invalid_query(format!(
+                            "Recursive CTE '{}' body must be `anchor UNION ALL step`",
+                            cte.name
+                        )));
                     }
                 };
                 let anchor = self.bind_stmt(anchor_stmt)?;

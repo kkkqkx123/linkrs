@@ -1,6 +1,5 @@
 use crate::parser::ast::pattern::{PathElement, Pattern};
 use crate::parser::ast::MatchDeleteTarget;
-use linkrs_core::error::DBError;
 use linkrs_core::types::semantic::{AliasType, ValueType};
 use linkrs_core::DBResult;
 
@@ -21,36 +20,8 @@ impl Binder {
 
         // Register MATCH variables in scope BEFORE binding WHERE / RETURN /
         // ORDER BY so those clauses can reference the matched entities.
-        for node in &query_graph.nodes {
-            self.scope.define_variable(BinderVariable {
-                name: node.variable.clone(),
-                alias_type: AliasType::Node,
-                tags: node.tags.iter().map(|t| t.tag_name.to_string()).collect(),
-                properties: node
-                    .tags
-                    .iter()
-                    .flat_map(|t| t.properties.clone())
-                    .collect(),
-                is_defined: true,
-            });
-        }
-        for edge in &query_graph.edges {
-            self.scope.define_variable(BinderVariable {
-                name: edge.variable.clone(),
-                alias_type: AliasType::Edge,
-                tags: edge
-                    .edge_types
-                    .iter()
-                    .map(|e| e.edge_type_name.to_string())
-                    .collect(),
-                properties: edge
-                    .edge_types
-                    .iter()
-                    .flat_map(|e| e.properties.clone())
-                    .collect(),
-                is_defined: true,
-            });
-        }
+        // Shared with subquery binding through the single registration entry.
+        Self::register_query_graph_variables(&mut self.scope, &query_graph);
 
         let where_clause = stmt
             .where_clause
@@ -67,21 +38,7 @@ impl Binder {
             .map(|rc| self.bind_return_clause(rc))
             .transpose()?;
 
-        let order_by = stmt
-            .order_by
-            .as_ref()
-            .map(|ob| {
-                ob.items
-                    .iter()
-                    .map(|item| {
-                        self.bind_expr(&item.expression).map(|be| BoundOrderByItem {
-                            expression: be,
-                            direction: item.direction,
-                        })
-                    })
-                    .collect::<DBResult<Vec<_>>>()
-            })
-            .transpose()?;
+        let order_by = self.bind_order_by_clause(stmt.order_by.as_ref())?;
 
         let delete_clause = stmt
             .delete_clause
@@ -128,12 +85,10 @@ impl Binder {
         };
         for var in bound.variables() {
             if !self.scope.contains(var) {
-                return Err(DBError::from(
-                    linkrs_core::error::QueryError::invalid_query(format!(
-                        "Unknown variable in USING JOIN hint: {}",
-                        var
-                    )),
-                ));
+                return Err(super::super::error::invalid_query(format!(
+                    "Unknown variable in USING JOIN hint: {}",
+                    var
+                )));
             }
         }
         Ok(bound)
@@ -207,9 +162,9 @@ impl Binder {
                     parser
                         .parse_pattern(&mut crate::parser::ParseContext::new(pattern_str))
                         .map_err(|e| {
-                            DBError::from(linkrs_core::error::QueryError::invalid_query(format!(
+                            super::super::error::invalid_query(format!(
                                 "Invalid subquery pattern `{pattern_str}`: {e}"
-                            )))
+                            ))
                         })
                 })
                 .collect::<DBResult<Vec<_>>>()?
@@ -219,36 +174,7 @@ impl Binder {
 
         // Register subquery MATCH variables in the child scope before
         // binding the subquery WHERE / RETURN expressions.
-        for node in &query_graph.nodes {
-            self.scope.define_variable(BinderVariable {
-                name: node.variable.clone(),
-                alias_type: AliasType::Node,
-                tags: node.tags.iter().map(|t| t.tag_name.to_string()).collect(),
-                properties: node
-                    .tags
-                    .iter()
-                    .flat_map(|t| t.properties.clone())
-                    .collect(),
-                is_defined: true,
-            });
-        }
-        for edge in &query_graph.edges {
-            self.scope.define_variable(BinderVariable {
-                name: edge.variable.clone(),
-                alias_type: AliasType::Edge,
-                tags: edge
-                    .edge_types
-                    .iter()
-                    .map(|e| e.edge_type_name.to_string())
-                    .collect(),
-                properties: edge
-                    .edge_types
-                    .iter()
-                    .flat_map(|e| e.properties.clone())
-                    .collect(),
-                is_defined: true,
-            });
-        }
+        Self::register_query_graph_variables(&mut self.scope, &query_graph);
 
         let where_clause = body
             .where_clause
@@ -302,6 +228,45 @@ impl Binder {
         Ok(graph)
     }
 
+    /// Sole registration entry for query-graph variables.
+    ///
+    /// MATCH and subquery binding share this path so node and edge scope
+    /// semantics stay in one place. Duplicate checks for path names stay at
+    /// the pattern site because they also observe the graph under
+    /// construction.
+    fn register_query_graph_variables(scope: &mut BinderScope, graph: &QueryGraph) {
+        for node in &graph.nodes {
+            scope.define_variable(BinderVariable {
+                name: node.variable.clone(),
+                alias_type: AliasType::Node,
+                tags: node.tags.iter().map(|t| t.tag_name.to_string()).collect(),
+                properties: node
+                    .tags
+                    .iter()
+                    .flat_map(|t| t.properties.clone())
+                    .collect(),
+                is_defined: true,
+            });
+        }
+        for edge in &graph.edges {
+            scope.define_variable(BinderVariable {
+                name: edge.variable.clone(),
+                alias_type: AliasType::Edge,
+                tags: edge
+                    .edge_types
+                    .iter()
+                    .map(|e| e.edge_type_name.to_string())
+                    .collect(),
+                properties: edge
+                    .edge_types
+                    .iter()
+                    .flat_map(|e| e.properties.clone())
+                    .collect(),
+                is_defined: true,
+            });
+        }
+    }
+
     fn process_pattern(
         &mut self,
         pattern: &Pattern,
@@ -324,12 +289,10 @@ impl Binder {
             }
             Pattern::Edge(ep) => {
                 if ep.recursive_comprehension.is_some() {
-                    return Err(DBError::from(
-                        linkrs_core::error::QueryError::invalid_query(
+                    return Err(super::super::error::invalid_query(
                             "Recursive comprehension with variable binding and projection is rejected; rewrite with plain variable-length traversal"
                                 .to_string(),
-                        ),
-                    ));
+                        ));
                 }
                 let var = ep
                     .variable
@@ -362,12 +325,7 @@ impl Binder {
                         || graph.find_edge(path_name).is_some()
                         || self.scope.contains(path_name)
                     {
-                        return Err(DBError::from(
-                            linkrs_core::error::QueryError::invalid_query(format!(
-                                "Duplicate variable: {}",
-                                path_name
-                            )),
-                        ));
+                        return Err(super::super::error::duplicate_variable(path_name));
                     }
                     self.scope.define_variable(BinderVariable {
                         name: path_name.clone(),
@@ -381,12 +339,7 @@ impl Binder {
             }
             Pattern::Variable(vp) => {
                 if !self.scope.contains(&vp.name) {
-                    return Err(DBError::from(
-                        linkrs_core::error::QueryError::invalid_query(format!(
-                            "Undefined variable: {}",
-                            vp.name
-                        )),
-                    ));
+                    return Err(super::super::error::undefined_variable(&vp.name));
                 }
                 Ok(Some(vp.name.clone()))
             }
@@ -414,12 +367,10 @@ impl Binder {
             }
             PathElement::Edge(ep) => {
                 if ep.recursive_comprehension.is_some() {
-                    return Err(DBError::from(
-                        linkrs_core::error::QueryError::invalid_query(
+                    return Err(super::super::error::invalid_query(
                             "Recursive comprehension with variable binding and projection is rejected; rewrite with plain variable-length traversal"
                                 .to_string(),
-                        ),
-                    ));
+                        ));
                 }
                 let var = ep
                     .variable
@@ -441,11 +392,9 @@ impl Binder {
                 });
                 Ok(None)
             }
-            PathElement::CreateEdge(_) => Err(DBError::from(
-                linkrs_core::error::QueryError::invalid_query(
+            PathElement::CreateEdge(_) => Err(super::super::error::invalid_query(
                     "CREATE edge patterns cannot appear in a MATCH pattern".to_string(),
-                ),
-            )),
+                )),
             PathElement::Alternative(alt_patterns) => {
                 for alt in alt_patterns {
                     self.process_pattern(alt, graph, prev_node_var.clone())?;
@@ -456,11 +405,9 @@ impl Binder {
             PathElement::Repeated(elem, _rep) => {
                 self.process_path_element(elem, graph, prev_node_var)
             }
-            PathElement::Recursive(_) => Err(DBError::from(
-                linkrs_core::error::QueryError::invalid_query(
+            PathElement::Recursive(_) => Err(super::super::error::invalid_query(
                     "Recursive comprehension with variable binding and projection is rejected; rewrite with plain variable-length traversal".to_string(),
-                ),
-            )),
+                )),
         }
     }
 
@@ -469,10 +416,8 @@ impl Binder {
     pub(crate) fn resolve_tags(&self, labels: &[String]) -> DBResult<Vec<BoundTagRef>> {
         for label in labels {
             if let Some((alias, table)) = label.split_once('.') {
-                return Err(DBError::from(
-                    linkrs_core::error::QueryError::invalid_query(
-                        crate::attached::qualified_reference_message(alias, table),
-                    ),
+                return Err(super::super::error::invalid_query(
+                    crate::attached::qualified_reference_message(alias, table),
                 ));
             }
         }
@@ -503,11 +448,9 @@ impl Binder {
         }
         if !cte_resolved.is_empty() {
             if !plain_labels.is_empty() || cte_resolved.len() > 1 {
-                return Err(DBError::from(
-                    linkrs_core::error::QueryError::invalid_query(
-                        "A CTE working-table label must be the only label on its pattern node"
-                            .to_string(),
-                    ),
+                return Err(super::super::error::invalid_query(
+                    "A CTE working-table label must be the only label on its pattern node"
+                        .to_string(),
                 ));
             }
             return Ok(cte_resolved);
@@ -517,18 +460,20 @@ impl Binder {
         if let Some(ref sm) = self.schema_manager {
             if let Some(ref space_name) = self.space_name {
                 for label in labels {
-                    let tag_info =
-                        sm.get_tag(space_name, label)
-                            .map_err(|e| {
-                                DBError::from(linkrs_core::error::QueryError::invalid_query(
-                                    format!("Failed to resolve tag '{}': {}", label, e),
-                                ))
-                            })?
-                            .ok_or_else(|| {
-                                DBError::from(linkrs_core::error::QueryError::invalid_query(
-                                    format!("Tag '{}' not found in space '{}'", label, space_name),
-                                ))
-                            })?;
+                    let tag_info = sm
+                        .get_tag(space_name, label)
+                        .map_err(|e| {
+                            super::super::error::invalid_query(format!(
+                                "Failed to resolve tag '{}': {}",
+                                label, e
+                            ))
+                        })?
+                        .ok_or_else(|| {
+                            super::super::error::invalid_query(format!(
+                                "Tag '{}' not found in space '{}'",
+                                label, space_name
+                            ))
+                        })?;
 
                     let mut properties = std::collections::HashMap::new();
                     for prop in &tag_info.properties {
@@ -562,10 +507,8 @@ impl Binder {
     ) -> DBResult<Vec<BoundEdgeTypeRef>> {
         for et in edge_types {
             if let Some((alias, table)) = et.split_once('.') {
-                return Err(DBError::from(
-                    linkrs_core::error::QueryError::invalid_query(
-                        crate::attached::qualified_reference_message(alias, table),
-                    ),
+                return Err(super::super::error::invalid_query(
+                    crate::attached::qualified_reference_message(alias, table),
                 ));
             }
         }
@@ -580,16 +523,16 @@ impl Binder {
                     let edge_info = sm
                         .get_edge_type(space_name, et)
                         .map_err(|e| {
-                            DBError::from(linkrs_core::error::QueryError::invalid_query(format!(
+                            super::super::error::invalid_query(format!(
                                 "Failed to resolve edge type '{}': {}",
                                 et, e
-                            )))
+                            ))
                         })?
                         .ok_or_else(|| {
-                            DBError::from(linkrs_core::error::QueryError::invalid_query(format!(
+                            super::super::error::invalid_query(format!(
                                 "Edge type '{}' not found in space '{}'",
                                 et, space_name
-                            )))
+                            ))
                         })?;
 
                     let mut properties = std::collections::HashMap::new();

@@ -1,6 +1,10 @@
 //! Extraction of storage pushdown predicates from scan-level filter
 //! expressions.
 //!
+//! Sole AND-splitting source: `split_conjuncts` and `and_of` are the only
+//! implementations. Join-key extraction, redundant tag filtering,
+//! existence utilities and optimizer key extraction all delegate here.
+//!
 //! The optimizer ensures filter conditions sit directly above the scan node
 //! (either as a `Filter` node or as the scan's own vertex filter, set by the
 //! `PushVFilterDownScanVertices` rule).  This module rewrites the subset of

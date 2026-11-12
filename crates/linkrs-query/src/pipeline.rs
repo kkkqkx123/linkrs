@@ -26,6 +26,12 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
+/// Query pipeline chain (sole ordering reference): parse, DML shape templating,
+/// template cache lookup, read/write branch binding, request finalization,
+/// general scheduling, compile cache, physical build, execution. The stages
+/// are split across `frontend`, `compiler` and `execution` by responsibility
+/// and must not be reordered or duplicated; later refactors keep this order.
+///
 /// Capacity of the DML shape caches below. Single-entry caching thrashed on
 /// alternating shapes (A,B,A,B re-parsed and re-bound every time); a small
 /// bounded map keeps the common bulk-load shapes resident while bounding

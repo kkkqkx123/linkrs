@@ -65,18 +65,15 @@ impl ExtractEquiJoinKeysRule {
     }
 
     /// Flatten a top-level `AND` chain into its conjuncts.
+    ///
+    /// Delegates to `crate::planning::scan_predicate::split_conjuncts` so
+    /// all AND splitting shares one implementation.
     fn flatten_conjuncts(expr: &Expression, out: &mut Vec<Expression>) {
-        match expr {
-            Expression::Binary {
-                op: BinaryOperator::And,
-                left,
-                right,
-            } => {
-                Self::flatten_conjuncts(left, out);
-                Self::flatten_conjuncts(right, out);
-            }
-            _ => out.push(expr.clone()),
-        }
+        out.extend(
+            crate::planning::scan_predicate::split_conjuncts(expr)
+                .into_iter()
+                .cloned(),
+        );
     }
 
     /// Collect the variable names referenced by an expression.
@@ -116,14 +113,10 @@ impl ExtractEquiJoinKeysRule {
 
     /// Combine residual conjuncts back into a single `AND` expression,
     /// preserving the original left-to-right order.
+    ///
+    /// Delegates to `crate::planning::scan_predicate::and_of`.
     fn combine_residual(conjuncts: Vec<Expression>) -> Option<Expression> {
-        let mut iter = conjuncts.into_iter();
-        let first = iter.next()?;
-        Some(iter.fold(first, |acc, next| Expression::Binary {
-            left: Box::new(acc),
-            op: BinaryOperator::And,
-            right: Box::new(next),
-        }))
+        crate::planning::scan_predicate::and_of(conjuncts)
     }
 }
 

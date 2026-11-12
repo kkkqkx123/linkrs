@@ -126,24 +126,20 @@ impl Binder {
                 if tag.is_default_props {
                     for row in values {
                         if !row.values.is_empty() {
-                            return Err(linkrs_core::error::DBError::from(
-                                linkrs_core::error::QueryError::invalid_query(
+                            return Err(crate::binder::error::invalid_query(
                                     "INSERT VERTEX without a property name list only writes vertex ids; specify property names to write properties".to_string(),
-                                ),
-                            ));
+                                ));
                         }
                     }
                 } else {
                     for row in values {
                         if row.values.len() != tag.prop_names.len() {
-                            return Err(linkrs_core::error::DBError::from(
-                                linkrs_core::error::QueryError::invalid_query(format!(
+                            return Err(crate::binder::error::invalid_query(format!(
                                     "INSERT VERTEX property value count ({}) does not match property name count ({}) for tag '{}'",
                                     row.values.len(),
                                     tag.prop_names.len(),
                                     tag.tag_name
-                                )),
-                            ));
+                                )));
                         }
                     }
                 }
@@ -172,14 +168,12 @@ impl Binder {
             } => {
                 for (_, _, _, props) in edges {
                     if props.len() != prop_names.len() {
-                        return Err(linkrs_core::error::DBError::from(
-                            linkrs_core::error::QueryError::invalid_query(format!(
+                        return Err(crate::binder::error::invalid_query(format!(
                                 "INSERT EDGE property value count ({}) does not match property name count ({}) for edge type '{}'",
                                 props.len(),
                                 prop_names.len(),
                                 edge_name
-                            )),
-                        ));
+                            )));
                     }
                 }
                 let mut bound_edges = Vec::with_capacity(edges.len());
@@ -211,10 +205,8 @@ impl Binder {
         stmt: &crate::parser::ast::UpdateStmt,
     ) -> DBResult<BoundStatement> {
         if stmt.yield_clause.is_some() {
-            return Err(linkrs_core::error::DBError::from(
-                linkrs_core::error::QueryError::invalid_query(
-                    "YIELD is not supported for UPDATE/UPSERT yet".to_string(),
-                ),
+            return Err(crate::binder::error::invalid_query(
+                "YIELD is not supported for UPDATE/UPSERT yet".to_string(),
             ));
         }
         let target_alias = update_target_alias(&stmt.target);
@@ -357,17 +349,13 @@ impl Binder {
         stmt: &crate::parser::ast::CopyStmt,
     ) -> DBResult<BoundStatement> {
         if stmt.file_paths.is_empty() || stmt.file_paths.iter().any(|p| p.trim().is_empty()) {
-            return Err(linkrs_core::error::DBError::from(
-                linkrs_core::error::QueryError::invalid_query(
-                    "COPY file path cannot be empty".to_string(),
-                ),
+            return Err(crate::binder::error::invalid_query(
+                "COPY file path cannot be empty".to_string(),
             ));
         }
         if stmt.direction == crate::parser::ast::CopyDirection::To && stmt.file_paths.len() > 1 {
-            return Err(linkrs_core::error::DBError::from(
-                linkrs_core::error::QueryError::invalid_query(
-                    "COPY TO supports a single file path".to_string(),
-                ),
+            return Err(crate::binder::error::invalid_query(
+                "COPY TO supports a single file path".to_string(),
             ));
         }
         Ok(BoundStatement::Copy(BoundCopy {
@@ -427,10 +415,8 @@ impl Binder {
                 };
                 Ok(BoundMergePattern::Edge { src, edge, dst })
             }
-            _ => Err(linkrs_core::error::DBError::from(
-                linkrs_core::error::QueryError::invalid_query(
-                    "MERGE only supports node or edge patterns".to_string(),
-                ),
+            _ => Err(crate::binder::error::invalid_query(
+                "MERGE only supports node or edge patterns".to_string(),
             )),
         }
     }
@@ -514,11 +500,7 @@ impl Binder {
             .items
             .iter()
             .map(|item| {
-                self.bind_expr(&item.expression)
-                    .map(|be| BoundProjectionItem {
-                        expression: be,
-                        alias: item.alias.clone(),
-                    })
+                self.bind_projection_expression(&item.expression, item.alias.clone(), false)
             })
             .collect::<DBResult<Vec<_>>>()?;
 
@@ -528,21 +510,7 @@ impl Binder {
             .map(|w| self.bind_expr(w))
             .transpose()?;
 
-        let order_by = stmt
-            .order_by
-            .as_ref()
-            .map(|ob| {
-                ob.items
-                    .iter()
-                    .map(|item| {
-                        self.bind_expr(&item.expression).map(|be| BoundOrderByItem {
-                            expression: be,
-                            direction: item.direction,
-                        })
-                    })
-                    .collect::<DBResult<Vec<_>>>()
-            })
-            .transpose()?;
+        let order_by = self.bind_order_by_clause(stmt.order_by.as_ref())?;
 
         Ok(BoundStatement::Yield(BoundYield {
             items,
@@ -563,11 +531,7 @@ impl Binder {
             .items
             .iter()
             .map(|item| {
-                self.bind_expr(&item.expression)
-                    .map(|be| BoundProjectionItem {
-                        expression: be,
-                        alias: item.alias.clone(),
-                    })
+                self.bind_projection_expression(&item.expression, item.alias.clone(), false)
             })
             .collect::<DBResult<Vec<_>>>()?;
         Ok(BoundStatement::Collect(BoundCollect { items }))

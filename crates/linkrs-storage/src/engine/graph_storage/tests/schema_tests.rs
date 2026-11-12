@@ -404,6 +404,47 @@ fn test_schema_wal_replays_drop_after_restart() {
 }
 
 #[test]
+fn test_clean_open_rejects_orphan_edge_partition() {
+    let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
+    let work_dir = temp_dir.path().to_path_buf();
+
+    {
+        let mut storage = GraphStorage::new_with_path(work_dir.clone())
+            .expect("Failed to create persistent GraphStorage");
+        setup_space(&mut storage);
+        setup_person_tag(&mut storage);
+        storage
+            .save_to_disk()
+            .expect("Failed to persist base schema");
+        // Cover the WAL with a checkpoint so the reopen below has nothing
+        // left to replay: an unknown partition at that point is genuine
+        // corruption, not schema lagging behind the WAL.
+        storage
+            .create_checkpoint()
+            .expect("checkpoint should succeed")
+            .expect("persistence should be enabled");
+    }
+
+    let manager = linkrs_sync::checkpoint_manifest::CheckpointManifestManager::new(
+        work_dir.join("checkpoint").join("manifests"),
+    );
+    let checkpoint_dir = manager
+        .load_latest()
+        .expect("manifest load should succeed")
+        .expect("a checkpoint manifest should be published")
+        .storage_snapshot
+        .path;
+    std::fs::create_dir_all(checkpoint_dir.join("data").join("edges").join("9_9_9"))
+        .expect("Failed to plant orphan partition");
+
+    let err = GraphStorage::open(work_dir).expect_err("orphan partition must fail the open");
+    assert!(
+        err.to_string().contains("unknown edge partition 9_9_9"),
+        "clean open must fail loudly on corruption, got: {err}"
+    );
+}
+
+#[test]
 fn test_space_wal_replays_create_and_clear_after_restart() {
     let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
     let work_dir = temp_dir.path().to_path_buf();

@@ -27,31 +27,24 @@ pub(crate) fn to_contextual(
 }
 
 /// Split an AND-tree into conjuncts.
+///
+/// Sole implementation lives in `crate::planning::scan_predicate`;
+/// this wrapper only adapts the borrowed form to the owned form used here.
 pub(crate) fn collect_and_conjuncts(expr: &Expression, out: &mut Vec<Expression>) {
-    match expr {
-        Expression::Binary {
-            left,
-            op: BinaryOperator::And,
-            right,
-        } => {
-            collect_and_conjuncts(left, out);
-            collect_and_conjuncts(right, out);
-        }
-        _ => out.push(expr.clone()),
-    }
+    out.extend(
+        crate::planning::scan_predicate::split_conjuncts(expr)
+            .into_iter()
+            .cloned(),
+    );
 }
 
 /// Combine conjuncts into an AND-chain; `Literal(true)` when empty.
+///
+/// Delegates to `crate::planning::scan_predicate::and_of` so AND
+/// splitting and recombination share one definition.
 pub(crate) fn and_join(exprs: &[Expression]) -> Expression {
-    let mut iter = exprs.iter();
-    let Some(first) = iter.next() else {
-        return Expression::literal(true);
-    };
-    let mut acc = first.clone();
-    for expr in iter {
-        acc = Expression::binary(acc, BinaryOperator::And, expr.clone());
-    }
-    acc
+    crate::planning::scan_predicate::and_of(exprs.to_vec())
+        .unwrap_or_else(|| Expression::literal(true))
 }
 
 /// Extract equi-join keys from the subquery conditions.

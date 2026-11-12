@@ -9,7 +9,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use linkrs_core::error::{DBError, QueryError};
 use linkrs_core::metadata::MacroManager;
 use linkrs_core::types::expr::{substitute_variables, Expression, FunctionArg};
 use linkrs_core::{DBResult, DataType};
@@ -47,16 +46,16 @@ impl Binder {
 
         let canonical = name.to_ascii_uppercase();
         if self.expanding.iter().any(|n| n == &canonical) {
-            return Err(DBError::from(QueryError::invalid_query(format!(
+            return Err(super::error::invalid_query(format!(
                 "Recursive macro expansion detected for macro '{}'",
                 def.name
-            ))));
+            )));
         }
         if self.expanding.len() >= MAX_MACRO_EXPANSION_DEPTH {
-            return Err(DBError::from(QueryError::invalid_query(format!(
+            return Err(super::error::invalid_query(format!(
                 "Macro expansion depth exceeds limit ({}) for macro '{}'",
                 MAX_MACRO_EXPANSION_DEPTH, def.name
-            ))));
+            )));
         }
 
         // Map actual arguments onto parameters (positional first, then
@@ -71,12 +70,12 @@ impl Binder {
                         positional += 1;
                     }
                     if positional >= def.params.len() {
-                        return Err(DBError::from(QueryError::invalid_query(format!(
+                        return Err(super::error::invalid_query(format!(
                             "Macro '{}' takes at most {} arguments ({} given)",
                             def.name,
                             def.params.len(),
                             args.len()
-                        ))));
+                        )));
                     }
                     mapping.insert(def.params[positional].name.clone(), expr.clone());
                     assigned[positional] = true;
@@ -91,16 +90,16 @@ impl Binder {
                         .iter()
                         .position(|p| p.name.eq_ignore_ascii_case(arg_name))
                     else {
-                        return Err(DBError::from(QueryError::invalid_query(format!(
+                        return Err(super::error::invalid_query(format!(
                             "Macro '{}' has no parameter named '{}'",
                             def.name, arg_name
-                        ))));
+                        )));
                     };
                     if assigned[index] {
-                        return Err(DBError::from(QueryError::invalid_query(format!(
+                        return Err(super::error::invalid_query(format!(
                             "Duplicate argument for macro '{}' parameter '{}'",
                             def.name, def.params[index].name
-                        ))));
+                        )));
                     }
                     mapping.insert(def.params[index].name.clone(), value.clone());
                     assigned[index] = true;
@@ -114,10 +113,10 @@ impl Binder {
                         mapping.insert(param.name.clone(), default.clone());
                     }
                     None => {
-                        return Err(DBError::from(QueryError::invalid_query(format!(
+                        return Err(super::error::invalid_query(format!(
                             "Macro '{}' missing required argument '{}'",
                             def.name, param.name
-                        ))));
+                        )));
                     }
                 }
             }

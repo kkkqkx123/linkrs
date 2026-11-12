@@ -1641,10 +1641,7 @@ mod fast_shape_tests {
             exchange_row_per_mille: 0,
         });
         let plan = engine
-            .optimize(
-                ExecutionPlan::new(Some(person_scan("n"))),
-                Some("test"),
-            )
+            .optimize(ExecutionPlan::new(Some(person_scan("n"))), Some("test"))
             .expect("optimization should succeed");
         assert!(
             plan.partition_spec().is_some(),
