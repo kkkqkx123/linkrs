@@ -1,4 +1,9 @@
-use super::*;
+use super::{walk_and_optimize_joins, walk_and_optimize_joins_logical};
+use crate::optimizer::stats::StatsView;
+use crate::optimizer::JoinAlgorithm;
+use crate::planning::plan::logical::LogicalNodeEnum;
+use crate::planning::plan::PlanNodeEnum;
+use linkrs_core::types::expr::contextual::ContextualExpression;
 
 use super::super::flatten::logical_output_var;
 use crate::optimizer::cost::CostCalculator;

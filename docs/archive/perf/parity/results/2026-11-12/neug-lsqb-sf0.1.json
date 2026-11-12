@@ -1,0 +1,167 @@
+{
+  "engine": "neug",
+  "database": "/tmp/parity-neug-1794474438",
+  "queries": {
+    "q1.benchmark": {
+      "file": "q1.benchmark",
+      "name": "lsqb/q1",
+      "query": "MATCH (n:Person) RETURN count(n)",
+      "status": "ok",
+      "runs_ms": [
+        0.05533546209335327,
+        0.04894286394119263,
+        0.08814968168735504
+      ],
+      "avg_ms": 0.05213916301727295,
+      "value": 1700,
+      "expected": "1700",
+      "match": true
+    },
+    "q2.benchmark": {
+      "file": "q2.benchmark",
+      "name": "lsqb/q2",
+      "query": "MATCH (n:Comment_) RETURN count(n)",
+      "status": "ok",
+      "runs_ms": [
+        3.8485396653413773,
+        3.841185010969639,
+        3.9457008242607117
+      ],
+      "avg_ms": 3.844862338155508,
+      "value": 215488,
+      "expected": "215488",
+      "match": true
+    },
+    "q3.benchmark": {
+      "file": "q3.benchmark",
+      "name": "lsqb/q3",
+      "query": "MATCH (n:Post) RETURN count(n)",
+      "status": "ok",
+      "runs_ms": [
+        3.1062141060829163,
+        3.119225613772869,
+        3.166133537888527
+      ],
+      "avg_ms": 3.1127198599278927,
+      "value": 172438,
+      "expected": "172438",
+      "match": true
+    },
+    "q4.benchmark": {
+      "file": "q4.benchmark",
+      "name": "lsqb/q4",
+      "query": "MATCH (:Person)-[k:KNOWS]->(:Person) RETURN count(k)",
+      "status": "ok",
+      "runs_ms": [
+        0.7138876244425774,
+        0.7080128416419029,
+        0.7532769814133644
+      ],
+      "avg_ms": 0.7109502330422401,
+      "value": 18135,
+      "expected": "18135",
+      "match": true
+    },
+    "q5.benchmark": {
+      "file": "q5.benchmark",
+      "name": "lsqb/q5",
+      "query": "MATCH (:Comment_)-[h:HASCREATOR_COMMENT]->(:Person) RETURN count(h)",
+      "status": "ok",
+      "runs_ms": [
+        8.483555167913437,
+        8.317871019244194,
+        14.740311540663242
+      ],
+      "avg_ms": 8.400713093578815,
+      "value": 215488,
+      "expected": "215488",
+      "match": true
+    },
+    "q6.benchmark": {
+      "file": "q6.benchmark",
+      "name": "lsqb/q6",
+      "query": "MATCH (:Post)-[h:HASCREATOR_POST]->(:Person) RETURN count(h)",
+      "status": "ok",
+      "runs_ms": [
+        6.764312274754047,
+        6.7603373900055885,
+        6.866347044706345
+      ],
+      "avg_ms": 6.762324832379818,
+      "value": 172438,
+      "expected": "172438",
+      "match": true
+    },
+    "q7.benchmark": {
+      "file": "q7.benchmark",
+      "name": "lsqb/q7",
+      "query": "MATCH (:Comment_)-[r:REPLYOF_POST]->(:Post) RETURN count(r)",
+      "status": "ok",
+      "runs_ms": [
+        4.66384831815958,
+        4.673275165259838,
+        4.7110505402088165
+      ],
+      "avg_ms": 4.668561741709709,
+      "value": 107461,
+      "expected": "107461",
+      "match": true
+    },
+    "q8.benchmark": {
+      "file": "q8.benchmark",
+      "name": "lsqb/q8",
+      "query": "MATCH (:Comment_)-[r:REPLYOF_COMMENT]->(:Comment_) RETURN count(r)",
+      "status": "ok",
+      "runs_ms": [
+        5.788072012364864,
+        5.7494668290019035,
+        5.796690471470356
+      ],
+      "avg_ms": 5.768769420683384,
+      "value": 108027,
+      "expected": "108027",
+      "match": true
+    },
+    "q9.benchmark": {
+      "file": "q9.benchmark",
+      "name": "lsqb/q9",
+      "query": "MATCH (:Forum)-[c:CONTAINEROF]->(:Post) RETURN count(c)",
+      "status": "ok",
+      "runs_ms": [
+        6.069536320865154,
+        6.019549444317818,
+        6.1630504205822945
+      ],
+      "avg_ms": 6.044542882591486,
+      "value": 172438,
+      "expected": "172438",
+      "match": true
+    }
+  },
+  "load_statements_ms": [
+    82.8242264688015,
+    13.670729473233223,
+    8.230911567807198,
+    8.349278941750526,
+    8.336170576512814,
+    8.333025500178337,
+    8.325530216097832,
+    8.310314267873764,
+    8.332819677889347,
+    8.325386792421341,
+    279.6971844509244,
+    1405.8969067409635,
+    1188.5142670944333,
+    368.73732320964336,
+    427.83222533762455,
+    918.1834803894162,
+    819.5655792951584,
+    777.2267386317253,
+    777.3203058168292,
+    819.5622339844704
+  ],
+  "load_total_ms": 7945.574638433754,
+  "threads": 8,
+  "date": "2026-11-12T09:07:27+0000",
+  "timing_basis": "wall-clock full materialization"
+}

@@ -199,8 +199,14 @@ neug runner 落点为 `graphdb-ben` 新脚本（与 `lbug-ben` 并列，不混�
 - [x] 最小数据集验证（LSQB-sf0.1 Person 1700 / knows 18135）：
   neug `[1700]` / `[18135]` wall-clock 正常；ladybug `[1700]`（exec 2.54ms）/ `[18135]`（exec 0.26ms）正常
 - [x] 环境一键生效：`source /data/kkkqkx/graphdb-ben/bench-env.sh`
-- [ ] `graphdb-ben` git bundle 传 devs 并检出 `lbug-ben/` + `scripts/`
-- [ ] 数据包 A/B 传 devs 并按行数基线抽查
+- [x] `graphdb-ben` git bundle 传 devs 并检出 `lbug-ben/` + `scripts/`
+  → devs `/data/kkkqkx/graphdb-ben/code`（bundle 见 `packages/graphdb-ben.bundle`；
+  含 lbug 导入垫片 `e216518` 前置 commit，VENDORED.md 已更正）
+- [~] 数据包 A/B 传 devs 并按行数基线抽查（sf0.1 已在；sf1/Snap 未传，阶段 2 前置）
 - [ ] graph500-27 在 devs 现场生成（后置阶段）
-- [ ] 编写 `neug_runner.py`（LSQB 口径：warmup 1 + run 3 去 max 平均）
-- [ ] LSQB-sf0.1 三方 COUNT 对齐，出首份对比 markdown
+- [x] 编写 `neug_runner.py`（LSQB 口径：warmup 1 + run 3 去 max 平均）
+  → `graphdb-ben/neug_runner.py`，支持 `--engine neug|ladybug`，解析
+  linkrs `q*.benchmark` 单一来源，`Comment_`→`Comment` 标签回写
+- [x] LSQB-sf0.1 三方 COUNT 对齐，出首份对比 markdown
+  → `docs/archive/perf/parity/2026-11-12-lsqb-sf0.1.md`，九条 COUNT 三方整数一致；
+  结果 JSON 归档 `docs/archive/perf/parity/results/2026-11-12/`

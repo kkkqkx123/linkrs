@@ -8,7 +8,7 @@ use linkrs_core::types::expr::Expression;
 use linkrs_core::types::operators::AggregateFunction;
 use std::sync::Arc;
 
-pub(super) struct BlockingContext<'a> {
+pub(crate) struct BlockingContext<'a> {
     pub runtime: &'a Option<Arc<ExecutionRuntime>>,
     pub output_layout: &'a Arc<SlotLayout>,
     pub config: &'a OperatorConfig,
