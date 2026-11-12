@@ -69,7 +69,8 @@ fn cmd_copy(args: &[String]) {
         .parent()
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| PathBuf::from("."));
-    fs::create_dir_all(&sidecar_dir).unwrap_or_else(|e| die(format!("create {}: {e}", sidecar_dir.display())));
+    fs::create_dir_all(&sidecar_dir)
+        .unwrap_or_else(|e| die(format!("create {}: {e}", sidecar_dir.display())));
     let version_file = sidecar_dir.join("version.txt");
     let head = git_head();
     if !force {
@@ -95,7 +96,9 @@ fn cmd_copy(args: &[String]) {
     let config = DatabaseConfig::file(&db).with_checkpoint_on_close(true);
     let database = GraphDatabase::<GraphStorage>::open_with_config(config)
         .unwrap_or_else(|e| die(format!("open db {}: {e}", db.display())));
-    let session = database.session().unwrap_or_else(|e| die(format!("open session: {e}")));
+    let session = database
+        .session()
+        .unwrap_or_else(|e| die(format!("open session: {e}")));
 
     let mut stats: Vec<CopyStats> = Vec::new();
     for stmt in &statements {
@@ -144,8 +147,12 @@ fn cmd_copy(args: &[String]) {
     // Persist the final checkpoint before recording the version; the next
     // open replays from a complete image instead of a half-written WAL.
     database.close();
-    fs::write(&version_file, format!("{head}\n")).unwrap_or_else(|e| die(format!("write version.txt: {e}")));
-    println!("dataset {dataset} serialized at {}, version {head}", db.display());
+    fs::write(&version_file, format!("{head}\n"))
+        .unwrap_or_else(|e| die(format!("write version.txt: {e}")));
+    println!(
+        "dataset {dataset} serialized at {}, version {head}",
+        db.display()
+    );
 }
 
 fn required(args: &[String], flag: &str) -> String {
@@ -256,7 +263,10 @@ fn prepare_copy_statement(stmt: &str, csv_dir: &Path, prepare_dir: &Path) -> Str
         };
         let rewritten = rewrite_csv_header(&src_path, prepare_dir, delimiter)
             .unwrap_or_else(|e| die(format!("prepare {}: {e}", src_path.display())));
-        out = out.replace(&format!("'{original}'"), &format!("'{}'", rewritten.display()));
+        out = out.replace(
+            &format!("'{original}'"),
+            &format!("'{}'", rewritten.display()),
+        );
     }
     out
 }
@@ -414,7 +424,10 @@ fn parse_benchmark_file(path: &Path) -> Benchmark {
             continue;
         }
         if let Some(key) = &current {
-            blocks.entry(key.clone()).or_default().push(line.to_string());
+            blocks
+                .entry(key.clone())
+                .or_default()
+                .push(line.to_string());
         }
     }
     let query = blocks
@@ -423,7 +436,11 @@ fn parse_benchmark_file(path: &Path) -> Benchmark {
         .filter(|q| !q.is_empty())
         .unwrap_or_else(|| die(format!("{} has no ----query block", path.display())));
     let expected = blocks.get("expected").map(|lines| {
-        let kept: Vec<&str> = lines.iter().map(|l| l.trim()).filter(|l| !l.is_empty()).collect();
+        let kept: Vec<&str> = lines
+            .iter()
+            .map(|l| l.trim())
+            .filter(|l| !l.is_empty())
+            .collect();
         kept.join("\n")
     });
     let expected = expected.filter(|e| !e.is_empty());
@@ -436,16 +453,26 @@ fn parse_benchmark_file(path: &Path) -> Benchmark {
                 .map(|s| s.to_string_lossy().to_string())
                 .unwrap_or_default()
         });
-    Benchmark { name, query, expected }
+    Benchmark {
+        name,
+        query,
+        expected,
+    }
 }
 
 fn cmd_run(args: &[String]) {
     let db = PathBuf::from(required(args, "--db"));
     let space = required(args, "--space");
     let bench_dir = PathBuf::from(required(args, "--benchmark-dir"));
-    let out_dir = PathBuf::from(opt_value(args, "--out").unwrap_or_else(|| "/tmp/linkrs_parity_bench".into()));
-    let warmup: usize = opt_value(args, "--warmup").and_then(|v| v.parse().ok()).unwrap_or(1);
-    let runs: usize = opt_value(args, "--run").and_then(|v| v.parse().ok()).unwrap_or(3);
+    let out_dir = PathBuf::from(
+        opt_value(args, "--out").unwrap_or_else(|| "/tmp/linkrs_parity_bench".into()),
+    );
+    let warmup: usize = opt_value(args, "--warmup")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
+    let runs: usize = opt_value(args, "--run")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(3);
     let threads: u32 = opt_value(args, "--threads")
         .and_then(|v| v.parse().ok())
         .unwrap_or_else(|| {
@@ -456,7 +483,9 @@ fn cmd_run(args: &[String]) {
 
     let database = GraphDatabase::<GraphStorage>::open(&db)
         .unwrap_or_else(|e| die(format!("open db {}: {e}", db.display())));
-    let session = database.session().unwrap_or_else(|e| die(format!("open session: {e}")));
+    let session = database
+        .session()
+        .unwrap_or_else(|e| die(format!("open session: {e}")));
     session
         .execute(&format!("USE {space}"))
         .unwrap_or_else(|e| die(format!("USE {space}: {e}")));
@@ -481,7 +510,13 @@ fn cmd_run(args: &[String]) {
         for _ in 0..warmup {
             if let Err(e) = session.execute(&bench.query) {
                 eprintln!("[run] {} warmup failed: {e}", bench.name);
-                write_run_result(&out_dir, &bench, None, &format!("warmup error: {e}"), threads);
+                write_run_result(
+                    &out_dir,
+                    &bench,
+                    None,
+                    &format!("warmup error: {e}"),
+                    threads,
+                );
                 warmup_failed = true;
                 break;
             }
@@ -573,7 +608,13 @@ fn trimmed_mean(values: &[f64]) -> f64 {
     kept.iter().sum::<f64>() / kept.len() as f64
 }
 
-fn write_run_result(out_dir: &Path, bench: &Benchmark, times: Option<&[f64]>, status: &str, threads: u32) {
+fn write_run_result(
+    out_dir: &Path,
+    bench: &Benchmark,
+    times: Option<&[f64]>,
+    status: &str,
+    threads: u32,
+) {
     let mut json = String::from("{\n");
     let _ = writeln!(json, "  \"name\": {},", json_escape(&bench.name));
     let _ = writeln!(json, "  \"status\": {},", json_escape(status));

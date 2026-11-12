@@ -183,8 +183,8 @@ impl<S: QueryStorage + 'static> crate::pipeline::QueryPipelineManager<S> {
                 };
                 match normalized {
                     Some(normalized) => {
-                        let mut updated = Arc::try_unwrap(rctx)
-                            .unwrap_or_else(|shared| (*shared).clone());
+                        let mut updated =
+                            Arc::try_unwrap(rctx).unwrap_or_else(|shared| (*shared).clone());
                         updated.query = shape.normalized_text.clone();
                         for (index, value) in shape.values.iter().enumerate() {
                             updated.parameters.insert(
@@ -231,8 +231,8 @@ impl<S: QueryStorage + 'static> crate::pipeline::QueryPipelineManager<S> {
                 } else {
                     self.bind_read_operation_storage()?
                 };
-                let mut updated = Arc::try_unwrap(effective_rctx)
-                    .unwrap_or_else(|shared| (*shared).clone());
+                let mut updated =
+                    Arc::try_unwrap(effective_rctx).unwrap_or_else(|shared| (*shared).clone());
                 let op_ctx = storage.read().operation_context();
                 updated.transaction_id = op_ctx.as_ref().and_then(|c| c.transaction_id);
                 updated.operation_context = op_ctx.as_deref().cloned();

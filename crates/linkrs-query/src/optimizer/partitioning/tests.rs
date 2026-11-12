@@ -608,6 +608,31 @@ fn partition_count_is_capped_by_available_workers() {
 }
 
 #[test]
+fn partition_count_is_capped_by_economic_worker_bound() {
+    // Each partition must carry at least two threshold buckets: 10000 rows
+    // at min_rows 1000 cut 5 partitions, not the 8 rows/min_rows allows.
+    let stats = make_stats();
+    let planner = PartitioningPlanner::new(PartitioningConfig {
+        enabled: true,
+        min_rows_per_partition: 1_000,
+        max_partitions: 8,
+        vertex_id_range: Some(0i64..10_000),
+        max_workers: 8,
+        max_buffered_chunks: 10,
+        fixed_overhead_rows: 0,
+        per_partition_rows: 0,
+        exchange_row_per_mille: 0,
+    });
+
+    let decision = planner.decide(&tagged_scan(), &view_of(&stats));
+    let spec = decision
+        .partition_spec
+        .as_ref()
+        .expect("large scan should partition");
+    assert_eq!(spec.partition_count(), 5);
+}
+
+#[test]
 fn partition_count_is_capped_by_max_partitions() {
     // rows/min_rows = 20, but max_partitions = 4 -> 4 partitions.
     let stats = make_stats();

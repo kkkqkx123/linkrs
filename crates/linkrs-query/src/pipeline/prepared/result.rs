@@ -9,6 +9,7 @@ use crate::executor::streaming::instance::ResultSink;
 use crate::executor::streaming::StreamingQueryResult;
 use crate::storage::QueryStorage;
 
+use super::super::compiler::CompileTimes;
 use super::classify::{is_read_only_cacheable, is_transaction};
 use super::{PreparedRequest, StatementClass};
 use crate::executor::streaming::transaction_scope::TransactionScope;
@@ -32,15 +33,15 @@ impl<S: QueryStorage + 'static> crate::pipeline::QueryPipelineManager<S> {
         request: &PreparedRequest,
         transaction_id: Option<TransactionId>,
         sink: ResultSink,
-    ) -> DBResult<(PreparedOutcome, u64)> {
+    ) -> DBResult<(PreparedOutcome, CompileTimes)> {
         match sink {
             ResultSink::Discard => Err(DBError::from(QueryError::execution(
                 "Discard sink must be handled by the caller".to_string(),
             ))),
             ResultSink::Materialize => match self.execute_prepared_inner(request, None, sink) {
-                Ok((outcome, statistics_us)) => {
+                Ok((outcome, times)) => {
                     request.finalize_owned_operation(true)?;
-                    Ok((outcome, statistics_us))
+                    Ok((outcome, times))
                 }
                 Err(error) => {
                     let _ = request.finalize_owned_operation(false);
@@ -49,7 +50,7 @@ impl<S: QueryStorage + 'static> crate::pipeline::QueryPipelineManager<S> {
             },
             ResultSink::Stream => {
                 match self.execute_prepared_inner(request, transaction_id, sink) {
-                    Ok((PreparedOutcome::Stream(stream), statistics_us)) => {
+                    Ok((PreparedOutcome::Stream(stream), times)) => {
                         if request.owns_operation_storage {
                             if let Some(storage) = request.operation_storage.clone() {
                                 let commit_storage = storage.clone();
@@ -70,9 +71,9 @@ impl<S: QueryStorage + 'static> crate::pipeline::QueryPipelineManager<S> {
                                 );
                             }
                         }
-                        Ok((PreparedOutcome::Stream(stream), statistics_us))
+                        Ok((PreparedOutcome::Stream(stream), times))
                     }
-                    Ok((other, statistics_us)) => Ok((other, statistics_us)),
+                    Ok((other, times)) => Ok((other, times)),
                     Err(error) => {
                         let _ = request.finalize_owned_operation(false);
                         Err(error)
@@ -133,7 +134,7 @@ impl<S: QueryStorage + 'static> crate::pipeline::QueryPipelineManager<S> {
         request: &PreparedRequest,
         transaction_id: Option<TransactionId>,
         sink: ResultSink,
-    ) -> DBResult<(PreparedOutcome, u64)> {
+    ) -> DBResult<(PreparedOutcome, CompileTimes)> {
         if request.statement_class == StatementClass::Diagnostic {
             let outcome = match sink {
                 ResultSink::Materialize => {
@@ -144,7 +145,7 @@ impl<S: QueryStorage + 'static> crate::pipeline::QueryPipelineManager<S> {
                 ),
                 ResultSink::Discard => unreachable!("discard sink is rejected by the caller"),
             };
-            return Ok((outcome, 0));
+            return Ok((outcome, CompileTimes::default()));
         }
         if request.statement_class == StatementClass::Analyze {
             let result = self.execute_analyze(request)?;
@@ -155,7 +156,7 @@ impl<S: QueryStorage + 'static> crate::pipeline::QueryPipelineManager<S> {
                 }
                 ResultSink::Discard => unreachable!("discard sink is rejected by the caller"),
             };
-            return Ok((outcome, 0));
+            return Ok((outcome, CompileTimes::default()));
         }
         if let Some(bound) = request.bound_statement.as_ref() {
             if super::super::merge_conditional::is_conditional_node_merge(bound) {
@@ -168,7 +169,7 @@ impl<S: QueryStorage + 'static> crate::pipeline::QueryPipelineManager<S> {
                     }
                     ResultSink::Discard => unreachable!("discard sink is rejected by the caller"),
                 };
-                return Ok((outcome, 0));
+                return Ok((outcome, CompileTimes::default()));
             }
         }
         if let crate::parser::ast::Stmt::UpdateConfigs(update) = &request.stmt {
@@ -180,7 +181,7 @@ impl<S: QueryStorage + 'static> crate::pipeline::QueryPipelineManager<S> {
                 }
                 ResultSink::Discard => unreachable!("discard sink is rejected by the caller"),
             };
-            return Ok((outcome, 0));
+            return Ok((outcome, CompileTimes::default()));
         }
         if let crate::parser::ast::Stmt::ShowConfigs(show) = &request.stmt {
             let result = ExecutionResult::ShowConfigs {
@@ -193,12 +194,12 @@ impl<S: QueryStorage + 'static> crate::pipeline::QueryPipelineManager<S> {
                 }
                 ResultSink::Discard => unreachable!("discard sink is rejected by the caller"),
             };
-            return Ok((outcome, 0));
+            return Ok((outcome, CompileTimes::default()));
         }
         let stream_ddl =
             sink == ResultSink::Stream && request.statement_class == StatementClass::Ddl;
 
-        let (physical_plan, statistics_us) = self.compile_or_get_cached(
+        let (physical_plan, times) = self.compile_or_get_cached(
             &request.query_text,
             request.query_context.clone(),
             request.bound_statement.as_ref(),
@@ -237,10 +238,10 @@ impl<S: QueryStorage + 'static> crate::pipeline::QueryPipelineManager<S> {
             if stream_ddl {
                 return Ok((
                     PreparedOutcome::Stream(StreamingQueryResult::from_execution_result(result)),
-                    statistics_us,
+                    times,
                 ));
             }
-            return Ok((PreparedOutcome::Materialized(result), statistics_us));
+            return Ok((PreparedOutcome::Materialized(result), times));
         }
 
         let stream = self.execute_compiled_stream_with_scope(
@@ -249,7 +250,7 @@ impl<S: QueryStorage + 'static> crate::pipeline::QueryPipelineManager<S> {
             scope,
         )?;
         self.attach_stream_cache_execution_stats(&stream, request);
-        Ok((PreparedOutcome::Stream(stream), statistics_us))
+        Ok((PreparedOutcome::Stream(stream), times))
     }
 
     pub(crate) fn execute_diagnostic(

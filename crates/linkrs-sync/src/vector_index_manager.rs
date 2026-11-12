@@ -243,7 +243,9 @@ impl VectorIndexManager {
             return Ok(collection_name);
         }
 
-        let requested = self.backend.default_collection_config(vector_size, distance);
+        let requested = self
+            .backend
+            .default_collection_config(vector_size, distance);
         // Register and compare the effective (stored-equivalent) config:
         // the engine/store fill tier defaults at creation, so comparing the
         // raw request against a stored config false-conflicts on idempotent

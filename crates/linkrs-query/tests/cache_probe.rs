@@ -21,7 +21,9 @@ fn probe_plan_cache_hits() {
         Arc::new(StatsManager::new()),
         Arc::new(OptimizerEngine::default()),
     );
-    pipeline.execute_query("CREATE SPACE probe").expect("space ok");
+    pipeline
+        .execute_query("CREATE SPACE probe")
+        .expect("space ok");
     let space = storage
         .read()
         .get_space("probe")
@@ -105,8 +107,7 @@ fn probe_plan_cache_hits() {
             snap.hits,
             snap.misses,
             match &r {
-                linkrs_query::executor::base::ExecutionResult::DataSet { data } =>
-                    data.row_count(),
+                linkrs_query::executor::base::ExecutionResult::DataSet { data } => data.row_count(),
                 _ => 9999,
             },
         );

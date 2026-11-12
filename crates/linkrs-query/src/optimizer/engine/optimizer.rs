@@ -25,29 +25,80 @@ impl OptimizerEngine {
         space: Option<&str>,
         layout: &PartitioningLayoutInfo,
     ) -> OptimizeResult<ExecutionPlan> {
+        // Opt-stage timing gate for cold-planning diagnosis. Default off;
+        // set LINKRS_OPT_STAGES=1 to print per-stage times to stderr.
+        // The marks below stay aligned with the stage order so a single
+        // probe run attributes the whole optimize budget.
+        let stage_timing = std::env::var("LINKRS_OPT_STAGES").is_ok();
+        let mut stage_start = stage_timing.then(std::time::Instant::now);
         let mut current_plan = plan;
 
         self.maybe_apply_feedback();
+        Self::mark_opt_stage("feedback", &mut stage_start, stage_timing);
 
         current_plan = self.ensure_logical_plan(current_plan);
+        Self::mark_opt_stage("ensure_logical", &mut stage_start, stage_timing);
+
+        // Fixed-shape short-circuit: point lookups and one-hop traversals
+        // lower to linear chains whose full rule batches and cost model are
+        // provably redundant. The gate admits only that grammar; everything
+        // else falls through to the full path below.
+        // Diagnostic escape hatch: LINKRS_NO_FAST_SHAPE=1 forces the full
+        // path for before/after measurement. Default off.
+        let fast = self.enable_heuristic
+            && std::env::var("LINKRS_NO_FAST_SHAPE").is_err()
+            && current_plan.root.as_ref().is_some_and(Self::is_fast_shape);
+        Self::mark_opt_stage("fast_shape_gate", &mut stage_start, stage_timing);
+        if fast {
+            return self.optimize_fast_shape(
+                current_plan,
+                space,
+                layout,
+                &mut stage_start,
+                stage_timing,
+            );
+        }
+
+        self.optimize_full_shape(current_plan, space, layout, &mut stage_start, stage_timing)
+    }
+
+    /// Full optimization path: every rule batch and cost pass. The fast
+    /// path skips a provably redundant subset of these stages on fixed
+    /// shapes; this function is the reference the fast path is tested
+    /// against.
+    pub(crate) fn optimize_full_shape(
+        &self,
+        plan: ExecutionPlan,
+        space: Option<&str>,
+        layout: &PartitioningLayoutInfo,
+        stage_start: &mut Option<std::time::Instant>,
+        stage_timing: bool,
+    ) -> OptimizeResult<ExecutionPlan> {
+        let mut current_plan = plan;
 
         current_plan = self.apply_remove_factorization(current_plan)?;
+        Self::mark_opt_stage("remove_factorization", stage_start, stage_timing);
 
         if self.enable_heuristic {
             log::debug!("Starting logical heuristic optimization");
             current_plan = self.apply_logical_heuristic(current_plan)?;
             log::debug!("Logical heuristic optimization completed successfully");
         }
+        Self::mark_opt_stage("logical_heuristic", stage_start, stage_timing);
 
         log::debug!("Starting cost-based optimization");
         current_plan = self.apply_cost_based(current_plan, space)?;
         log::debug!("Cost-based optimization completed successfully");
+        Self::mark_opt_stage("cost_based", stage_start, stage_timing);
 
         current_plan = self.apply_factorization(current_plan)?;
+        Self::mark_opt_stage("factorization", stage_start, stage_timing);
 
         current_plan = self.apply_intersect_to_join_rewrite(current_plan, space);
+        Self::mark_opt_stage("intersect_to_join", stage_start, stage_timing);
 
         current_plan = self.apply_physical_mapping(current_plan)?;
+        Self::mark_opt_stage("physical_mapping", stage_start, stage_timing);
 
         if self.enable_heuristic {
             log::debug!("Starting physical heuristic optimization");
@@ -55,6 +106,7 @@ impl OptimizerEngine {
                 self.apply_physical_heuristic(current_plan, self.max_heuristic_iterations)?;
             log::debug!("Physical heuristic optimization completed successfully");
         }
+        Self::mark_opt_stage("physical_heuristic", stage_start, stage_timing);
 
         // Partitioning is decided on the final operator tree: the partitioned
         // execution paths require the de-materialized hop shape the physical
@@ -62,6 +114,7 @@ impl OptimizerEngine {
         // unpartitionable plan. The spec still reaches the physical build and
         // the plan-cache fingerprint, which both run after the optimizer.
         current_plan = self.apply_partitioning_selection(current_plan, space, layout);
+        Self::mark_opt_stage("partitioning", stage_start, stage_timing);
 
         // Row estimates are collected last so the per-node map keys match the
         // final plan ids: physical mapping and the physical heuristic rebuild
@@ -73,8 +126,21 @@ impl OptimizerEngine {
             let stats = StatsView::new(&self.stats_manager, space);
             self.apply_row_estimates(&mut current_plan, &stats);
         }
+        Self::mark_opt_stage("row_estimates", stage_start, stage_timing);
 
         Ok(current_plan)
+    }
+
+    /// Emit one opt-stage timing mark when the `LINKRS_OPT_STAGES` gate is
+    /// set, then re-arm the clock for the next stage. Silent otherwise.
+    fn mark_opt_stage(name: &str, start: &mut Option<std::time::Instant>, enabled: bool) {
+        if !enabled {
+            return;
+        }
+        if let Some(s) = start.take() {
+            eprintln!("OPT_STAGE {name} took {:?}", s.elapsed());
+        }
+        *start = enabled.then(std::time::Instant::now);
     }
 
     fn ensure_logical_plan(&self, mut plan: ExecutionPlan) -> ExecutionPlan {
@@ -203,6 +269,151 @@ impl OptimizerEngine {
         };
         let result = self
             .physical_heuristic
+            .optimize(root)
+            .map_err(|e| OptimizeError::HeuristicFailed(e.to_string()))?;
+        if let Ok(mut guard) = self.last_batch_statistics.lock() {
+            *guard = result.batch_statistics.clone();
+        }
+        plan.set_root(result.optimized_plan);
+        Ok(plan)
+    }
+
+    /// Fixed-shape gate for the fast optimization path: linear chains of
+    /// Project/Filter over a scan, with at most one ExpandAll hop.
+    ///
+    /// Point lookups and one-hop traversals lower to this grammar. Every
+    /// omitted rule and skipped cost pass requires a node type outside it
+    /// (joins, set operations, sorts, limits, aggregates, subqueries,
+    /// traversals), so anything outside the grammar transparently runs the
+    /// full path and the two paths can never disagree on a gated shape.
+    pub(crate) fn is_fast_shape(root: &PlanNodeEnum) -> bool {
+        let mut expand_hops = 0u32;
+        Self::fast_shape_chain(root, &mut expand_hops)
+    }
+
+    fn fast_shape_chain(node: &PlanNodeEnum, expand_hops: &mut u32) -> bool {
+        match node {
+            PlanNodeEnum::Project(_) | PlanNodeEnum::Filter(_) => {}
+            PlanNodeEnum::ExpandAll(_) => {
+                *expand_hops += 1;
+                if *expand_hops > 1 {
+                    return false;
+                }
+            }
+            PlanNodeEnum::ScanVertices(_)
+            | PlanNodeEnum::ScanEdges(_)
+            | PlanNodeEnum::IndexScan(_) => return true,
+            _ => return false,
+        }
+        let children = node.children();
+        if children.len() != 1 {
+            return false;
+        }
+        Self::fast_shape_chain(children[0], expand_hops)
+    }
+
+    /// Fast optimization path for fixed shapes: the reduced rule batch plus
+    /// only the cost passes that can fire on the gated grammar.
+    ///
+    /// Skipped passes (unnesting, join-order rewrite, TopN wiring,
+    /// aggregate strategies, intersect-to-join) act solely on node types the
+    /// gate excludes and push notes only when they rewrite, so on gated
+    /// shapes skipping them is exactly identical. Index selection, the
+    /// join-order keep-decision notes, precompute notes, feedback,
+    /// partitioning, and row estimates all run unchanged.
+    pub(crate) fn optimize_fast_shape(
+        &self,
+        plan: ExecutionPlan,
+        space: Option<&str>,
+        layout: &PartitioningLayoutInfo,
+        stage_start: &mut Option<std::time::Instant>,
+        stage_timing: bool,
+    ) -> OptimizeResult<ExecutionPlan> {
+        let mut current_plan = plan;
+        current_plan
+            .diagnostics
+            .notes
+            .push("fast_shape: linear scan/expand chain takes the reduced rule batch".to_string());
+
+        current_plan = self.apply_remove_factorization(current_plan)?;
+        Self::mark_opt_stage("remove_factorization", stage_start, stage_timing);
+
+        if self.enable_heuristic {
+            current_plan = self.apply_logical_heuristic(current_plan)?;
+        }
+        Self::mark_opt_stage("logical_heuristic", stage_start, stage_timing);
+
+        current_plan = self.apply_cost_based_fast(current_plan, space)?;
+        Self::mark_opt_stage("cost_based_fast", stage_start, stage_timing);
+
+        current_plan = self.apply_factorization(current_plan)?;
+        Self::mark_opt_stage("factorization", stage_start, stage_timing);
+
+        current_plan = self.apply_physical_mapping(current_plan)?;
+        Self::mark_opt_stage("physical_mapping", stage_start, stage_timing);
+
+        if self.enable_heuristic {
+            current_plan =
+                self.apply_fast_heuristic(current_plan, self.max_heuristic_iterations)?;
+        }
+        Self::mark_opt_stage("fast_heuristic", stage_start, stage_timing);
+
+        current_plan = self.apply_partitioning_selection(current_plan, space, layout);
+        Self::mark_opt_stage("partitioning", stage_start, stage_timing);
+
+        {
+            let stats = StatsView::new(&self.stats_manager, space);
+            self.apply_row_estimates(&mut current_plan, &stats);
+        }
+        Self::mark_opt_stage("row_estimates", stage_start, stage_timing);
+
+        Ok(current_plan)
+    }
+
+    /// Reduced cost model for fixed shapes: index selection (the one pass
+    /// that can fire on gated chains), the join-order keep-decision notes,
+    /// and the notes-only precompute scan. Unnesting, join rewrites, TopN
+    /// wiring, and aggregate strategies need absent node types.
+    fn apply_cost_based_fast(
+        &self,
+        plan: ExecutionPlan,
+        space: Option<&str>,
+    ) -> OptimizeResult<ExecutionPlan> {
+        let mut plan = plan;
+        let stats = StatsView::new(&self.stats_manager, space);
+        if plan.logical_plan().is_some() {
+            self.apply_join_order_logical(&stats, space, &mut plan);
+            self.apply_index_selection_logical(space, &mut plan);
+        } else if let Some(root) = plan.root.take() {
+            use crate::optimizer::cost_based::index_selection::rewrite_index_scans;
+            let selector = IndexSelector::new(
+                self.cost_calculator_for(space),
+                self.selectivity_estimator.clone(),
+            );
+            let mut notes = Vec::new();
+            let rewritten =
+                rewrite_index_scans(&root, &selector, &self.stats_manager, space, &mut notes);
+            plan.set_root(rewritten);
+            plan.diagnostics.notes.extend(notes);
+        }
+        self.apply_precompute_notes(space, &mut plan);
+        Ok(plan)
+    }
+
+    /// Reduced-batch physical heuristic for fixed shapes. Records batch
+    /// statistics exactly like the full path so probes stay comparable.
+    fn apply_fast_heuristic(
+        &self,
+        mut plan: ExecutionPlan,
+        max_iterations: usize,
+    ) -> OptimizeResult<ExecutionPlan> {
+        self.fast_heuristic.set_max_iterations(max_iterations);
+
+        let Some(root) = plan.root.take() else {
+            return Ok(plan);
+        };
+        let result = self
+            .fast_heuristic
             .optimize(root)
             .map_err(|e| OptimizeError::HeuristicFailed(e.to_string()))?;
         if let Ok(mut guard) = self.last_batch_statistics.lock() {

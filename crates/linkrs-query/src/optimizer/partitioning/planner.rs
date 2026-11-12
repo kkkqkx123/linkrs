@@ -707,19 +707,27 @@ impl PartitioningPlanner {
 
     /// Number of partitions to cut for a relation with `rows` estimated rows.
     ///
-    /// E5 granularity tuning: the baseline is `rows / min_rows_per_partition`
-    /// (one partition per threshold bucket), but the result is additionally
-    /// bounded by the available worker threads (`max_workers`) so we never cut
-    /// more partitions than can run concurrently — the actual parallelism is
-    /// `min(partitions, workers)`, and surplus partitions only add exchange
-    /// overhead. Small relations are rejected earlier via the `2 * min_rows`
-    /// threshold; a zero-size relation here clamps to the minimum of 2.
+    /// The baseline is `rows / min_rows_per_partition` (one partition per
+    /// threshold bucket), but the result is additionally bounded by the
+    /// available worker threads (`max_workers`) so we never cut more
+    /// partitions than can run concurrently, and by the economic worker
+    /// bound so each partition carries at least two threshold buckets.
+    /// The two-bucket floor mirrors the `2 * min_rows` admission gate every
+    /// decide path shares: one bucket per partition leaves no margin for
+    /// exchange overhead, which is where throughput plateaus past four
+    /// workers. Small relations are rejected earlier via that same gate;
+    /// a zero-size relation here clamps to the minimum of 2.
     fn desired_partition_count(&self, rows: u64) -> usize {
         let by_rows = usize::try_from(rows / self.config.min_rows_per_partition)
             .unwrap_or(self.config.max_partitions);
+        let two_buckets = self.config.min_rows_per_partition.saturating_mul(2).max(1);
+        let by_economics = usize::try_from(rows / two_buckets)
+            .unwrap_or(self.config.max_partitions)
+            .max(2);
         let by_workers = self.config.max_workers;
         by_rows
             .clamp(2, self.config.max_partitions)
+            .min(by_economics)
             .min(by_workers.max(2))
     }
 

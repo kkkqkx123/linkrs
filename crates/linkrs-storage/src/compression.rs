@@ -484,9 +484,7 @@ fn with_process_dir_lock<R>(dir: &Path, op: impl FnOnce() -> R) -> R {
             lock
         })
     };
-    let _guard = lock
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _guard = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     op()
 }
 

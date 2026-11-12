@@ -542,10 +542,19 @@ fn test_c_api_null_handle_contract() {
     let misuse = linkrs_error_code_t::LINKRS_MISUSE as i32;
     unsafe {
         assert_eq!(c_api::database::linkrs_close(ptr::null_mut()), misuse);
-        assert_eq!(c_api::session::linkrs_session_close(ptr::null_mut()), misuse);
+        assert_eq!(
+            c_api::session::linkrs_session_close(ptr::null_mut()),
+            misuse
+        );
         assert_eq!(c_api::result::linkrs_result_free(ptr::null_mut()), misuse);
-        assert_eq!(c_api::transaction::linkrs_txn_commit(ptr::null_mut()), misuse);
-        assert_eq!(c_api::transaction::linkrs_txn_rollback(ptr::null_mut()), misuse);
+        assert_eq!(
+            c_api::transaction::linkrs_txn_commit(ptr::null_mut()),
+            misuse
+        );
+        assert_eq!(
+            c_api::transaction::linkrs_txn_rollback(ptr::null_mut()),
+            misuse
+        );
         // Unit-returning releasers tolerate null by doing nothing.
         c_api::transaction::linkrs_txn_free(ptr::null_mut());
         assert_eq!(c_api::batch::linkrs_batch_free(ptr::null_mut()), misuse);
@@ -568,9 +577,7 @@ fn test_c_api_validate_reports_invalid() {
     let session = CApiTestSession::from_db(&test_db);
 
     let garbage = CString::new("!!! not a query !!!").expect("CString");
-    let rc = unsafe {
-        c_api::query::linkrs_validate_query(session.handle(), garbage.as_ptr())
-    };
+    let rc = unsafe { c_api::query::linkrs_validate_query(session.handle(), garbage.as_ptr()) };
     assert_eq!(rc, linkrs_error_code_t::LINKRS_ERROR as i32);
     assert_eq!(
         unsafe { c_api::error::linkrs_extended_errcode(session.handle()) },
@@ -578,15 +585,11 @@ fn test_c_api_validate_reports_invalid() {
     );
 
     let unclosed = CString::new("MATCH (").expect("CString");
-    let rc = unsafe {
-        c_api::query::linkrs_validate_query(session.handle(), unclosed.as_ptr())
-    };
+    let rc = unsafe { c_api::query::linkrs_validate_query(session.handle(), unclosed.as_ptr()) };
     assert_ne!(rc, linkrs_error_code_t::LINKRS_OK as i32);
 
     let valid = CString::new("SHOW SPACES").expect("CString");
-    let rc = unsafe {
-        c_api::query::linkrs_validate_query(session.handle(), valid.as_ptr())
-    };
+    let rc = unsafe { c_api::query::linkrs_validate_query(session.handle(), valid.as_ptr()) };
     assert_eq!(rc, linkrs_error_code_t::LINKRS_OK as i32);
 }
 
@@ -602,8 +605,7 @@ fn test_c_api_completed_commit_reports_message() {
     let test_db = CApiTestDatabase::new();
     let session = CApiTestSession::from_db(&test_db);
 
-    let mut txn: *mut linkrs::api::embedded::c_api::types::linkrs_txn_t =
-        ptr::null_mut();
+    let mut txn: *mut linkrs::api::embedded::c_api::types::linkrs_txn_t = ptr::null_mut();
     let rc = unsafe { c_api::transaction::linkrs_txn_begin(session.handle(), &mut txn) };
     assert_eq!(rc, linkrs_error_code_t::LINKRS_OK as i32);
     let rc = unsafe { c_api::transaction::linkrs_txn_commit(txn) };

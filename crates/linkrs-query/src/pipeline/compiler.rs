@@ -12,12 +12,23 @@ use std::sync::Arc;
 
 use crate::executor::streaming::parameters::{ParameterDesc, ParameterSchema, ParameterSlot};
 
+/// Per-query compile cost split.
+///
+/// Wired into metrics/profile like `statistics_us`: cache hits report
+/// all zeros, cold queries report the actual stage times.
+#[derive(Debug, Default, Clone, Copy)]
+pub(crate) struct CompileTimes {
+    pub statistics_us: u64,
+    pub plan_us: u64,
+    pub optimize_us: u64,
+}
+
 impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
     pub(crate) fn optimize_execution_plan(
         &mut self,
         plan: crate::planning::plan::ExecutionPlan,
         space_name: Option<&str>,
-    ) -> DBResult<(crate::planning::plan::ExecutionPlan, u64)> {
+    ) -> DBResult<(crate::planning::plan::ExecutionPlan, CompileTimes)> {
         // Statistics freshness gate: missing or stale stamps trigger one
         // best-effort collection, never blocking the query on failure.
         // The elapsed time belongs to this query only; cache hits that
@@ -27,6 +38,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         } else {
             0
         };
+        let optimize_start = std::time::Instant::now();
         // Read the storage-provided layout information (monotonic layout
         // version + self-proven vertex-id domain) so partitioning can be
         // enabled safely when evidence exists. Without storage access the
@@ -58,7 +70,14 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         let cfg = self.optimizer_engine.partitioning_config();
         optimized.set_max_workers(cfg.max_workers.max(1));
         optimized.set_max_buffered_chunks(cfg.max_buffered_chunks.max(1));
-        Ok((optimized, statistics_us))
+        Ok((
+            optimized,
+            CompileTimes {
+                statistics_us,
+                plan_us: 0,
+                optimize_us: optimize_start.elapsed().as_micros() as u64,
+            },
+        ))
     }
 
     /// Bind + plan + optimize only, returning the optimized logical plan
@@ -71,15 +90,18 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         query_context: Arc<QueryContext>,
         bound: &BoundStatement,
         ast: &Arc<crate::parser::ast::stmt::Ast>,
-    ) -> DBResult<(crate::planning::plan::ExecutionPlan, u64)> {
+    ) -> DBResult<(crate::planning::plan::ExecutionPlan, CompileTimes)> {
+        let plan_start = std::time::Instant::now();
         let execution_plan =
             self.generate_execution_plan_from_bound(query_context.clone(), bound, ast)?;
+        let plan_us = plan_start.elapsed().as_micros() as u64;
         let space_name = query_context
             .space_name()
             .or_else(|| query_context.request_context().space_name.clone());
-        let (optimized, statistics_us) =
+        let (optimized, mut times) =
             self.optimize_execution_plan(execution_plan, space_name.as_deref())?;
-        Ok((optimized, statistics_us))
+        times.plan_us = plan_us;
+        Ok((optimized, times))
     }
 
     pub(crate) fn generate_execution_plan_from_bound(
@@ -166,7 +188,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         stmt: &Stmt,
         ast: &Arc<crate::parser::ast::stmt::Ast>,
         dml_shape_cacheable: bool,
-    ) -> DBResult<(Arc<PhysicalPlan>, u64)> {
+    ) -> DBResult<(Arc<PhysicalPlan>, CompileTimes)> {
         let request = query_context.request_context();
         let space_name = query_context
             .space_name()
@@ -198,7 +220,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         };
 
         if let Some(plan) = self.serve_dml_memo(dml_memo_key.as_ref(), schema_version) {
-            return Ok((plan, 0));
+            return Ok((plan, CompileTimes::default()));
         }
 
         if let Some(plan) = self.serve_plain_cache(
@@ -207,7 +229,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             dml_memo_key.clone(),
             schema_version,
         ) {
-            return Ok((plan, 0));
+            return Ok((plan, CompileTimes::default()));
         }
 
         let owned_bound;
@@ -222,7 +244,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                 &owned_bound
             }
         };
-        let (optimized_plan, statistics_us) =
+        let (optimized_plan, times) =
             self.optimize_from_bound(query_context.clone(), bound, ast)?;
         if let Some(spec) = optimized_plan.partition_spec() {
             if let Some(cached) =
@@ -237,7 +259,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                     if let Some(key) = dml_memo_key.clone() {
                         self.store_dml_plan(key, cached.plan.clone());
                     }
-                    return Ok((cached.plan.clone(), statistics_us));
+                    return Ok((cached.plan.clone(), times));
                 }
                 self.dml_memo_failures
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -280,7 +302,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                 );
             }
         }
-        Ok((plan, statistics_us))
+        Ok((plan, times))
     }
 
     /// Serve a DML memo hit through the single checked exit.

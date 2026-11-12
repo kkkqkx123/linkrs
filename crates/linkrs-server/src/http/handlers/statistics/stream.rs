@@ -11,8 +11,8 @@ use std::time::Duration;
 use axum::extract::{Query, State};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use serde::Deserialize;
-use tokio_stream::Stream;
 use tokio_stream::wrappers::ReceiverStream;
+use tokio_stream::Stream;
 
 use super::overview::collect_overview;
 use crate::http::state::AppState;

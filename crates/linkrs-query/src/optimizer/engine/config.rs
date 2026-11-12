@@ -64,6 +64,9 @@ impl OptimizerEngine {
         let physical_heuristic = PhysicalHeuristicOptimizer::from_registry(
             crate::optimizer::heuristic::rule_enum::RuleRegistry::default(),
         );
+        let fast_heuristic = PhysicalHeuristicOptimizer::from_registry(
+            crate::optimizer::heuristic::rule_enum::RuleRegistry::fast_shape(),
+        );
 
         Self {
             expression_context,
@@ -79,6 +82,7 @@ impl OptimizerEngine {
             cost_epoch: AtomicU64::new(0),
             logical_heuristic,
             physical_heuristic,
+            fast_heuristic,
             last_batch_statistics: std::sync::Mutex::new(Vec::new()),
             partitioning_planner: PartitioningPlanner::new(PartitioningConfig::default())
                 .with_selectivity(Arc::clone(&selectivity_estimator)),

@@ -81,10 +81,10 @@ pub unsafe extern "C" fn linkrs_migration_execute(
         };
 
         let handle = unsafe { &*(db as *mut LinkrsHandle) };
-        let report = match handle.inner.execute_migration_plan_online(
-            &plan,
-            &linkrs_migration::MigrationConfig::default(),
-        ) {
+        let report = match handle
+            .inner
+            .execute_migration_plan_online(&plan, &linkrs_migration::MigrationConfig::default())
+        {
             Ok(r) => r,
             Err(e) => {
                 set_last_error_message(format!("migration failed: {}", e));

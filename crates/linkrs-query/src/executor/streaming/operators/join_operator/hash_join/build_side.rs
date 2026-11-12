@@ -119,10 +119,13 @@ impl HashJoinBuildSide {
     ) -> Result<(), QueryError> {
         let visible = chunk.visible_indices();
         let num_cols = chunk.num_columns();
-        debug_assert!(
-            chunk.rows.iter().all(|row| row.len() == num_cols),
-            "row/column count mismatch: chunk has rows without columnar data"
-        );
+        if let Some(row) = chunk.rows.iter().find(|row| row.len() != num_cols) {
+            return Err(QueryError::execution(format!(
+                "HashJoinBuildSide: row/column count mismatch: row has {} values but chunk has {} columns",
+                row.len(),
+                num_cols
+            )));
+        }
         let base = self.row_count();
         for (pos, row_idx) in visible.iter().enumerate() {
             let row = &chunk.rows[*row_idx];

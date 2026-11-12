@@ -120,12 +120,12 @@ impl GraphStorageContext {
                     // is durable. Skipped for sub-Sync durability, matching
                     // the global WAL's own guarantee level.
                     if durability == linkrs_core::types::DurabilityLevel::Sync {
-                        self.persistent.data_store.for_all_edge_partitions_mut(
-                            |_, table| {
+                        self.persistent
+                            .data_store
+                            .for_all_edge_partitions_mut(|_, table| {
                                 table.sync_wal_file()?;
                                 Ok(())
-                            },
-                        )?;
+                            })?;
                     }
                     result
                 }

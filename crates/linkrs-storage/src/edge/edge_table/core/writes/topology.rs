@@ -59,7 +59,8 @@ impl EdgeStore {
         // per-step compensation branches here.
         let mut batch = EdgeStagingBatch::new();
         batch.stage_insert(src, dst, rank, property_values, ts);
-        self.commit_staging_batch_with_sync(batch, wal_sync).map(|_| ())
+        self.commit_staging_batch_with_sync(batch, wal_sync)
+            .map(|_| ())
     }
 
     /// Commit many inserts of one edge type in a single staging batch.

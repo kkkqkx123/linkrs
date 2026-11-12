@@ -462,6 +462,45 @@ impl RuleRegistry {
         }
         registry
     }
+
+    /// Reduced rule set for fixed shapes (point lookups, one-hop traversals).
+    ///
+    /// Keeps only rules whose patterns can match the fast-shape grammar
+    /// (linear chains of Project/Filter over a scan, at most one ExpandAll
+    /// hop): predicate pushdown into scans and expands, projection pushdown
+    /// into scans, slot coverage, expand annotations, constant folding, and
+    /// the unary cleanup rules. Every omitted rule requires a node type the
+    /// grammar excludes (joins, set operations, sorts, limits, aggregates,
+    /// subqueries, traversals), so on gated shapes the reduced batch reaches
+    /// the same fixpoint as the full registry. The gate itself lives in the
+    /// optimizer engine; anything outside the grammar runs the full path.
+    pub fn fast_shape() -> Self {
+        Self::filtered(
+            &[],
+            &[
+                "PushFilterDownExpandAll",
+                "PushVFilterDownScanVertices",
+                "PushFilterDownScanVertices",
+                "PushFilterDownScanEdges",
+                "EliminateRedundantTagFilter",
+                "PushProjectDownScanVertices",
+                "PushProjectDownScanEdges",
+                "EnrichScanSlotsWithFilterProps",
+                "ExpandPushdownAnnotate",
+                "ScanIdentityAnnotate",
+                "ScanEdgeIdentityAnnotate",
+                "FoldConstants",
+                "EliminateFilter",
+                "RemoveNoopProject",
+                "CombineFilter",
+                "CollapseProject",
+                "CollapseConsecutiveProject",
+            ]
+            .iter()
+            .map(|name| name.to_string())
+            .collect::<Vec<String>>(),
+        )
+    }
 }
 
 #[cfg(test)]

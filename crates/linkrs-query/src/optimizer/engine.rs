@@ -82,6 +82,10 @@ pub struct OptimizerEngine {
     cost_epoch: AtomicU64,
     logical_heuristic: LogicalBatchOptimizer,
     physical_heuristic: PhysicalHeuristicOptimizer,
+    /// Reduced-batch optimizer for fixed shapes (point lookups, one-hop
+    /// traversals). Built once from the fast-shape rule set and shared like
+    /// the full optimizer; the shape gate decides per query which one runs.
+    fast_heuristic: PhysicalHeuristicOptimizer,
     last_batch_statistics: Mutex<Vec<(OptimizationBatch, BatchStatistics)>>,
     partitioning_planner: PartitioningPlanner,
     enable_heuristic: bool,

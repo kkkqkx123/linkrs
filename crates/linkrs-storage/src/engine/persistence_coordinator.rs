@@ -195,27 +195,28 @@ impl PersistenceCoordinator {
         let (manifest_manager, published_sequence) =
             crate::compression::with_checkpoint_dir_lock(&config.checkpoint_dir, || {
                 Self::cleanup_temporary_checkpoints(&config.checkpoint_dir).map_err(|error| {
-            error.with_context(format!(
-                "Failed to clean up temporary checkpoints in {}",
-                config.checkpoint_dir.display()
-            ))
-        })?;
-        let manifest_dir = config.checkpoint_dir.join("manifests");
-        let manifest_manager = CheckpointManifestManager::new(&manifest_dir);
-        manifest_manager.init().map_err(|error| {
-            StorageError::db_error(format!("Failed to init manifest manager: {error}"))
-        })?;
-        let published_sequence = Self::latest_published_sequence(&manifest_manager)
-            .map_err(|error| error.with_context("Failed to read the latest published manifest"))?;
-        Self::cleanup_unpublished_checkpoints(&config.checkpoint_dir, published_sequence).map_err(
-            |error| {
-                error.with_context(format!(
-                    "Failed to clean up unpublished checkpoints in {}",
-                    config.checkpoint_dir.display()
-                ))
-            },
-        )?;
-        Ok::<_, StorageError>((manifest_manager, published_sequence))
+                    error.with_context(format!(
+                        "Failed to clean up temporary checkpoints in {}",
+                        config.checkpoint_dir.display()
+                    ))
+                })?;
+                let manifest_dir = config.checkpoint_dir.join("manifests");
+                let manifest_manager = CheckpointManifestManager::new(&manifest_dir);
+                manifest_manager.init().map_err(|error| {
+                    StorageError::db_error(format!("Failed to init manifest manager: {error}"))
+                })?;
+                let published_sequence = Self::latest_published_sequence(&manifest_manager)
+                    .map_err(|error| {
+                        error.with_context("Failed to read the latest published manifest")
+                    })?;
+                Self::cleanup_unpublished_checkpoints(&config.checkpoint_dir, published_sequence)
+                    .map_err(|error| {
+                    error.with_context(format!(
+                        "Failed to clean up unpublished checkpoints in {}",
+                        config.checkpoint_dir.display()
+                    ))
+                })?;
+                Ok::<_, StorageError>((manifest_manager, published_sequence))
             })?;
 
         let mut checkpoint_manager =

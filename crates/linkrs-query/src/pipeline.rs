@@ -355,10 +355,8 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         }
         // Global last-collection gauge stays for operator visibility.
         // Per-query probes must use the returned elapsed value instead.
-        self.last_statistics_collection_us.store(
-            elapsed_us,
-            std::sync::atomic::Ordering::Relaxed,
-        );
+        self.last_statistics_collection_us
+            .store(elapsed_us, std::sync::atomic::Ordering::Relaxed);
         match &result {
             Ok(summary) => {
                 log::info!(

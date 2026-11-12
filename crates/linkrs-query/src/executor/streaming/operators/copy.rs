@@ -227,10 +227,7 @@ fn run_import(
     match result {
         Ok(total) => {
             storage
-                .finalize_auto_commit_group(
-                    &window,
-                    linkrs_core::types::DurabilityLevel::Sync,
-                )
+                .finalize_auto_commit_group(&window, linkrs_core::types::DurabilityLevel::Sync)
                 .map_err(|e| QueryError::execution(format!("COPY FROM commit failed: {e}")))?;
             Ok(total)
         }

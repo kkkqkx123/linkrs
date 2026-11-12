@@ -1,10 +1,10 @@
 //! Immutable configuration for fulltext search operators.
 
-use linkrs_core::types::expr::Expression;
-use linkrs_core::types::{FulltextEngineType, ReadYourWritesConfig};
 use crate::parser::ast::fulltext::{
     AlterIndexAction, FulltextQueryExpr, IndexFieldDef, IndexOptions,
 };
+use linkrs_core::types::expr::Expression;
+use linkrs_core::types::{FulltextEngineType, ReadYourWritesConfig};
 
 /// Fulltext index DDL command payload.
 #[derive(Debug, Clone)]

@@ -65,7 +65,6 @@ fn insert_chunk_consumes_selection_in_place() {
 }
 
 #[test]
-#[should_panic(expected = "row/column count mismatch")]
 fn insert_chunk_rejects_schema_less_chunk() {
     // Rows carrying values that no schema column can address would be
     // silently dropped from the build side; the invariant guard must fire.
@@ -74,7 +73,8 @@ fn insert_chunk_rejects_schema_less_chunk() {
         vec![vec![Value::Int(1)]],
         Arc::new(SlotLayout::from_names(&[])),
     );
-    let _ = side.insert_chunk(&mut chunk, &[], &[]);
+    let err = side.insert_chunk(&mut chunk, &[], &[]).unwrap_err();
+    assert!(err.to_string().contains("row/column count mismatch"));
 }
 
 #[test]

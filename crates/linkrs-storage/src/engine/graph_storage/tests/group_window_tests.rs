@@ -40,7 +40,9 @@ fn test_group_window_single_ts() {
         assert_eq!(*ts, first, "group mode must reuse the same write timestamp");
     }
 
-    window.finalize_group(linkrs_core::types::DurabilityLevel::Sync).unwrap();
+    window
+        .finalize_group(linkrs_core::types::DurabilityLevel::Sync)
+        .unwrap();
     // After finalize, data is visible.
     for i in 0..5 {
         let v = storage
@@ -95,7 +97,9 @@ fn test_group_commit_visibility() {
             "group-internal read must see prior statement's write"
         );
     }
-    window.finalize_group(linkrs_core::types::DurabilityLevel::Sync).unwrap();
+    window
+        .finalize_group(linkrs_core::types::DurabilityLevel::Sync)
+        .unwrap();
 
     // After finalize, external reader sees data.
     let v = storage
@@ -171,7 +175,9 @@ fn test_group_failed_statement_rolls_back_own_writes() {
         bound.finalize_operation(true).unwrap();
     }
 
-    window.finalize_group(linkrs_core::types::DurabilityLevel::Sync).unwrap();
+    window
+        .finalize_group(linkrs_core::types::DurabilityLevel::Sync)
+        .unwrap();
 
     // Vertex 8001 should have original values (statement 2 rolled back).
     let v = storage
@@ -221,7 +227,9 @@ fn test_group_window_without_wal_manager() {
         bound.insert_vertex("test_space", vertex).unwrap();
         bound.finalize_operation(true).unwrap();
     }
-    window.finalize_group(linkrs_core::types::DurabilityLevel::Sync).unwrap();
+    window
+        .finalize_group(linkrs_core::types::DurabilityLevel::Sync)
+        .unwrap();
 
     let v = storage
         .get_vertex(
@@ -240,7 +248,9 @@ fn test_group_empty_window_finalize() {
     let window = storage.begin_auto_commit_group().unwrap();
     assert_eq!(window.statement_count(), 0);
     // Finalize without binding any statements must not panic.
-    window.finalize_group(linkrs_core::types::DurabilityLevel::Sync).unwrap();
+    window
+        .finalize_group(linkrs_core::types::DurabilityLevel::Sync)
+        .unwrap();
 }
 
 #[test]
@@ -274,7 +284,9 @@ fn test_group_window_staged_wal_bounded() {
             "staged WAL must stay <=1 during group, got {wal_len}"
         );
     }
-    window.finalize_group(linkrs_core::types::DurabilityLevel::Sync).unwrap();
+    window
+        .finalize_group(linkrs_core::types::DurabilityLevel::Sync)
+        .unwrap();
 }
 
 #[test]
@@ -307,7 +319,9 @@ fn test_group_window_unregisters_lazily_registered_snapshots() {
         bound.finalize_operation(true).unwrap();
         drop(bound);
     }
-    window.finalize_group(linkrs_core::types::DurabilityLevel::Sync).unwrap();
+    window
+        .finalize_group(linkrs_core::types::DurabilityLevel::Sync)
+        .unwrap();
 
     assert_eq!(
         storage
@@ -341,7 +355,9 @@ fn test_group_finalize_publishes_write_set() {
         bound.insert_vertex("test_space", vertex).unwrap();
         bound.finalize_operation(true).unwrap();
     }
-    window.finalize_group(linkrs_core::types::DurabilityLevel::Sync).unwrap();
+    window
+        .finalize_group(linkrs_core::types::DurabilityLevel::Sync)
+        .unwrap();
 
     let mut probe = linkrs_transaction::types::WriteSet::new();
     probe.record_vertex(VertexId::try_from_int64(11001).expect("test vertex id"));

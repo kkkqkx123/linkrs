@@ -415,7 +415,7 @@
 					<p class="text-xs text-muted">{t('batch.noErrors')}</p>
 				{:else}
 					<ul class="text-xs font-mono space-y-1">
-						{#each shownErrors as item}
+						{#each shownErrors as item (item.index + ":" + item.item_type)}
 							<li>
 								#{item.index} [{item.item_type}] {item.error}
 							</li>

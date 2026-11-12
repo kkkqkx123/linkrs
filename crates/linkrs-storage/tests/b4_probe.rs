@@ -18,8 +18,7 @@ const EDGE: &str = "Link";
 
 fn setup(nv: usize) -> (GraphStorage, TempDir) {
     let dir = TempDir::new().expect("temp dir");
-    let mut storage =
-        GraphStorage::new_with_path(dir.path().to_path_buf()).expect("storage");
+    let mut storage = GraphStorage::new_with_path(dir.path().to_path_buf()).expect("storage");
     let mut space = SpaceInfo::new(SPACE.to_string()).with_vid_type(DataType::BigInt);
     storage.create_space(&mut space).expect("space");
     storage
@@ -130,9 +129,7 @@ fn probe_staged_vs_batch() {
     let (mut storage2, _dir2) = setup(nv);
     let edges: Vec<Edge> = (0..ne).map(|i| make_edge(i, nv, 0)).collect();
     let start = Instant::now();
-    storage2
-        .batch_insert_edges(SPACE, edges)
-        .expect("batch");
+    storage2.batch_insert_edges(SPACE, edges).expect("batch");
     let batch_us = start.elapsed().as_micros();
     println!(
         "BATCH: {ne} edges in {batch_us}us = {:.1}us/edge",

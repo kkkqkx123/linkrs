@@ -25,7 +25,11 @@ fn source_functions() -> BTreeSet<String> {
         .filter(|p| p.extension().is_some_and(|e| e == "rs"))
         .collect();
     files.sort();
-    assert!(!files.is_empty(), "no C API sources under {}", dir.display());
+    assert!(
+        !files.is_empty(),
+        "no C API sources under {}",
+        dir.display()
+    );
     for path in files {
         let text = std::fs::read_to_string(&path)
             .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
@@ -53,8 +57,8 @@ fn source_functions() -> BTreeSet<String> {
 /// variants never match this shape.
 fn header_functions() -> BTreeSet<String> {
     let path = workspace_root().join("include/linkrs.h");
-    let text =
-        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+    let text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
     let mut names = BTreeSet::new();
     for line in text.lines() {
         if line.starts_with(char::is_whitespace) || line.starts_with('#') || line.starts_with('/') {

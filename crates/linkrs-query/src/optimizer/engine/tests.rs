@@ -1284,3 +1284,379 @@ fn stat_free_fallback_gate_matches_heuristic_rule() {
         &agg
     ));
 }
+
+mod fast_shape_tests {
+    use super::*;
+    use crate::optimizer::heuristic::rule_enum::RuleRegistry;
+    use crate::optimizer::stats::TagStatistics;
+    use crate::planning::plan::core::nodes::access::graph_scan_node::{
+        ScanEdgesNode, ScanVerticesNode,
+    };
+    use crate::planning::plan::core::nodes::access::index_scan::{IndexScanNode, ScanType};
+    use crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
+    use crate::planning::plan::core::nodes::graph_operations::graph_operations_node::UnionNode;
+    use crate::planning::plan::core::nodes::join::join_node::InnerJoinNode;
+    use crate::planning::plan::core::nodes::operation::filter_node::FilterNode;
+    use crate::planning::plan::core::nodes::operation::project_node::ProjectNode;
+    use crate::planning::plan::core::nodes::operation::sort_node::{LimitNode, SortItem, SortNode};
+    use crate::planning::plan::core::nodes::traversal::traversal_node::ExpandAllNode;
+    use crate::planning::plan::ExecutionPlan;
+    use linkrs_core::types::expr::expression_context::ExpressionAnalysisContext;
+    use linkrs_core::types::expr::{ContextualExpression, Expression, ExpressionMeta};
+    use linkrs_core::Value;
+    use std::sync::Arc;
+
+    /// Rule names the fast batch keeps. The no-fire test below asserts the
+    /// full path never fires anything outside this set on gated shapes.
+    const FAST_RULES: &[&str] = &[
+        "PushFilterDownExpandAllRule",
+        "PushVFilterDownScanVerticesRule",
+        "PushFilterDownScanVerticesRule",
+        "PushFilterDownScanEdgesRule",
+        "EliminateRedundantTagFilterRule",
+        "PushProjectDownScanVerticesRule",
+        "PushProjectDownScanEdgesRule",
+        "EnrichScanSlotsWithFilterPropsRule",
+        "ExpandPushdownAnnotateRule",
+        "ScanIdentityAnnotateRule",
+        "ScanEdgeIdentityAnnotateRule",
+        "FoldConstantsRule",
+        "EliminateFilterRule",
+        "RemoveNoopProjectRule",
+        "CombineFilterRule",
+        "CollapseProjectRule",
+        "CollapseConsecutiveProjectRule",
+    ];
+
+    fn person_scan(var: &str) -> PlanNodeEnum {
+        let mut scan = ScanVerticesNode::new(1, "test");
+        scan.set_tag("person");
+        scan.set_col_names(vec![var.to_string()]);
+        scan.set_output_var(var.to_string());
+        PlanNodeEnum::ScanVertices(scan)
+    }
+
+    fn prop_eq_filter(input: PlanNodeEnum, var: &str, prop: &str, value: Value) -> PlanNodeEnum {
+        let context = Arc::new(ExpressionAnalysisContext::new());
+        let predicate = Expression::Binary {
+            left: Box::new(Expression::Property {
+                object: Box::new(Expression::Variable(var.to_string())),
+                property: prop.to_string(),
+            }),
+            op: linkrs_core::types::operators::BinaryOperator::Equal,
+            right: Box::new(Expression::Literal(value)),
+        };
+        let id = context.register_expression(ExpressionMeta::new(predicate));
+        let filter = FilterNode::new(input, ContextualExpression::new(id, context))
+            .expect("filter should build");
+        PlanNodeEnum::Filter(filter)
+    }
+
+    fn project_var(input: PlanNodeEnum, var: &str) -> PlanNodeEnum {
+        use linkrs_core::YieldColumn;
+        let context = Arc::new(ExpressionAnalysisContext::new());
+        let expr_meta = ExpressionMeta::new(Expression::Variable(var.to_string()));
+        let id = context.register_expression(expr_meta);
+        let columns = vec![YieldColumn {
+            expression: ContextualExpression::new(id, context),
+            alias: var.to_string(),
+        }];
+        let project = ProjectNode::new(input, columns).expect("project should build");
+        PlanNodeEnum::Project(project)
+    }
+
+    fn one_hop_chain() -> PlanNodeEnum {
+        use crate::planning::plan::core::nodes::base::plan_node_traits::{
+            MultipleInputNode, PlanNode,
+        };
+        let mut expand = ExpandAllNode::new(1, vec!["follows".to_string()], "OUT");
+        expand.set_step_limit(1);
+        expand.set_id_only(true);
+        expand.set_col_names(vec!["a".to_string(), "e".to_string(), "b".to_string()]);
+        expand.add_input(person_scan("a"));
+        PlanNodeEnum::ExpandAll(expand)
+    }
+
+    #[test]
+    fn fast_shape_gate_accepts_point_chains() {
+        assert!(OptimizerEngine::is_fast_shape(&person_scan("n")));
+        let filtered = prop_eq_filter(person_scan("n"), "n", "name", Value::String("a".into()));
+        assert!(OptimizerEngine::is_fast_shape(&filtered));
+        assert!(OptimizerEngine::is_fast_shape(&project_var(filtered, "n")));
+    }
+
+    #[test]
+    fn fast_shape_gate_accepts_one_hop_and_edge_scan() {
+        assert!(OptimizerEngine::is_fast_shape(&one_hop_chain()));
+        let scan = ScanEdgesNode::new(1, "follows");
+        assert!(OptimizerEngine::is_fast_shape(&PlanNodeEnum::ScanEdges(
+            scan
+        )));
+        let index = IndexScanNode::new(
+            1,
+            7,
+            3,
+            "idx".to_string(),
+            "person".to_string(),
+            ScanType::Unique,
+        );
+        assert!(OptimizerEngine::is_fast_shape(&PlanNodeEnum::IndexScan(
+            index
+        )));
+    }
+
+    #[test]
+    fn fast_shape_gate_rejects_complex_shapes() {
+        // Sort+Limit chain.
+        let sort = SortNode::new(
+            person_scan("n"),
+            vec![SortItem::column_asc("n.name".to_string())],
+        )
+        .expect("sort should build");
+        let limit = LimitNode::new(PlanNodeEnum::Sort(sort), 0, 50).expect("limit should build");
+        assert!(!OptimizerEngine::is_fast_shape(&PlanNodeEnum::Limit(limit)));
+
+        // Union of two scans.
+        let union =
+            UnionNode::new(person_scan("a"), person_scan("b"), false).expect("union should build");
+        assert!(!OptimizerEngine::is_fast_shape(&PlanNodeEnum::Union(union)));
+
+        // Two-hop chain.
+        {
+            use crate::planning::plan::core::nodes::base::plan_node_traits::{
+                MultipleInputNode, PlanNode,
+            };
+            let mut hop1 = ExpandAllNode::new(1, vec!["follows".to_string()], "OUT");
+            hop1.set_step_limit(1);
+            hop1.set_id_only(true);
+            hop1.add_input(person_scan("a"));
+            let mut hop2 = ExpandAllNode::new(2, vec!["follows".to_string()], "OUT");
+            hop2.set_step_limit(1);
+            hop2.set_id_only(true);
+            hop2.add_input(PlanNodeEnum::ExpandAll(hop1));
+            assert!(!OptimizerEngine::is_fast_shape(&PlanNodeEnum::ExpandAll(
+                hop2
+            )));
+        }
+
+        // Join of two scans.
+        let join = InnerJoinNode::new(person_scan("a"), person_scan("b"), Vec::new(), Vec::new())
+            .expect("join should build");
+        assert!(!OptimizerEngine::is_fast_shape(&PlanNodeEnum::InnerJoin(
+            join
+        )));
+    }
+
+    #[test]
+    fn fast_shape_registry_matches_keep_list() {
+        let registry = RuleRegistry::fast_shape();
+        let names: Vec<String> = registry
+            .iter()
+            .map(|rule| rule.name().to_string())
+            .collect();
+        assert_eq!(names.len(), FAST_RULES.len());
+        for expected in FAST_RULES {
+            assert!(
+                names.iter().any(|name| name == expected),
+                "fast registry must contain {expected}"
+            );
+        }
+    }
+
+    fn engine_with_person_stats() -> OptimizerEngine {
+        use crate::optimizer::stats::TagStatistics;
+        let engine = OptimizerEngine::default();
+        let mut tag_stats = TagStatistics::new("person".to_string());
+        tag_stats.vertex_count = 10_000;
+        engine.stats_manager().update_tag_stats("test", tag_stats);
+        engine
+    }
+
+    /// Normalize counter-driven identifiers (plan node ids, expression
+    /// ids) so two optimizations of the same input can be compared
+    /// structurally. Both paths consume the global counters in the same
+    /// relative order, but absolute values depend on cross-test counter
+    /// state; the inputs are clones, so any remaining digit difference
+    /// outside these two anchored patterns would be a real divergence.
+    fn normalize_counters(rendered: &str) -> String {
+        let masked = mask_digits_after(rendered, "ExpressionId(");
+        mask_digits_after(&masked, "id: ")
+    }
+
+    /// Replace the digit run following every word-boundary `marker` with
+    /// `#`. The boundary keeps fields like `identity_only` or `valid`
+    /// untouched: only a standalone `id` (or the exact `ExpressionId(`
+    /// prefix) masks.
+    fn mask_digits_after(rendered: &str, marker: &str) -> String {
+        let mut masked = String::with_capacity(rendered.len());
+        let mut rest = rendered;
+        while let Some(position) = rest.find(marker) {
+            let (head, tail) = rest.split_at(position);
+            let boundary_ok = head
+                .chars()
+                .last()
+                .is_none_or(|previous| !previous.is_alphanumeric() && previous != '_');
+            // For `ExpressionId(` the marker carries its own boundary.
+            let anchored = marker.ends_with('(') || boundary_ok;
+            if !anchored {
+                masked.push_str(head);
+                masked.push_str(&tail[..marker.len()]);
+                rest = &tail[marker.len()..];
+                continue;
+            }
+            masked.push_str(head);
+            masked.push_str(marker);
+            rest = &tail[marker.len()..];
+            let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+            if digits.is_empty() {
+                continue;
+            }
+            masked.push('#');
+            rest = &rest[digits.len()..];
+        }
+        masked.push_str(rest);
+        masked
+    }
+
+    fn full_vs_fast(root: PlanNodeEnum) {
+        use crate::optimizer::partitioning::PartitioningLayoutInfo;
+        let engine = engine_with_person_stats();
+        let layout = PartitioningLayoutInfo::default();
+        let full = engine
+            .optimize_full_shape(
+                ExecutionPlan::new(Some(root.clone())),
+                Some("test"),
+                &layout,
+                &mut None,
+                false,
+            )
+            .expect("full optimization should succeed");
+        let fast = engine
+            .optimize_fast_shape(
+                ExecutionPlan::new(Some(root)),
+                Some("test"),
+                &layout,
+                &mut None,
+                false,
+            )
+            .expect("fast optimization should succeed");
+        assert_eq!(
+            normalize_counters(&format!("{:?}", full.root)),
+            normalize_counters(&format!("{:?}", fast.root)),
+            "fast path must produce the identical plan tree"
+        );
+        let mut fast_notes = fast.diagnostics.notes.clone();
+        assert!(
+            fast_notes
+                .first()
+                .is_some_and(|note| note.starts_with("fast_shape:")),
+            "fast path must record its short-circuit decision first"
+        );
+        fast_notes.remove(0);
+        assert_eq!(
+            full.diagnostics.notes, fast_notes,
+            "fast path must preserve every other diagnostic note"
+        );
+    }
+
+    #[test]
+    fn fast_path_matches_full_path_on_point_chains() {
+        // Property filter over a tagged scan.
+        full_vs_fast(prop_eq_filter(
+            person_scan("n"),
+            "n",
+            "name",
+            Value::String("alice".into()),
+        ));
+        // Projected point lookup.
+        full_vs_fast(project_var(
+            prop_eq_filter(person_scan("n"), "n", "name", Value::String("a".into())),
+            "n",
+        ));
+        // Bare scan.
+        full_vs_fast(person_scan("n"));
+    }
+
+    #[test]
+    fn fast_path_matches_full_path_on_compound_filters() {
+        // AND-combined filters exercise the merge rules kept in the fast set.
+        let context = Arc::new(ExpressionAnalysisContext::new());
+        let mut tag_predicate = |prop: &str, value: Value| {
+            let predicate = Expression::Binary {
+                left: Box::new(Expression::Property {
+                    object: Box::new(Expression::Variable("n".to_string())),
+                    property: prop.to_string(),
+                }),
+                op: linkrs_core::types::operators::BinaryOperator::Equal,
+                right: Box::new(Expression::Literal(value)),
+            };
+            let id = context.register_expression(ExpressionMeta::new(predicate));
+            ContextualExpression::new(id, context.clone())
+        };
+        let first = FilterNode::new(
+            person_scan("n"),
+            tag_predicate("name", Value::String("a".into())),
+        )
+        .expect("filter should build");
+        let second = FilterNode::new(
+            PlanNodeEnum::Filter(first),
+            tag_predicate("value", Value::Int(1)),
+        )
+        .expect("filter should build");
+        full_vs_fast(project_var(PlanNodeEnum::Filter(second), "n"));
+
+        // Constant predicate exercises folding in both paths.
+        let truthy = FilterNode::new(
+            person_scan("n"),
+            ContextualExpression::new(
+                context.register_expression(ExpressionMeta::new(Expression::Literal(Value::Bool(
+                    true,
+                )))),
+                context.clone(),
+            ),
+        )
+        .expect("filter should build");
+        full_vs_fast(PlanNodeEnum::Filter(truthy));
+    }
+
+    #[test]
+    fn fast_path_matches_full_path_on_one_hop() {
+        full_vs_fast(project_var(one_hop_chain(), "b"));
+        full_vs_fast(one_hop_chain());
+    }
+
+    #[test]
+    fn full_path_fires_no_omitted_rules_on_gated_shapes() {
+        use crate::optimizer::partitioning::PartitioningLayoutInfo;
+        let engine = engine_with_person_stats();
+        let layout = PartitioningLayoutInfo::default();
+        let chains = vec![
+            prop_eq_filter(person_scan("n"), "n", "name", Value::String("a".into())),
+            project_var(
+                prop_eq_filter(person_scan("n"), "n", "name", Value::String("a".into())),
+                "n",
+            ),
+            one_hop_chain(),
+        ];
+        for chain in chains {
+            assert!(OptimizerEngine::is_fast_shape(&chain));
+            engine
+                .optimize_full_shape(
+                    ExecutionPlan::new(Some(chain)),
+                    Some("test"),
+                    &layout,
+                    &mut None,
+                    false,
+                )
+                .expect("full optimization should succeed");
+            for (batch, stats) in engine.last_batch_statistics() {
+                for fired in stats.rule_hit_counts.keys() {
+                    assert!(
+                        FAST_RULES.contains(&fired.as_str()),
+                        "full path fired {fired} in {batch:?} on a gated shape"
+                    );
+                }
+            }
+        }
+    }
+}

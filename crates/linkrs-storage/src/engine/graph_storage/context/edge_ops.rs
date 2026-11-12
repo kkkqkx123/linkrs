@@ -610,18 +610,18 @@ impl GraphStorageContext {
             return Ok(false);
         };
 
-        let deleted = self
-            .persistent
-            .data_store
-            .with_single_edge_table_mut(&key, |edge_table| {
-                edge_table.delete_edge_with_sync(
-                    src_internal,
-                    dst_internal,
-                    params.rank,
-                    ts,
-                    !defer_edge_wal_sync(self),
-                )
-            })?;
+        let deleted =
+            self.persistent
+                .data_store
+                .with_single_edge_table_mut(&key, |edge_table| {
+                    edge_table.delete_edge_with_sync(
+                        src_internal,
+                        dst_internal,
+                        params.rank,
+                        ts,
+                        !defer_edge_wal_sync(self),
+                    )
+                })?;
         if deleted {
             self.mark_edge_modified(params.edge_label);
         }

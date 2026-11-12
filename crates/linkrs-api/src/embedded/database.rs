@@ -8,8 +8,8 @@ use crate::embedded::config::DatabaseConfig;
 use crate::embedded::config::EmbeddedVectorEngine;
 use crate::embedded::result::QueryResult;
 use crate::embedded::session::{GraphDatabaseInner, Session};
-use linkrs_core::Value;
 use linkrs_config::fulltext::FulltextConfig;
+use linkrs_core::Value;
 #[cfg(feature = "fulltext")]
 use linkrs_fulltext::FulltextIndexManager;
 use linkrs_metrics::StatsManager;

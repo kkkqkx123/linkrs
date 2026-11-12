@@ -698,7 +698,9 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_fulltext_lookup
         space_name: exec_ctx.space_name.clone().unwrap_or_default(),
         space_id: exec_ctx.current_space_id().unwrap_or(0),
         index_name: node.index_name.clone(),
-        structured_query: crate::parser::ast::fulltext::FulltextQueryExpr::Simple(node.query.clone()),
+        structured_query: crate::parser::ast::fulltext::FulltextQueryExpr::Simple(
+            node.query.clone(),
+        ),
         tag_name: node.tag_name.clone(),
         field_name: node.field_name.clone(),
         limit: node.limit,

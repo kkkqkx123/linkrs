@@ -146,37 +146,40 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         // cache.  Compilation is folded into the execute phase for profiling
         // (optimization happens inside the cache-compile step).
         let execute_start = Instant::now();
-        let (result, statistics_us) =
-            match self.execute_prepared(&request, None, ResultSink::Materialize) {
-                Ok((super::prepared::PreparedOutcome::Materialized(result), statistics_us)) => {
-                    (result, statistics_us)
-                }
-                Ok(_) => unreachable!("materialize sink cannot stream"),
-                Err(e) => {
-                    profile.stages.execute_us = execute_start.elapsed().as_micros() as u64;
-                    profile.stages.statistics_us = 0;
-                    let error_info = ErrorInfo::new(
-                        ErrorType::ExecutionError,
-                        QueryPhase::Execute,
-                        e.to_string(),
-                    );
-                    profile.mark_failed_with_info(error_info.clone());
-                    profile.total_duration_us = total_start.elapsed().as_micros() as u64;
-                    self.stats_manager
-                        .record_failed_query(profile.clone(), error_info);
-                    return Err(e);
-                }
-            };
+        let (result, times) = match self.execute_prepared(&request, None, ResultSink::Materialize) {
+            Ok((super::prepared::PreparedOutcome::Materialized(result), times)) => (result, times),
+            Ok(_) => unreachable!("materialize sink cannot stream"),
+            Err(e) => {
+                profile.stages.execute_us = execute_start.elapsed().as_micros() as u64;
+                profile.stages.statistics_us = 0;
+                profile.stages.plan_us = 0;
+                profile.stages.optimize_us = 0;
+                let error_info = ErrorInfo::new(
+                    ErrorType::ExecutionError,
+                    QueryPhase::Execute,
+                    e.to_string(),
+                );
+                profile.mark_failed_with_info(error_info.clone());
+                profile.total_duration_us = total_start.elapsed().as_micros() as u64;
+                self.stats_manager
+                    .record_failed_query(profile.clone(), error_info);
+                return Err(e);
+            }
+        };
 
         profile.stages.execute_us = execute_start.elapsed().as_micros() as u64;
-        // Per-query collection time from the planning gate. Cache hits and
-        // freshness skips report zero; only a real collection reports time.
-        // Metrics share this same value so probe and counters stay aligned.
-        profile.stages.statistics_us = statistics_us;
+        // Per-query compile times from the planning gate. Cache hits and
+        // freshness skips report zero; only real work reports time.
+        // Metrics share these same values so probe and counters stay aligned.
+        profile.stages.statistics_us = times.statistics_us;
+        profile.stages.plan_us = times.plan_us;
+        profile.stages.optimize_us = times.optimize_us;
         profile.result_count = result.count();
         metrics.set_result_row_count(result.count());
         metrics.record_execute_time(execute_start.elapsed());
-        metrics.statistics_time_us = statistics_us;
+        metrics.statistics_time_us = times.statistics_us;
+        metrics.record_plan_time(std::time::Duration::from_micros(times.plan_us));
+        metrics.record_optimize_time(std::time::Duration::from_micros(times.optimize_us));
 
         profile.total_duration_us = total_start.elapsed().as_micros() as u64;
         metrics.record_total_time(total_start.elapsed());

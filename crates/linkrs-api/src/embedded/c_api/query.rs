@@ -242,9 +242,7 @@ pub unsafe extern "C" fn linkrs_validate_query(
                     crate::api_core::error::ExtendedErrorCode::SyntaxError
                 };
                 let error = crate::api_core::error::CoreError::detailed_query_error(
-                    error_msg,
-                    extended,
-                    None,
+                    error_msg, extended, None,
                 );
                 let (error_code, _) = error_code_from_core_error(&error);
                 let extended_code = Some(extended_error_code_from_core_error(&error));
