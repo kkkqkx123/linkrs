@@ -185,11 +185,20 @@ neug runner 落点为 `graphdb-ben` 新脚本（与 `lbug-ben` 并列，不混�
 3. 产出一份三方对比 markdown（含 COPY 表、查询中位数、20% 高亮、skip 清单、环境块）。
 4. 全部传输包可复现：他人按本文第 6 节可重建同一 devs 状态。
 
-## 附录：动工核对表
+## 附录：动工核对表（2026-11-12 devs 实测已完成项打勾）
 
-- [ ] 本地 `pip download ladybug==0.22.3 neug` 备齐 wheelhouse（含 `protobuf==5.29.6` pin）
-- [ ] 本地备好用户态 Python 3.11 包
-- [ ] 实测确认 `ladybug` / `lbug` 导入名，定垫片方案并更正 `VENDORED.md` 说明
+- [x] 本地 `pip download ladybug==0.22.3 neug` 备齐 wheelhouse（含 `protobuf==5.29.6` pin）
+  → `/data/kkkqkx/graphdb-ben/wheels/wheelhouse311/`，传输包 `wheelhouse311.tar.gz` + `bench-env.SHA256SUMS`
+- [x] 本地备好用户态 Python 3.11 包 → `/data/kkkqkx/tools/python3.11`（uv standalone 3.11.18）
+- [x] venv（uv 创建，系统包未动）：`/data/kkkqkx/graphdb-ben/.venv-bench`，离线安装 ladybug/neug/psutil
+- [x] 实测确认 `ladybug` / `lbug` 导入名：PyPI wheel 顶层模块为 `ladybug`，`import lbug` 失败；
+  vendored `lbug-ben` 的 `import lbug` 在 wheel 路径下不可用，动用前须加垫片并更正 `VENDORED.md` 说明
+- [x] ladybug 运行时依赖（devs Ubuntu 18.04 缺失，已源码构建）：
+  OpenSSL 3.0.16 → `/data/kkkqkx/tools/openssl3`，brotli 1.2.0（gcc 直编，cmake 3.10 不达标）→ `/data/kkkqkx/tools/brotli`；
+  通过 `LD_LIBRARY_PATH` 生效（见 `bench-env.sh`），Arch 预编译 .so 因需 GLIBC_2.33+ 不可用
+- [x] 最小数据集验证（LSQB-sf0.1 Person 1700 / knows 18135）：
+  neug `[1700]` / `[18135]` wall-clock 正常；ladybug `[1700]`（exec 2.54ms）/ `[18135]`（exec 0.26ms）正常
+- [x] 环境一键生效：`source /data/kkkqkx/graphdb-ben/bench-env.sh`
 - [ ] `graphdb-ben` git bundle 传 devs 并检出 `lbug-ben/` + `scripts/`
 - [ ] 数据包 A/B 传 devs 并按行数基线抽查
 - [ ] graph500-27 在 devs 现场生成（后置阶段）
