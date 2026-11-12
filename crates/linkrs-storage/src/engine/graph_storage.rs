@@ -168,8 +168,9 @@ impl GraphStorage {
     pub fn finalize_auto_commit_group(
         &self,
         window: &context::AutoCommitBatchWindow,
+        durability: linkrs_core::types::DurabilityLevel,
     ) -> StorageResult<()> {
-        window.finalize_group()
+        window.finalize_group(durability)
     }
 
     fn commit_auto_if_needed(&self) -> StorageResult<()> {
@@ -524,8 +525,9 @@ impl crate::AutoCommitGroupOps for GraphStorage {
     fn finalize_auto_commit_group(
         &self,
         window: &context::AutoCommitBatchWindow,
+        durability: linkrs_core::types::DurabilityLevel,
     ) -> StorageResult<()> {
-        window.finalize_group()
+        window.finalize_group(durability)
     }
 
     fn rollback_auto_commit_group(

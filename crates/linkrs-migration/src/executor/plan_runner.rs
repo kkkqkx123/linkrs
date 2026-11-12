@@ -362,7 +362,7 @@ where
         })();
         match result {
             Ok(()) => storage
-                .finalize_auto_commit_group(&window)
+                .finalize_auto_commit_group(&window, linkrs_core::types::DurabilityLevel::Sync)
                 .map_err(MigrationError::from)?,
             Err(error) => {
                 if let Err(rollback_error) = storage.rollback_auto_commit_group(&window) {
@@ -498,7 +498,7 @@ where
                     });
                 }
                 storage
-                    .finalize_auto_commit_group(&window)
+                    .finalize_auto_commit_group(&window, linkrs_core::types::DurabilityLevel::Sync)
                     .map_err(MigrationError::from)?;
             }
             Err(e) => {
@@ -688,7 +688,7 @@ where
         })();
         match result {
             Ok(()) => storage
-                .finalize_auto_commit_group(&window)
+                .finalize_auto_commit_group(&window, linkrs_core::types::DurabilityLevel::Sync)
                 .map_err(MigrationError::from)?,
             Err(error) => {
                 if let Err(rollback_error) = storage.rollback_auto_commit_group(&window) {
@@ -819,7 +819,7 @@ where
                     });
                 }
                 storage
-                    .finalize_auto_commit_group(&window)
+                    .finalize_auto_commit_group(&window, linkrs_core::types::DurabilityLevel::Sync)
                     .map_err(MigrationError::from)?;
             }
             Err(e) => {

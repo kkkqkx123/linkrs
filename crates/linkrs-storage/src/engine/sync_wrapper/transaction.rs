@@ -32,8 +32,12 @@ impl<S: StorageClient + crate::AutoCommitGroupOps> crate::AutoCommitGroupOps for
         self.inner.begin_auto_commit_group()
     }
 
-    fn finalize_auto_commit_group(&self, window: &AutoCommitBatchWindow) -> StorageResult<()> {
-        self.inner.finalize_auto_commit_group(window)
+    fn finalize_auto_commit_group(
+        &self,
+        window: &AutoCommitBatchWindow,
+        durability: linkrs_core::types::DurabilityLevel,
+    ) -> StorageResult<()> {
+        self.inner.finalize_auto_commit_group(window, durability)
     }
 }
 

@@ -41,11 +41,19 @@ pub trait AutoCommitBatchOps: Send + Sync {
 /// The window is shared with `AutoCommitBatchOps`; `bind_auto_commit_statement`
 /// is mode-aware: bound inside a group window it reuses the shared write
 /// timestamp and undo log, so no separate bind method is needed.
+///
+/// The group commit point takes an explicit durability level. Sync keeps
+/// one fsync covering the whole group; sub-Sync levels skip the fsyncs and
+/// trade crash durability for ingest speed. Callers pass Sync by default.
 pub trait AutoCommitGroupOps: Send + Sync {
     /// Open a group window (gate + shared snapshots + shared write timestamp).
     fn begin_auto_commit_group(&self) -> StorageResult<Arc<AutoCommitBatchWindow>>;
-    /// Single group commit point: one fsync, barrier advance, one ts commit.
-    fn finalize_auto_commit_group(&self, window: &AutoCommitBatchWindow) -> StorageResult<()>;
+    /// Single group commit point with explicit durability.
+    fn finalize_auto_commit_group(
+        &self,
+        window: &AutoCommitBatchWindow,
+        durability: linkrs_core::types::DurabilityLevel,
+    ) -> StorageResult<()>;
     /// Roll back every statement bound to this group via its shared undo log,
     /// then release the window's snapshots and gate. Default: not supported.
     fn rollback_auto_commit_group(&self, _window: &AutoCommitBatchWindow) -> StorageResult<()> {

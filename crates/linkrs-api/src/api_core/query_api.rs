@@ -398,17 +398,20 @@ where
 {
     /// Execute a batch of auto-commit DML statements in group-commit windows.
     /// `group_size` is clamped to >= 1; each consecutive group of statements
-    /// shares one write timestamp, one WAL fsync, and one commit point.
+    /// shares one write timestamp, one commit point, and one durability barrier.
     /// Statement results are returned per statement, in order, exactly like
     /// `execute_batch`; failed statements roll back only their own writes,
     /// while a group commit failure rolls the whole group back and marks
     /// every statement of that group failed. DDL / transaction statements /
     /// USE must not be mixed in (same contract as `execute_batch`).
+    /// Durability is explicit per call: Sync fsyncs once per group, sub-Sync
+    /// levels skip the fsyncs and trade crash durability for ingest speed.
     pub fn execute_batch_grouped(
         &mut self,
         queries: &[String],
         ctx: QueryRequest,
         group_size: usize,
+        durability: linkrs_core::types::DurabilityLevel,
     ) -> Vec<Result<QueryResult, CoreError>> {
         let group_size = group_size.max(1);
         let mut results = Vec::with_capacity(queries.len());
@@ -451,7 +454,10 @@ where
             // statement of the group that looked successful must surface the
             // finalize error instead; per-statement errors stay untouched.
             // The vector length always matches the input chunk.
-            if let Err(error) = base_storage.read().finalize_auto_commit_group(&window) {
+            if let Err(error) = base_storage
+                .read()
+                .finalize_auto_commit_group(&window, durability)
+            {
                 let message = error.to_string();
                 let chunk_start = results.len() - chunk.len();
                 for slot in results.iter_mut().skip(chunk_start) {

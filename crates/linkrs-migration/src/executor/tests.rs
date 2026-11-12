@@ -507,6 +507,7 @@ impl AutoCommitGroupOps for TestStorage {
     fn finalize_auto_commit_group(
         &self,
         _window: &linkrs_storage::AutoCommitBatchWindow,
+        _durability: linkrs_core::types::DurabilityLevel,
     ) -> linkrs_core::StorageResult<()> {
         Err(StorageError::not_supported("not supported"))
     }

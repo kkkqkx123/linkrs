@@ -141,8 +141,9 @@ impl<S: StorageClient + crate::AutoCommitGroupOps> crate::AutoCommitGroupOps for
     fn finalize_auto_commit_group(
         &self,
         window: &crate::AutoCommitBatchWindow,
+        durability: linkrs_core::types::DurabilityLevel,
     ) -> StorageResult<()> {
-        self.inner.finalize_auto_commit_group(window)
+        self.inner.finalize_auto_commit_group(window, durability)
     }
 }
 

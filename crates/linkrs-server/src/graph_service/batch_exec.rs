@@ -153,12 +153,13 @@ impl<
     > GraphService<S>
 {
     /// Execute a batch of auto-commit DML statements inside shared
-    /// group-commit windows.
+    /// group-commit windows with explicit durability.
     pub async fn execute_batch_grouped(
         &self,
         session_id: i64,
         statements: &[String],
         group_size: usize,
+        durability: linkrs_core::types::DurabilityLevel,
     ) -> Vec<Result<QueryResult, GraphServiceError>> {
         let Some(session) = self.session_manager.find_session(session_id) else {
             return statements
@@ -219,10 +220,12 @@ impl<
             parsed_statement: None,
             consistency: Default::default(),
         };
-        let outcomes =
-            self.query_api
-                .write()
-                .execute_batch_grouped(&permitted, query_request, group_size);
+        let outcomes = self.query_api.write().execute_batch_grouped(
+            &permitted,
+            query_request,
+            group_size,
+            durability,
+        );
 
         merge_batch_outcomes(&mut results, &batch_indices, &denied, outcomes);
         finalize_batch_outcomes(results)

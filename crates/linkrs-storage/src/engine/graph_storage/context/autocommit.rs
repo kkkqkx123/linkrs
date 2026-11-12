@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use parking_lot::Mutex;
 
+use linkrs_core::types::DurabilityLevel;
 use linkrs_core::types::EdgeIdentifier;
 use linkrs_core::types::Timestamp;
 use linkrs_core::{StorageError, StorageResult};
@@ -370,50 +371,68 @@ impl AutoCommitBatchWindow {
         self.group.load(Ordering::Acquire)
     }
 
-    /// Single group commit point: one fsync, then barrier advance, then the
-    /// shared write-timestamp commit. Order: durability → visibility.
+    /// Single group commit point with explicit durability, then barrier advance,
+    /// then the shared write-timestamp commit. Order: durability → visibility.
     /// The shared timestamp settles through the commit-ordered path so group
     /// commits share the commit-stamp coordinate with explicit transactions,
     /// and the accumulated window write set is published for later
-    /// certification.
-    pub fn finalize_group(&self) -> StorageResult<()> {
+    /// certification. Sync performs one fsync covering the appended group redo
+    /// plus one table-log sweep; sub-Sync levels skip both fsyncs and only
+    /// publish the in-memory barriers, trading crash durability for speed.
+    pub fn finalize_group(&self, durability: DurabilityLevel) -> StorageResult<()> {
         // 0) Commit apply: the group's staged vertex rows install into the
         // main tables, then the accumulated WAL redo is appended as one
         // transaction (no fsync yet). A failure here aborts the whole group.
         let group_txid = *self.group_transaction_id.lock();
-        if let Some(txid) = group_txid {
+        let group_commit_lsn = if let Some(txid) = group_txid {
             if let Err(error) = self.base_ctx.apply_txn_staging(txid) {
                 let _ = self.rollback_group();
                 return Err(error);
             }
-            if let Err(error) = self.base_ctx.commit_staged_writes_grouped(txid, &[]) {
-                let _ = self.rollback_group();
-                return Err(error);
+            match self.base_ctx.commit_staged_writes_grouped(txid, &[]) {
+                Ok(lsn) => lsn,
+                Err(error) => {
+                    let _ = self.rollback_group();
+                    return Err(error);
+                }
             }
-        }
-        // 1) Durability: one sync covering the appended group redo.
-        if let Some(persistence) = self.base_ctx.persistent.persistence.as_ref() {
-            if let Some(wal) = persistence.read().wal_manager() {
-                wal.read().sync()?;
-                let durable = wal.read().durable_lsn();
+        } else {
+            linkrs_core::types::CommitLsn::ZERO
+        };
+        // 1) Durability: Sync performs one sync covering the appended group redo.
+        // Sub-Sync skips the fsyncs and only advances the in-memory barriers.
+        if durability == DurabilityLevel::Sync {
+            if let Some(persistence) = self.base_ctx.persistent.persistence.as_ref() {
+                if let Some(wal) = persistence.read().wal_manager() {
+                    wal.read().sync()?;
+                    let durable = wal.read().durable_lsn();
+                    self.base_ctx
+                        .persistent
+                        .index_data_manager
+                        .read()
+                        .advance_barriers(linkrs_core::types::CommitLsn::new(durable.as_u64()));
+                }
+            }
+            // 1b) Table-log sweep: grouped statements defer their per-edge
+            // table-WAL fsyncs, so every armed table log is fsynced once here,
+            // after the global WAL is durable. Without this sweep the group's
+            // "one fsync" would cover only the global log.
+            self.base_ctx
+                .persistent
+                .data_store
+                .for_all_edge_partitions_mut(|_, table| {
+                    table.sync_wal_file()?;
+                    Ok(())
+                })?;
+        } else if group_commit_lsn != linkrs_core::types::CommitLsn::ZERO {
+            if self.base_ctx.persistent.persistence.is_some() {
                 self.base_ctx
                     .persistent
                     .index_data_manager
                     .read()
-                    .advance_barriers(linkrs_core::types::CommitLsn::new(durable.as_u64()));
+                    .advance_barriers(group_commit_lsn);
             }
         }
-        // 1b) Table-log sweep: grouped statements defer their per-edge
-        // table-WAL fsyncs, so every armed table log is fsynced once here,
-        // after the global WAL is durable. Without this sweep the group's
-        // "one fsync" would cover only the global log.
-        self.base_ctx
-            .persistent
-            .data_store
-            .for_all_edge_partitions_mut(|_, table| {
-                table.sync_wal_file()?;
-                Ok(())
-            })?;
         // 2) Visibility: commit the shared write timestamp once, in commit
         // order, then publish the merged window write set.
         if let Some(ts) = *self.first_ts.lock() {

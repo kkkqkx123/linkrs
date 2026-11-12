@@ -1264,6 +1264,7 @@ impl crate::AutoCommitGroupOps for MockStorage {
     fn finalize_auto_commit_group(
         &self,
         _window: &crate::engine::graph_storage::AutoCommitBatchWindow,
+        _durability: linkrs_core::types::DurabilityLevel,
     ) -> StorageResult<()> {
         Err(StorageError::not_supported(
             "MockStorage does not support group commit",
