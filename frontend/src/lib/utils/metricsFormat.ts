@@ -100,6 +100,13 @@ export function formatQps(value: unknown): string {
 	return numberFormatter().format(Number(num.toFixed(num < 10 ? 2 : 1)));
 }
 
+/** Similarity score: fixed 4 decimals. */
+export function formatScore(value: unknown): string {
+	const num = toFiniteNumber(value);
+	if (num === null) return MISSING;
+	return num.toFixed(4);
+}
+
 /** Permille (backend fragmentation unit) to percent label. */
 export function formatPermille(value: unknown): string {
 	const num = toFiniteNumber(value);

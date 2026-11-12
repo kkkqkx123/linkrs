@@ -7,9 +7,9 @@
 	import LanguageSwitcher from '$components/common/LanguageSwitcher.svelte';
 	import ThemeToggle from '$components/common/ThemeToggle.svelte';
 	import HealthMonitor from '$components/business/monitoring/HealthMonitor.svelte';
-	import { toggleDensity, density } from '$stores/ui';
+	import { toggleDensity, density, openCommandPalette } from '$stores/ui';
 	import { fromStore } from 'svelte/store';
-	import { Rows3, User } from '@lucide/svelte';
+	import { Rows3, Search, User } from '@lucide/svelte';
 
 	const densityState = fromStore(density);
 	function densityLabel(d: 'comfortable' | 'dense'): string {
@@ -42,6 +42,19 @@
 		{/if}
 	</div>
 	<div class="flex items-center gap-3">
+		<button
+			type="button"
+			class="ui-btn ui-btn-ghost !px-3 !py-1 flex items-center gap-2"
+			onclick={openCommandPalette}
+			title={t('palette.open')}
+			aria-label={t('palette.open')}
+		>
+			<Search size={16} />
+			<kbd
+				class="hidden md:inline text-xs font-mono text-faint border border-line rounded px-1"
+				>Ctrl K</kbd
+			>
+		</button>
 		<LanguageSwitcher />
 		<ThemeToggle />
 		<HealthMonitor />

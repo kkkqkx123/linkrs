@@ -67,3 +67,14 @@ export function applyRouteDensity(path: string): void {
 		path.startsWith('/monitoring') || path.startsWith('/sessions');
 	density.set(defaultDense ? 'dense' : 'comfortable');
 }
+
+/** Command palette visibility, driven by Ctrl/Cmd+K and the header button. */
+export const commandPaletteOpen = writable(false);
+
+export function openCommandPalette(): void {
+	commandPaletteOpen.set(true);
+}
+
+export function closeCommandPalette(): void {
+	commandPaletteOpen.set(false);
+}

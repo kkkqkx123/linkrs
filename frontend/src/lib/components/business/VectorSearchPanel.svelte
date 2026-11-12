@@ -1,8 +1,11 @@
 <script lang="ts">
 	import { t } from '$i18n';
 	import EmptyState from '$components/common/EmptyState.svelte';
+	import StructuredPayload from '$components/common/StructuredPayload.svelte';
+	import SpaceIdSelect from '$components/business/retrieval/SpaceIdSelect.svelte';
 	import { queryService } from '$services/query';
 	import { vectorService } from '$services/vector';
+	import { formatScore } from '$utils/metricsFormat';
 
 	let { currentSpace }: { currentSpace: string | null } = $props();
 
@@ -27,21 +30,19 @@
 	let rebuildId = $state('');
 	let manageLoading = $state(false);
 	let manageError = $state<string | null>(null);
-	let manageResultText = $state('');
+	let managePayload = $state<unknown>(null);
 
-	function stringify(payload: unknown): string {
-		try {
-			return JSON.stringify(payload, null, 2);
-		} catch {
-			return String(payload ?? '');
-		}
-	}
+	/** Column holding the similarity value, if the backend reports one. */
+	const scoreColumn = $derived(
+		columns.find((col) => /score|similarity|distance/i.test(col)) ?? null,
+	);
 
 	async function runManage(fn: () => Promise<unknown>) {
 		manageLoading = true;
 		manageError = null;
+		managePayload = null;
 		try {
-			manageResultText = stringify(await fn());
+			managePayload = await fn();
 		} catch (err) {
 			manageError =
 				err instanceof Error ? err.message : t('notification.requestFailed');
@@ -132,12 +133,14 @@
 			<div class="flex gap-2">
 				<button
 					class="ui-chip {mode === 'vector' ? 'ui-chip-active' : ''}"
+					aria-pressed={mode === 'vector'}
 					onclick={() => (mode = 'vector')}
 				>
 					{t('dataBrowser.retrieval.modeVector')}
 				</button>
 				<button
 					class="ui-chip {mode === 'text' ? 'ui-chip-active' : ''}"
+					aria-pressed={mode === 'text'}
 					onclick={() => (mode = 'text')}
 				>
 					{t('dataBrowser.retrieval.modeText')}
@@ -186,22 +189,24 @@
 				<table class="ui-table w-full border-collapse">
 					<thead>
 						<tr class="bg-secondary">
+		{#each columns as col (col)}
+							<th>{col}</th>
+						{/each}
+					</tr>
+				</thead>
+				<tbody>
+					{#each rows as row, i (i)}
+						<tr class={i === 0 ? 'bg-primary-light' : ''}>
 							{#each columns as col (col)}
-								<th>{col}</th>
+								<td class="max-w-60 truncate font-mono text-xs">
+									{col === scoreColumn
+										? formatScore(row[col])
+										: String(row[col] ?? '')}
+								</td>
 							{/each}
 						</tr>
-					</thead>
-					<tbody>
-						{#each rows as row, i (i)}
-							<tr>
-								{#each columns as col (col)}
-									<td class="max-w-60 truncate font-mono text-xs">
-										{String(row[col] ?? '')}
-									</td>
-								{/each}
-							</tr>
-						{/each}
-					</tbody>
+					{/each}
+				</tbody>
 				</table>
 			</div>
 		{:else}
@@ -221,15 +226,11 @@
 				{manageLoading ? t('common.loading') : t('vector.list')}
 			</button>
 		</div>
-		<div class="grid md:grid-cols-4 gap-2 text-sm mb-3">
-			<label class="ui-field">
-				{t('vector.spaceId')}
-				<input
-					type="number"
-					class="ui-input ui-input-sm font-mono"
-					bind:value={spaceId}
-				/>
-			</label>
+	<div class="grid md:grid-cols-4 gap-2 text-sm mb-3">
+		<div class="ui-field">
+			<span class="text-xs text-muted">{t('vector.spaceId')}</span>
+			<SpaceIdSelect bind:spaceId {currentSpace} />
+		</div>
 			<label class="ui-field">
 				{t('vector.tag')}
 				<input class="ui-input ui-input-sm font-mono" bind:value={tagName} />
@@ -331,8 +332,10 @@
 		{#if manageError}
 			<p class="ui-error-text mt-2">{manageError}</p>
 		{/if}
-		{#if manageResultText}
-			<pre class="ui-pre mt-3">{manageResultText}</pre>
+		{#if managePayload !== null}
+			<div class="mt-3">
+				<StructuredPayload payload={managePayload} />
+			</div>
 		{/if}
 	</section>
 </div>

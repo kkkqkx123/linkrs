@@ -33,6 +33,47 @@
 			exportOpen = false;
 		}
 	}
+
+	/** Keyboard support for the export menu: arrows cycle between the
+	 * items, Escape closes and restores focus to the trigger button. */
+	function handleMenuKeydown(e: KeyboardEvent) {
+		const target = e.target as HTMLElement;
+		if (e.key === 'Escape') {
+			e.preventDefault();
+			exportOpen = false;
+			const trigger = exportMenuEl?.querySelector<HTMLButtonElement>(
+				'button[aria-haspopup="menu"]',
+			);
+			trigger?.focus();
+			return;
+		}
+		const items = [
+			...(exportMenuEl?.querySelectorAll<HTMLButtonElement>(
+				'[role="menuitem"]',
+			) ?? []),
+		];
+		if (items.length === 0) return;
+		if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+		e.preventDefault();
+		const current = items.indexOf(
+			items.find((item) => item === target) ?? items[0],
+		);
+		const next =
+			e.key === 'ArrowDown'
+				? (current + 1) % items.length
+				: (current - 1 + items.length) % items.length;
+		items[next].focus();
+	}
+
+	// Move focus into the menu as soon as it opens so arrow keys work.
+	$effect(() => {
+		if (!exportOpen) return;
+		requestAnimationFrame(() => {
+			exportMenuEl
+				?.querySelector<HTMLButtonElement>('[role="menuitem"]')
+				?.focus();
+		});
+	});
 	let cyInstance = $state<cytoscape.Core | null>(null);
 	let relayoutToken = $state(0);
 	let isExpanding = $state(false);
@@ -168,6 +209,48 @@
 			}
 		});
 	});
+
+	/** Search hits for the match list. The predicate mirrors the canvas
+	 * highlight effect: id plus any property value contains the query. */
+	function matchesSearch(
+		node: { id: string; properties: Record<string, unknown> },
+		query: string,
+	): boolean {
+		const q = query.toLowerCase();
+		if (node.id.toLowerCase().includes(q)) return true;
+		return Object.values(node.properties).some((v) =>
+			String(v).toLowerCase().includes(q),
+		);
+	}
+
+	const SEARCH_MATCH_LIMIT = 50;
+	/** Total hits plus the first page of them for the floating list. */
+	const searchMatches = $derived.by(() => {
+		if (!graphData || !searchQuery.trim()) {
+			return { total: 0, items: [] as { id: string; tag: string }[] };
+		}
+		const items: { id: string; tag: string }[] = [];
+		let total = 0;
+		for (const node of graphData.nodes) {
+			if (!matchesSearch(node, searchQuery)) continue;
+			total += 1;
+			if (items.length < SEARCH_MATCH_LIMIT) {
+				items.push({ id: node.id, tag: node.tag });
+			}
+		}
+		return { total, items };
+	});
+
+	/** Focus a listed hit: select it on the canvas, zoom in and center. */
+	function jumpToMatch(id: string) {
+		if (!cyInstance) return;
+		const ele = cyInstance.getElementById(id);
+		if (ele.empty()) return;
+		cyInstance.elements().unselect();
+		ele.select();
+		cyInstance.zoom(Math.max(cyInstance.zoom(), 1.5));
+		cyInstance.center(ele);
+	}
 
 	function handleNodeTap(data: {
 		id: string;
@@ -413,6 +496,8 @@
 				<button
 					class="ui-btn ui-btn-ghost ui-btn-sm whitespace-nowrap"
 					onclick={() => (exportOpen = !exportOpen)}
+					aria-haspopup="menu"
+					aria-expanded={exportOpen}
 					disabled={!graphData}
 				>
 					{t('graph.export')} ▾
@@ -420,9 +505,14 @@
 				{#if exportOpen}
 					<div
 						class="absolute right-0 top-full mt-1 z-20 min-w-32 ui-card shadow-lg py-1"
+						role="menu"
+						tabindex="-1"
+						aria-label={t('graph.export')}
+						onkeydown={handleMenuKeydown}
 					>
 						<button
 							class="ui-menu-item whitespace-nowrap"
+							role="menuitem"
 							onclick={() => {
 								exportOpen = false;
 								handleExportPng();
@@ -432,6 +522,7 @@
 						</button>
 						<button
 							class="ui-menu-item whitespace-nowrap"
+							role="menuitem"
 							onclick={() => {
 								exportOpen = false;
 								handleExportJson();
@@ -500,6 +591,7 @@
 					{#each Object.keys(nodeStyles) as tag (tag)}
 						<button
 							class="ui-chip {filterTags.has(tag) ? 'ui-chip-active' : ''}"
+							aria-pressed={filterTags.has(tag)}
 							onclick={() => graphStore.toggleFilterTag(tag)}
 						>
 							{tag}
@@ -517,6 +609,7 @@
 							class="ui-chip {filterEdgeTypes.has(type)
 								? 'ui-chip-active'
 								: ''}"
+							aria-pressed={filterEdgeTypes.has(type)}
 							onclick={() => graphStore.toggleFilterEdgeType(type)}
 						>
 							{type}
@@ -696,6 +789,37 @@
 					onBackgroundTap={handleBackgroundTap}
 					onZoom={(z) => graphStore.setZoom(z)}
 				/>
+				{#if searchMatches.items.length > 0}
+					<nav
+						class="absolute bottom-2 left-2 w-64 max-h-64 overflow-y-auto bg-surface/95 shadow-lg rounded border border-line text-sm"
+						aria-label={t('graph.matchList')}
+					>
+						<p
+							class="px-3 py-2 text-xs font-medium text-ink border-b border-line sticky top-0 bg-surface"
+						>
+							{t('graph.matchCount', {
+								count: searchMatches.total,
+							})}
+						</p>
+						<ul>
+							{#each searchMatches.items as match (match.id)}
+								<li>
+									<button
+										type="button"
+										class="w-full text-left px-3 py-1.5 hover:bg-hover transition-colors cursor-pointer"
+										title={t('graph.jumpToMatch')}
+										onclick={() => jumpToMatch(match.id)}
+									>
+										<span class="block truncate font-mono text-xs text-ink"
+											>{match.id}</span>
+										<span class="block truncate text-xs text-muted"
+											>{match.tag}</span>
+									</button>
+								</li>
+							{/each}
+						</ul>
+					</nav>
+				{/if}
 				<div
 					class="absolute bottom-2 right-2 text-xs text-muted bg-surface/80 px-2 py-1 rounded"
 				>

@@ -5,8 +5,9 @@
 	import { page } from '$app/state';
 	import { t } from '$i18n';
 	import { isAuthenticated, connectionStore } from '$stores/connection';
-	import { applyRouteDensity } from '$stores/ui';
+	import { applyRouteDensity, openCommandPalette } from '$stores/ui';
 	import LoadingScreen from '$components/common/LoadingScreen.svelte';
+	import CommandPalette from '$components/common/CommandPalette.svelte';
 	import Header from '$components/layout/Header.svelte';
 	import Sidebar from '$components/layout/Sidebar.svelte';
 
@@ -24,6 +25,12 @@
 		applyRouteDensity(page.url.pathname);
 	});
 
+	onMount(() => {
+		window.addEventListener('keydown', handleGlobalKeydown);
+		return () =>
+			window.removeEventListener('keydown', handleGlobalKeydown);
+	});
+
 	onMount(async () => {
 		if (!get(isAuthenticated)) {
 			const state = get(connectionStore);
@@ -37,6 +44,14 @@
 		}
 		checking = false;
 	});
+
+	/** Ctrl/Cmd+K opens the command palette from any page. */
+	function handleGlobalKeydown(e: KeyboardEvent) {
+		if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) {
+			e.preventDefault();
+			openCommandPalette();
+		}
+	}
 </script>
 
 {#if checking}
@@ -57,6 +72,7 @@
 			</main>
 		</div>
 	</div>
+	<CommandPalette />
 {:else}
 	<p class="p-6 text-sm text-muted">
 		{t('common.redirecting')}

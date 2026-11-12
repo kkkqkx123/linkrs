@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { t } from '$i18n';
 	import EmptyState from '$components/common/EmptyState.svelte';
+	import StructuredPayload from '$components/common/StructuredPayload.svelte';
+	import SpaceIdSelect from '$components/business/retrieval/SpaceIdSelect.svelte';
 	import { queryService } from '$services/query';
 	import { fulltextService } from '$services/fulltext';
 
@@ -23,21 +25,14 @@
 	let rebuildId = $state('');
 	let manageLoading = $state(false);
 	let manageError = $state<string | null>(null);
-	let resultText = $state('');
-
-	function stringify(payload: unknown): string {
-		try {
-			return JSON.stringify(payload, null, 2);
-		} catch {
-			return String(payload ?? '');
-		}
-	}
+	let managePayload = $state<unknown>(null);
 
 	async function runManage(fn: () => Promise<unknown>) {
 		manageLoading = true;
 		manageError = null;
+		managePayload = null;
 		try {
-			resultText = stringify(await fn());
+			managePayload = await fn();
 		} catch (err) {
 			manageError =
 				err instanceof Error ? err.message : t('notification.requestFailed');
@@ -165,15 +160,11 @@
 				{manageLoading ? t('common.loading') : t('fulltext.inconsistent')}
 			</button>
 		</div>
-		<div class="grid md:grid-cols-3 gap-2 text-sm mb-3">
-			<label class="ui-field">
-				{t('vector.spaceId')}
-				<input
-					type="number"
-					class="ui-input ui-input-sm font-mono"
-					bind:value={spaceId}
-				/>
-			</label>
+	<div class="grid md:grid-cols-3 gap-2 text-sm mb-3">
+		<div class="ui-field">
+			<span class="text-xs text-muted">{t('vector.spaceId')}</span>
+			<SpaceIdSelect bind:spaceId {currentSpace} />
+		</div>
 			<label class="ui-field">
 				{t('vector.tag')}
 				<input class="ui-input ui-input-sm font-mono" bind:value={tagName} />
@@ -227,8 +218,10 @@
 		{#if manageError}
 			<p class="ui-error-text mt-2">{manageError}</p>
 		{/if}
-		{#if resultText}
-			<pre class="ui-pre mt-3">{resultText}</pre>
+		{#if managePayload !== null}
+			<div class="mt-3">
+				<StructuredPayload payload={managePayload} />
+			</div>
 		{/if}
 	</section>
 </div>

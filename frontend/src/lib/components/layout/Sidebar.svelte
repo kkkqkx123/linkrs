@@ -1,24 +1,16 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { page } from '$app/state';
-	import { t, type MessageKey } from '$i18n';
+	import { t } from '$i18n';
 	import { canManageUsers } from '$stores/connection';
 	import { storage, getLegacyRaw } from '$utils/storage';
 	import { fromStore } from 'svelte/store';
-	import type { LucideIcon } from '@lucide/svelte';
 	import {
-		Keyboard,
-		Database,
-		Table,
-		LineChart,
-		Route,
-		Package,
-		Repeat,
-		Users,
-		PlugZap,
-		Activity,
-		RefreshCw,
-	} from '@lucide/svelte';
+		GROUP_ORDER,
+		MENU_ITEMS,
+		groupLabels,
+		type MenuItem,
+	} from '$config/navigation';
 
 	const path = $derived(page.url.pathname);
 	const managesUsers = fromStore(canManageUsers);
@@ -108,109 +100,8 @@
 		window.addEventListener('pointerup', onUp);
 	}
 
-	interface MenuItem {
-		key: string;
-		icon: LucideIcon;
-		label: MessageKey;
-		route?: string;
-		requiresUsers?: boolean;
-		group: GroupKey;
-	}
-
-	// Group order drives the rendered section order.
-	const GROUP_ORDER = ['explore', 'data', 'ops'] as const;
-	type GroupKey = (typeof GROUP_ORDER)[number];
-
-	const groupLabels: Record<GroupKey, MessageKey> = {
-		explore: 'sidebar.group.explore',
-		data: 'sidebar.group.data',
-		ops: 'sidebar.group.ops',
-	};
-
-	const menuItems: MenuItem[] = [
-		{
-			key: '/console',
-			icon: Keyboard,
-			label: 'sidebar.console',
-			route: '/console',
-			group: 'explore',
-		},
-		{
-			key: '/data-browser',
-			icon: Table,
-			label: 'sidebar.dataBrowser',
-			route: '/data-browser',
-			group: 'explore',
-		},
-		{
-			key: '/schema',
-			icon: Database,
-			label: 'sidebar.schema',
-			route: '/schema',
-			group: 'data',
-		},
-		{
-			key: '/batch',
-			icon: Package,
-			label: 'sidebar.batch',
-			route: '/batch',
-			group: 'data',
-		},
-		{
-			key: '/transfer',
-			icon: Repeat,
-			label: 'sidebar.transfer',
-			route: '/transfer',
-			group: 'data',
-		},
-		{
-			key: '/monitoring',
-			icon: LineChart,
-			label: 'sidebar.monitoring',
-			route: '/monitoring',
-			group: 'ops',
-		},
-		{
-			key: '/transactions',
-			icon: Activity,
-			label: 'sidebar.transactions',
-			route: '/transactions',
-			group: 'ops',
-		},
-		{
-			key: '/sync',
-			icon: RefreshCw,
-			label: 'sidebar.sync',
-			route: '/sync',
-			group: 'ops',
-		},
-		{
-			key: '/migration',
-			icon: Route,
-			label: 'sidebar.migration',
-			route: '/migration',
-			group: 'ops',
-		},
-		{
-			key: '/users',
-			icon: Users,
-			label: 'sidebar.users',
-			route: '/users',
-			requiresUsers: true,
-			group: 'ops',
-		},
-		{
-			key: '/sessions',
-			icon: PlugZap,
-			label: 'sidebar.sessions',
-			route: '/sessions',
-			requiresUsers: true,
-			group: 'ops',
-		},
-	];
-
 	const visibleItems = $derived(
-		menuItems.filter((item) => !item.requiresUsers || managesUsers.current),
+		MENU_ITEMS.filter((item) => !item.requiresUsers || managesUsers.current),
 	);
 
 	const groupedItems = $derived(
