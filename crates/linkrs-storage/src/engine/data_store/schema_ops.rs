@@ -214,4 +214,27 @@ impl GraphDataStore {
         }
         Ok(())
     }
+
+    pub(crate) fn insert_edge_partition_if_missing(
+        &self,
+        key: super::EdgeTableKey,
+        table: EdgeStore,
+    ) -> StorageResult<std::sync::Arc<parking_lot::RwLock<EdgeStore>>> {
+        if let Some(arc) = self.edge_tables.read().get(&key).cloned() {
+            return Ok(arc);
+        }
+        let mut tables = self.write_edge_tables();
+        if let Some(arc) = tables.get(&key).cloned() {
+            return Ok(arc);
+        }
+        let arc = std::sync::Arc::new(parking_lot::RwLock::new(table));
+        tables.insert(key, arc.clone());
+        drop(tables);
+        let mut index = self.write_edge_label_index();
+        let entry = index.entry(key.edge_label).or_default();
+        if !entry.contains(&key) {
+            entry.push(key);
+        }
+        Ok(arc)
+    }
 }

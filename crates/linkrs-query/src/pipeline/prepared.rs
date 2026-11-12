@@ -137,10 +137,17 @@ impl<S: QueryStorage + 'static> crate::pipeline::QueryPipelineManager<S> {
         rctx: Arc<QueryRequestContext>,
         space_info: Option<SpaceInfo>,
     ) -> DBResult<PreparedRequest> {
+        let timing_enabled = log::log_enabled!(log::Level::Debug);
+        let parse_start = if timing_enabled {
+            Some(std::time::Instant::now())
+        } else {
+            None
+        };
         let mut parser_result = match rctx.parsed_statement.clone() {
             Some(ast) => crate::parser::parsing::ParserResult { ast },
             None => self.parse_into_context(query_text)?,
         };
+        let parse_us = parse_start.map(|start| start.elapsed().as_micros() as u64);
 
         let (effective_query, effective_rctx, dml_shape_cacheable) = if self.dml_shape_cache_enabled
             && classify::is_direct_dml_statement(parser_result.ast.stmt())
@@ -176,7 +183,8 @@ impl<S: QueryStorage + 'static> crate::pipeline::QueryPipelineManager<S> {
                 };
                 match normalized {
                     Some(normalized) => {
-                        let mut updated = (*rctx).clone();
+                        let mut updated = Arc::try_unwrap(rctx)
+                            .unwrap_or_else(|shared| (*shared).clone());
                         updated.query = shape.normalized_text.clone();
                         for (index, value) in shape.values.iter().enumerate() {
                             updated.parameters.insert(
@@ -211,6 +219,11 @@ impl<S: QueryStorage + 'static> crate::pipeline::QueryPipelineManager<S> {
             && effective_rctx.auto_commit
             && (needs_write || is_ddl_statement || is_read_only_statement);
 
+        let binding_start = if timing_enabled {
+            Some(std::time::Instant::now())
+        } else {
+            None
+        };
         let (operation_storage, effective_rctx, owns_operation_storage) =
             if auto_commit_needs_binding {
                 let storage = if needs_write || is_ddl_statement {
@@ -218,7 +231,8 @@ impl<S: QueryStorage + 'static> crate::pipeline::QueryPipelineManager<S> {
                 } else {
                     self.bind_read_operation_storage()?
                 };
-                let mut updated = (*effective_rctx).clone();
+                let mut updated = Arc::try_unwrap(effective_rctx)
+                    .unwrap_or_else(|shared| (*shared).clone());
                 let op_ctx = storage.read().operation_context();
                 updated.transaction_id = op_ctx.as_ref().and_then(|c| c.transaction_id);
                 updated.operation_context = op_ctx.as_deref().cloned();
@@ -231,8 +245,14 @@ impl<S: QueryStorage + 'static> crate::pipeline::QueryPipelineManager<S> {
                     false,
                 )
             };
-
+        let binding_us = binding_start.map(|start| start.elapsed().as_micros() as u64);
+        let context_start = if timing_enabled {
+            Some(std::time::Instant::now())
+        } else {
+            None
+        };
         let query_context = self.query_context_for_request(effective_rctx, space_info.as_ref());
+        let context_us = context_start.map(|start| start.elapsed().as_micros() as u64);
         let ast = parser_result.ast.clone();
         let memo_hit = if dml_shape_cacheable {
             let space_name = query_context
@@ -247,15 +267,63 @@ impl<S: QueryStorage + 'static> crate::pipeline::QueryPipelineManager<S> {
         } else {
             false
         };
-        let bound = if memo_hit {
+        // Early plain-cache probe for read-only shapes: a hit serves without
+        // binding, mirroring the compile-time cache path. Partitioned plans
+        // miss here by design and fall through to bind plus optimize.
+        let probe_start = if timing_enabled {
+            Some(std::time::Instant::now())
+        } else {
+            None
+        };
+        let plain_hit = if !memo_hit
+            && !dml_shape_cacheable
+            && is_read_only_cacheable(parser_result.ast.stmt())
+        {
+            let space_name = query_context
+                .space_name()
+                .or_else(|| query_context.request_context().space_name.clone());
+            let param_sig = self.memo_param_signature(
+                &effective_query,
+                &query_context.request_context().parameters,
+            );
+            let cache_context = self.plan_cache_context(space_name, param_sig);
+            let schema_version = Some(
+                self.schema_generation
+                    .load(std::sync::atomic::Ordering::Relaxed),
+            );
+            self.serve_plain_cache(&effective_query, &cache_context, None, schema_version)
+                .is_some()
+        } else {
+            false
+        };
+        let probe_us = probe_start.map(|start| start.elapsed().as_micros() as u64);
+        let bind_start = if timing_enabled {
+            Some(std::time::Instant::now())
+        } else {
+            None
+        };
+        let bound = if memo_hit || plain_hit {
             self.dml_bind_skipped_count
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             None
         } else {
             self.bind_parsed_statement(parser_result.ast, query_context.clone())?
         };
+        if timing_enabled {
+            let bind_us = bind_start.map(|start| start.elapsed().as_micros() as u64);
+            log::debug!(
+                "prepare segments us: parse={} binding={} context={} probe={} bind={} memo_hit={} plain_hit={}",
+                parse_us.unwrap_or(0),
+                binding_us.unwrap_or(0),
+                context_us.unwrap_or(0),
+                probe_us.unwrap_or(0),
+                bind_us.unwrap_or(0),
+                memo_hit,
+                plain_hit,
+            );
+        }
         Self::finalize_prepare(
-            &effective_query,
+            effective_query,
             query_context,
             ast,
             operation_storage,
@@ -278,7 +346,7 @@ impl<S: QueryStorage + 'static> crate::pipeline::QueryPipelineManager<S> {
     }
 
     fn finalize_prepare(
-        query_text: &str,
+        query_text: String,
         query_context: Arc<QueryContext>,
         ast: Arc<crate::parser::ast::stmt::Ast>,
         operation_storage: Option<Arc<RwLock<dyn QueryStorage>>>,
@@ -292,7 +360,7 @@ impl<S: QueryStorage + 'static> crate::pipeline::QueryPipelineManager<S> {
         let transaction_scope =
             transaction::resolve_transaction_scope(&stmt, query_context.request_context());
         Ok(PreparedRequest {
-            query_text: query_text.to_string(),
+            query_text,
             query_context,
             statement_class,
             dml_op,

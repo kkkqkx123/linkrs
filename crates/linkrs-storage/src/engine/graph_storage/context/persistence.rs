@@ -1,7 +1,9 @@
+use crate::edge::{EdgeSchema, EdgeStore};
 use crate::engine::data_store::EdgeTableKey;
+use crate::types::StoragePropertyDef;
 use linkrs_core::metadata::IndexMetadataManager;
 use linkrs_core::types::LabelId;
-use linkrs_core::StorageResult;
+use linkrs_core::{StorageError, StorageResult};
 use rayon::prelude::*;
 use std::path::Path;
 use std::sync::Arc;
@@ -52,6 +54,61 @@ impl GraphStorageContext {
             }
         }
         Ok(())
+    }
+
+    pub(crate) fn ensure_edge_table_for_restore(
+        &self,
+        key: EdgeTableKey,
+    ) -> StorageResult<Arc<parking_lot::RwLock<EdgeStore>>> {
+        if let Some(arc) = self.persistent.data_store.try_get_edge_table_mut(&key) {
+            return Ok(arc);
+        }
+        let template_schema = self.persistent.data_store.with_edge_tables(|tables| {
+            if let Some(arc) = tables.get(&EdgeTableKey::new(0, 0, key.edge_label)) {
+                return Some(arc.read().schema().clone());
+            }
+            tables
+                .iter()
+                .find(|(c, _)| c.edge_label == key.edge_label)
+                .map(|(_, a)| a.read().schema().clone())
+        });
+        let schema = if let Some(mut s) = template_schema {
+            s.src_label = key.src_label;
+            s.dst_label = key.dst_label;
+            s
+        } else if let Some((_, info)) = self
+            .persistent
+            .schema_manager
+            .find_edge_type_by_id(key.edge_label)
+        {
+            EdgeSchema {
+                label_id: key.edge_label,
+                label_name: info.edge_type_name.clone(),
+                src_label: key.src_label,
+                dst_label: key.dst_label,
+                properties: info
+                    .properties
+                    .iter()
+                    .map(StoragePropertyDef::from_core)
+                    .collect(),
+                oe_strategy: info.oe_strategy,
+                ie_strategy: info.ie_strategy,
+                schema_version: 1,
+                record_form: crate::edge::RecordForm::default(),
+            }
+        } else {
+            return Err(StorageError::deserialize_error(format!(
+                "checkpoint holds unknown edge partition {}_{}_{}",
+                key.src_label, key.dst_label, key.edge_label
+            )));
+        };
+        let mut table = EdgeStore::new(schema)?;
+        if let Some(stats) = self.persistent.stats_manager.as_ref() {
+            table.set_stats_manager(stats.clone());
+        }
+        self.persistent
+            .data_store
+            .insert_edge_partition_if_missing(key, table)
     }
 
     pub(crate) fn flush_tables_to_dir(&self, data_dir: &Path) -> StorageResult<()> {
@@ -612,22 +669,11 @@ impl GraphStorageContext {
                                         ) {
                                             let key =
                                                 EdgeTableKey::new(src_label, dst_label, edge_label);
-                                            let data_store = &self.persistent.data_store;
-                                            if let Some(arc) =
-                                                data_store.try_get_edge_table_mut(&key)
-                                            {
-                                                let mut table = arc.write();
-                                                if let Err(err) = table.load(&path) {
-                                                    log::warn!(
-                                                        "Failed to load edge table for incremental checkpoint {}: {}",
-                                                        path.display(),
-                                                        err
-                                                    );
-                                                } else if let Some(stats) =
-                                                    &self.persistent.stats_manager
-                                                {
-                                                    table.set_stats_manager(stats.clone());
-                                                }
+                                            let arc = self.ensure_edge_table_for_restore(key)?;
+                                            let mut table = arc.write();
+                                            table.load(&path)?;
+                                            if let Some(stats) = &self.persistent.stats_manager {
+                                                table.set_stats_manager(stats.clone());
                                             }
                                         }
                                     }
@@ -742,13 +788,11 @@ impl GraphStorageContext {
                                     parts[2].parse::<LabelId>(),
                                 ) {
                                     let key = EdgeTableKey::new(src_label, dst_label, edge_label);
-                                    let data_store = &self.persistent.data_store;
-                                    if let Some(arc) = data_store.try_get_edge_table_mut(&key) {
-                                        let mut table = arc.write();
-                                        table.load(&path)?;
-                                        if let Some(stats) = &self.persistent.stats_manager {
-                                            table.set_stats_manager(stats.clone());
-                                        }
+                                    let arc = self.ensure_edge_table_for_restore(key)?;
+                                    let mut table = arc.write();
+                                    table.load(&path)?;
+                                    if let Some(stats) = &self.persistent.stats_manager {
+                                        table.set_stats_manager(stats.clone());
                                     }
                                 }
                             }

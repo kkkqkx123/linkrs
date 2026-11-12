@@ -37,7 +37,9 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                     "EXPLAIN/PROFILE target statement could not be bound".to_string(),
                 ))
             })?;
-        self.compile_or_get_cached(&key_text, qctx, Some(&bound), inner_stmt, &ast, false)
+        let (plan, _) =
+            self.compile_or_get_cached(&key_text, qctx, Some(&bound), inner_stmt, &ast, false)?;
+        Ok(plan)
     }
 
     pub fn execute_explain(

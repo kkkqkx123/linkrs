@@ -24,21 +24,23 @@ pub enum PreparedOutcome {
 impl<S: QueryStorage + 'static> crate::pipeline::QueryPipelineManager<S> {
     /// Compile (or get cached) and execute a prepared request with a
     /// materialized or streaming sink, finalizing auto-bound operation
-    /// storage on success/failure.
+    /// storage on success/failure. Returns the outcome with the wall time
+    /// spent collecting statistics for this query (zero on cache hits and
+    /// skips, actual collection time otherwise).
     pub(crate) fn execute_prepared(
         &mut self,
         request: &PreparedRequest,
         transaction_id: Option<TransactionId>,
         sink: ResultSink,
-    ) -> DBResult<PreparedOutcome> {
+    ) -> DBResult<(PreparedOutcome, u64)> {
         match sink {
             ResultSink::Discard => Err(DBError::from(QueryError::execution(
                 "Discard sink must be handled by the caller".to_string(),
             ))),
             ResultSink::Materialize => match self.execute_prepared_inner(request, None, sink) {
-                Ok(outcome) => {
+                Ok((outcome, statistics_us)) => {
                     request.finalize_owned_operation(true)?;
-                    Ok(outcome)
+                    Ok((outcome, statistics_us))
                 }
                 Err(error) => {
                     let _ = request.finalize_owned_operation(false);
@@ -47,7 +49,7 @@ impl<S: QueryStorage + 'static> crate::pipeline::QueryPipelineManager<S> {
             },
             ResultSink::Stream => {
                 match self.execute_prepared_inner(request, transaction_id, sink) {
-                    Ok(PreparedOutcome::Stream(stream)) => {
+                    Ok((PreparedOutcome::Stream(stream), statistics_us)) => {
                         if request.owns_operation_storage {
                             if let Some(storage) = request.operation_storage.clone() {
                                 let commit_storage = storage.clone();
@@ -68,9 +70,9 @@ impl<S: QueryStorage + 'static> crate::pipeline::QueryPipelineManager<S> {
                                 );
                             }
                         }
-                        Ok(PreparedOutcome::Stream(stream))
+                        Ok((PreparedOutcome::Stream(stream), statistics_us))
                     }
-                    Ok(other) => Ok(other),
+                    Ok((other, statistics_us)) => Ok((other, statistics_us)),
                     Err(error) => {
                         let _ = request.finalize_owned_operation(false);
                         Err(error)
@@ -131,9 +133,9 @@ impl<S: QueryStorage + 'static> crate::pipeline::QueryPipelineManager<S> {
         request: &PreparedRequest,
         transaction_id: Option<TransactionId>,
         sink: ResultSink,
-    ) -> DBResult<PreparedOutcome> {
+    ) -> DBResult<(PreparedOutcome, u64)> {
         if request.statement_class == StatementClass::Diagnostic {
-            return Ok(match sink {
+            let outcome = match sink {
                 ResultSink::Materialize => {
                     PreparedOutcome::Materialized(self.execute_diagnostic(request)?)
                 }
@@ -141,57 +143,62 @@ impl<S: QueryStorage + 'static> crate::pipeline::QueryPipelineManager<S> {
                     StreamingQueryResult::from_execution_result(self.execute_diagnostic(request)?),
                 ),
                 ResultSink::Discard => unreachable!("discard sink is rejected by the caller"),
-            });
+            };
+            return Ok((outcome, 0));
         }
         if request.statement_class == StatementClass::Analyze {
             let result = self.execute_analyze(request)?;
-            return Ok(match sink {
+            let outcome = match sink {
                 ResultSink::Materialize => PreparedOutcome::Materialized(result),
                 ResultSink::Stream => {
                     PreparedOutcome::Stream(StreamingQueryResult::from_execution_result(result))
                 }
                 ResultSink::Discard => unreachable!("discard sink is rejected by the caller"),
-            });
+            };
+            return Ok((outcome, 0));
         }
         if let Some(bound) = request.bound_statement.as_ref() {
             if super::super::merge_conditional::is_conditional_node_merge(bound) {
                 Self::reject_conditional_merge_subqueries(request)?;
                 let result = self.execute_conditional_merge(request)?;
-                return Ok(match sink {
+                let outcome = match sink {
                     ResultSink::Materialize => PreparedOutcome::Materialized(result),
                     ResultSink::Stream => {
                         PreparedOutcome::Stream(StreamingQueryResult::from_execution_result(result))
                     }
                     ResultSink::Discard => unreachable!("discard sink is rejected by the caller"),
-                });
+                };
+                return Ok((outcome, 0));
             }
         }
         if let crate::parser::ast::Stmt::UpdateConfigs(update) = &request.stmt {
             let result = Self::prepare_config_update_intent(request, update)?;
-            return Ok(match sink {
+            let outcome = match sink {
                 ResultSink::Materialize => PreparedOutcome::Materialized(result),
                 ResultSink::Stream => {
                     PreparedOutcome::Stream(StreamingQueryResult::from_execution_result(result))
                 }
                 ResultSink::Discard => unreachable!("discard sink is rejected by the caller"),
-            });
+            };
+            return Ok((outcome, 0));
         }
         if let crate::parser::ast::Stmt::ShowConfigs(show) = &request.stmt {
             let result = ExecutionResult::ShowConfigs {
                 module: show.module.clone(),
             };
-            return Ok(match sink {
+            let outcome = match sink {
                 ResultSink::Materialize => PreparedOutcome::Materialized(result),
                 ResultSink::Stream => {
                     PreparedOutcome::Stream(StreamingQueryResult::from_execution_result(result))
                 }
                 ResultSink::Discard => unreachable!("discard sink is rejected by the caller"),
-            });
+            };
+            return Ok((outcome, 0));
         }
         let stream_ddl =
             sink == ResultSink::Stream && request.statement_class == StatementClass::Ddl;
 
-        let physical_plan = self.compile_or_get_cached(
+        let (physical_plan, statistics_us) = self.compile_or_get_cached(
             &request.query_text,
             request.query_context.clone(),
             request.bound_statement.as_ref(),
@@ -228,11 +235,12 @@ impl<S: QueryStorage + 'static> crate::pipeline::QueryPipelineManager<S> {
                 );
             }
             if stream_ddl {
-                return Ok(PreparedOutcome::Stream(
-                    StreamingQueryResult::from_execution_result(result),
+                return Ok((
+                    PreparedOutcome::Stream(StreamingQueryResult::from_execution_result(result)),
+                    statistics_us,
                 ));
             }
-            return Ok(PreparedOutcome::Materialized(result));
+            return Ok((PreparedOutcome::Materialized(result), statistics_us));
         }
 
         let stream = self.execute_compiled_stream_with_scope(
@@ -241,7 +249,7 @@ impl<S: QueryStorage + 'static> crate::pipeline::QueryPipelineManager<S> {
             scope,
         )?;
         self.attach_stream_cache_execution_stats(&stream, request);
-        Ok(PreparedOutcome::Stream(stream))
+        Ok((PreparedOutcome::Stream(stream), statistics_us))
     }
 
     pub(crate) fn execute_diagnostic(

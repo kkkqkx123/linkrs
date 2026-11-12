@@ -38,6 +38,10 @@ pub struct CollectedSummary {
     pub properties: usize,
     /// Whether the result was served from the cached (version-matched) data.
     pub cached: bool,
+    /// Wall time spent in this collection call in microseconds. Zero means
+    /// no collection ran for this query (fresh stamp, lock-contention skip
+    /// or cache hit before the freshness gate).
+    pub elapsed_us: u64,
 }
 
 impl CollectedSummary {
@@ -47,6 +51,7 @@ impl CollectedSummary {
             edge_types,
             properties,
             cached: false,
+            elapsed_us: 0,
         }
     }
 

@@ -266,7 +266,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         if let Some(logical_root) = sub_plan.logical_root().cloned() {
             execution_plan.set_logical_plan(LogicalPlan::new(logical_root));
         }
-        let optimized = self.optimize_execution_plan(execution_plan, Some(space_name))?;
+        let (optimized, _) = self.optimize_execution_plan(execution_plan, Some(space_name))?;
         let physical = self.build_physical_plan(&optimized, query_context)?;
         let result = self.execute_compiled_with_scope(
             physical,

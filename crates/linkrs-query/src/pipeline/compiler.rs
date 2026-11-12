@@ -17,12 +17,16 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         &mut self,
         plan: crate::planning::plan::ExecutionPlan,
         space_name: Option<&str>,
-    ) -> DBResult<crate::planning::plan::ExecutionPlan> {
+    ) -> DBResult<(crate::planning::plan::ExecutionPlan, u64)> {
         // Statistics freshness gate: missing or stale stamps trigger one
         // best-effort collection, never blocking the query on failure.
-        if let Some(space) = space_name {
-            self.ensure_statistics(space);
-        }
+        // The elapsed time belongs to this query only; cache hits that
+        // never reach this gate report zero through the caller.
+        let statistics_us = if let Some(space) = space_name {
+            self.ensure_statistics(space)
+        } else {
+            0
+        };
         // Read the storage-provided layout information (monotonic layout
         // version + self-proven vertex-id domain) so partitioning can be
         // enabled safely when evidence exists. Without storage access the
@@ -54,7 +58,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         let cfg = self.optimizer_engine.partitioning_config();
         optimized.set_max_workers(cfg.max_workers.max(1));
         optimized.set_max_buffered_chunks(cfg.max_buffered_chunks.max(1));
-        Ok(optimized)
+        Ok((optimized, statistics_us))
     }
 
     /// Bind + plan + optimize only, returning the optimized logical plan
@@ -67,14 +71,15 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         query_context: Arc<QueryContext>,
         bound: &BoundStatement,
         ast: &Arc<crate::parser::ast::stmt::Ast>,
-    ) -> DBResult<crate::planning::plan::ExecutionPlan> {
+    ) -> DBResult<(crate::planning::plan::ExecutionPlan, u64)> {
         let execution_plan =
             self.generate_execution_plan_from_bound(query_context.clone(), bound, ast)?;
         let space_name = query_context
             .space_name()
             .or_else(|| query_context.request_context().space_name.clone());
-        let optimized = self.optimize_execution_plan(execution_plan, space_name.as_deref())?;
-        Ok(optimized)
+        let (optimized, statistics_us) =
+            self.optimize_execution_plan(execution_plan, space_name.as_deref())?;
+        Ok((optimized, statistics_us))
     }
 
     pub(crate) fn generate_execution_plan_from_bound(
@@ -161,7 +166,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         stmt: &Stmt,
         ast: &Arc<crate::parser::ast::stmt::Ast>,
         dml_shape_cacheable: bool,
-    ) -> DBResult<Arc<PhysicalPlan>> {
+    ) -> DBResult<(Arc<PhysicalPlan>, u64)> {
         let request = query_context.request_context();
         let space_name = query_context
             .space_name()
@@ -193,7 +198,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         };
 
         if let Some(plan) = self.serve_dml_memo(dml_memo_key.as_ref(), schema_version) {
-            return Ok(plan);
+            return Ok((plan, 0));
         }
 
         if let Some(plan) = self.serve_plain_cache(
@@ -202,7 +207,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             dml_memo_key.clone(),
             schema_version,
         ) {
-            return Ok(plan);
+            return Ok((plan, 0));
         }
 
         let owned_bound;
@@ -217,7 +222,8 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                 &owned_bound
             }
         };
-        let optimized_plan = self.optimize_from_bound(query_context.clone(), bound, ast)?;
+        let (optimized_plan, statistics_us) =
+            self.optimize_from_bound(query_context.clone(), bound, ast)?;
         if let Some(spec) = optimized_plan.partition_spec() {
             if let Some(cached) =
                 self.plan_cache
@@ -231,7 +237,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                     if let Some(key) = dml_memo_key.clone() {
                         self.store_dml_plan(key, cached.plan.clone());
                     }
-                    return Ok(cached.plan.clone());
+                    return Ok((cached.plan.clone(), statistics_us));
                 }
                 self.dml_memo_failures
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -274,7 +280,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                 );
             }
         }
-        Ok(plan)
+        Ok((plan, statistics_us))
     }
 
     /// Serve a DML memo hit through the single checked exit.

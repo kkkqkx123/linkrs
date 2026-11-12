@@ -120,6 +120,9 @@ impl PersistenceCoordinator {
                 if path.is_dir() {
                     visit(root, &path, entries)?;
                 } else if path.is_file() {
+                    if path.file_name().is_some_and(|name| name == "edge_wal.bin") {
+                        continue;
+                    }
                     let relative = path.strip_prefix(root).map_err(|error| {
                         StorageError::invalid_operation(format!(
                             "checkpoint file is outside its root: {}",

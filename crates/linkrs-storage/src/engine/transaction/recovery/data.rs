@@ -281,28 +281,11 @@ impl GraphStorageContext {
                 },
             )?;
 
-        // Materialize the target partition before the insert. A wildcard
-        // endpoint resolves to a concrete label pair whose partition may not
-        // exist yet when the edge is the first write after a checkpoint.
-        self.data_store().with_edge_partition_mut(
-            crate::engine::data_store::EdgeTableKey::new(
-                actual_src_label,
-                actual_dst_label,
-                redo.edge_label,
-            ),
-            crate::engine::data_store::EdgeTableKey::new(0, 0, redo.edge_label),
-            |template| {
-                let mut schema = template.schema().clone();
-                schema.src_label = actual_src_label;
-                schema.dst_label = actual_dst_label;
-                let mut table = crate::edge::EdgeStore::new(schema)?;
-                if let Some(stats) = self.stats_manager().cloned() {
-                    table.set_stats_manager(stats);
-                }
-                Ok(table)
-            },
-            |_| Ok(()),
-        )?;
+        self.ensure_edge_table_for_restore(crate::engine::data_store::EdgeTableKey::new(
+            actual_src_label,
+            actual_dst_label,
+            redo.edge_label,
+        ))?;
 
         let params = AddEdgeParams {
             src_label: actual_src_label,

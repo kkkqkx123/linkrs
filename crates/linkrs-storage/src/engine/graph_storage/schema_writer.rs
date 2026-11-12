@@ -14,7 +14,8 @@ use std::sync::Arc;
 
 use super::context::GraphStorageContext;
 use super::ops::{
-    edge_type_storage_name, endpoint_label_id, tag_label_id, vertex_type_storage_name,
+    edge_label_id, edge_type_storage_name, endpoint_label_id, tag_label_id,
+    vertex_type_storage_name,
 };
 
 fn schema_properties(properties: &[PropertyDef]) -> Vec<(String, String, bool)> {
@@ -781,6 +782,21 @@ pub(crate) fn update_edge_endpoints(
             "Destination tag {dst_tag_name} not found"
         )));
     }
-    ctx.schema_manager()
-        .update_edge_endpoints(space, edge_type_name, src_tag_name, dst_tag_name)
+    ctx.schema_manager().update_edge_endpoints(
+        space,
+        edge_type_name,
+        src_tag_name,
+        dst_tag_name,
+    )?;
+    let edge_label = edge_label_id(ctx, space, edge_type_name)?
+        .ok_or_else(|| StorageError::label_not_found(edge_type_name.to_string()))?;
+    let src_label = endpoint_label_id(ctx, space, src_tag_name)?
+        .ok_or_else(|| StorageError::not_found(format!("Source tag {src_tag_name} not found")))?;
+    let dst_label = endpoint_label_id(ctx, space, dst_tag_name)?.ok_or_else(|| {
+        StorageError::not_found(format!("Destination tag {dst_tag_name} not found"))
+    })?;
+    ctx.ensure_edge_table_for_restore(crate::engine::data_store::EdgeTableKey::new(
+        src_label, dst_label, edge_label,
+    ))?;
+    Ok(true)
 }

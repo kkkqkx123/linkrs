@@ -34,7 +34,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
     ) -> DBResult<ExecutionResult> {
         let request = self.prepare_request_with_auto_commit(query_text, space_info)?;
         match self.execute_prepared(&request, None, ResultSink::Materialize)? {
-            super::prepared::PreparedOutcome::Materialized(result) => Ok(result),
+            (super::prepared::PreparedOutcome::Materialized(result), _) => Ok(result),
             _ => unreachable!("materialize sink cannot stream"),
         }
     }
@@ -57,7 +57,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
     ) -> DBResult<StreamingQueryResult> {
         let request = self.prepare_request(query_text, rctx, space_info)?;
         match self.execute_prepared(&request, transaction_id, ResultSink::Stream)? {
-            super::prepared::PreparedOutcome::Stream(stream) => Ok(stream),
+            (super::prepared::PreparedOutcome::Stream(stream), _) => Ok(stream),
             _ => unreachable!("stream sink cannot materialize"),
         }
     }
@@ -80,7 +80,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
     ) -> DBResult<ExecutionResult> {
         let request = self.prepare_request(query_text, rctx, space_info)?;
         match self.execute_prepared(&request, transaction_id, ResultSink::Materialize)? {
-            super::prepared::PreparedOutcome::Materialized(result) => Ok(result),
+            (super::prepared::PreparedOutcome::Materialized(result), _) => Ok(result),
             _ => unreachable!("materialize sink cannot stream"),
         }
     }
@@ -98,7 +98,8 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         session_id: i64,
         space_info: Option<SpaceInfo>,
     ) -> DBResult<(ExecutionResult, QueryMetrics, QueryProfile)> {
-        self.stats_manager.add_value(MetricType::NumQueries);
+        // Active-query guard only. The completed-query count is recorded
+        // once in record_query_metrics so hot probes do not double count.
         self.stats_manager.add_value(MetricType::NumActiveQueries);
 
         struct ActiveQueryGuard {
@@ -145,32 +146,37 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         // cache.  Compilation is folded into the execute phase for profiling
         // (optimization happens inside the cache-compile step).
         let execute_start = Instant::now();
-        let result = match self.execute_prepared(&request, None, ResultSink::Materialize) {
-            Ok(super::prepared::PreparedOutcome::Materialized(result)) => result,
-            Ok(_) => unreachable!("materialize sink cannot stream"),
-            Err(e) => {
-                profile.stages.execute_us = execute_start.elapsed().as_micros() as u64;
-                let error_info = ErrorInfo::new(
-                    ErrorType::ExecutionError,
-                    QueryPhase::Execute,
-                    e.to_string(),
-                );
-                profile.mark_failed_with_info(error_info.clone());
-                profile.total_duration_us = total_start.elapsed().as_micros() as u64;
-                self.stats_manager
-                    .record_failed_query(profile.clone(), error_info);
-                return Err(e);
-            }
-        };
+        let (result, statistics_us) =
+            match self.execute_prepared(&request, None, ResultSink::Materialize) {
+                Ok((super::prepared::PreparedOutcome::Materialized(result), statistics_us)) => {
+                    (result, statistics_us)
+                }
+                Ok(_) => unreachable!("materialize sink cannot stream"),
+                Err(e) => {
+                    profile.stages.execute_us = execute_start.elapsed().as_micros() as u64;
+                    profile.stages.statistics_us = 0;
+                    let error_info = ErrorInfo::new(
+                        ErrorType::ExecutionError,
+                        QueryPhase::Execute,
+                        e.to_string(),
+                    );
+                    profile.mark_failed_with_info(error_info.clone());
+                    profile.total_duration_us = total_start.elapsed().as_micros() as u64;
+                    self.stats_manager
+                        .record_failed_query(profile.clone(), error_info);
+                    return Err(e);
+                }
+            };
 
         profile.stages.execute_us = execute_start.elapsed().as_micros() as u64;
-        profile.stages.statistics_us = self
-            .last_statistics_collection_us
-            .load(std::sync::atomic::Ordering::Relaxed);
+        // Per-query collection time from the planning gate. Cache hits and
+        // freshness skips report zero; only a real collection reports time.
+        // Metrics share this same value so probe and counters stay aligned.
+        profile.stages.statistics_us = statistics_us;
         profile.result_count = result.count();
         metrics.set_result_row_count(result.count());
         metrics.record_execute_time(execute_start.elapsed());
-        metrics.statistics_time_us = profile.stages.statistics_us;
+        metrics.statistics_time_us = statistics_us;
 
         profile.total_duration_us = total_start.elapsed().as_micros() as u64;
         metrics.record_total_time(total_start.elapsed());
@@ -200,12 +206,16 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         let is_command_scope = matches!(transaction_scope, TransactionScope::CommandScope);
         let mut bindings = QueryBindings::from_context(&exec_ctx, transaction_scope);
         bindings.query_id = exec_ctx.query_id;
-        bindings.query_text = Some(query_context.request_context().query.clone());
-        bindings.session_id = query_context
-            .request_context()
-            .session_id
-            .map(|id| id.to_string());
-        bindings.user_name = query_context.request_context().user_name.clone();
+        // Diagnostics identity is only consumed by the query registry path.
+        // Single-row hot queries without a registry skip these clones.
+        if self.query_registry.is_some() || self.query_manager.is_some() {
+            bindings.query_text = Some(query_context.request_context().query.clone());
+            bindings.session_id = query_context
+                .request_context()
+                .session_id
+                .map(|id| id.to_string());
+            bindings.user_name = query_context.request_context().user_name.clone();
+        }
 
         let mut instance = QueryExecutionInstance::instantiate_plan(
             physical_plan,
@@ -260,12 +270,14 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         reject_writes_outside_transaction_scope(&physical_plan, &transaction_scope)?;
         let mut bindings = QueryBindings::from_context(&exec_ctx, transaction_scope);
         bindings.query_id = exec_ctx.query_id;
-        bindings.query_text = Some(query_context.request_context().query.clone());
-        bindings.session_id = query_context
-            .request_context()
-            .session_id
-            .map(|id| id.to_string());
-        bindings.user_name = query_context.request_context().user_name.clone();
+        if self.query_registry.is_some() || self.query_manager.is_some() {
+            bindings.query_text = Some(query_context.request_context().query.clone());
+            bindings.session_id = query_context
+                .request_context()
+                .session_id
+                .map(|id| id.to_string());
+            bindings.user_name = query_context.request_context().user_name.clone();
+        }
 
         let instance = QueryExecutionInstance::instantiate_plan(
             physical_plan,

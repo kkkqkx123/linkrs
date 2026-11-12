@@ -305,6 +305,8 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         space: &str,
         force: bool,
     ) -> Result<crate::optimizer::stats::CollectedSummary, String> {
+        // Per-query wall time for this collection call. Hits and skips
+        // report zero so hot probes show no wait on this path.
         let start = std::time::Instant::now();
         let _guard = if force {
             self.statistics_collect_lock.lock()
@@ -339,7 +341,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             .ok_or_else(|| "No storage binding available for statistics collection".to_string())?
             .clone();
         let data_epoch = storage.read().stats_epoch();
-        let result = crate::optimizer::stats::StatisticsCollector::collect_space(
+        let mut result = crate::optimizer::stats::StatisticsCollector::collect_space(
             &stats_manager,
             &storage,
             space,
@@ -347,8 +349,14 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             data_epoch,
             self.statistics_sample_limit,
         );
+        let elapsed_us = start.elapsed().as_micros() as u64;
+        if let Ok(summary) = result.as_mut() {
+            summary.elapsed_us = if summary.cached { 0 } else { elapsed_us };
+        }
+        // Global last-collection gauge stays for operator visibility.
+        // Per-query probes must use the returned elapsed value instead.
         self.last_statistics_collection_us.store(
-            start.elapsed().as_micros() as u64,
+            elapsed_us,
             std::sync::atomic::Ordering::Relaxed,
         );
         match &result {
@@ -380,14 +388,16 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
     /// degrade to no-statistics fallbacks and never block the query. Explicit
     /// ANALYZE remains the manual forced-refresh entry via
     /// `collect_statistics(space, true)`.
-    pub(crate) fn ensure_statistics(&self, space: &str) {
+    /// Returns the wall time spent collecting for this query. Fresh stamps,
+    /// contention skips and failures all report zero.
+    pub(crate) fn ensure_statistics(&self, space: &str) -> u64 {
         let stats_manager = self.optimizer_engine.stats_manager();
         let schema_version = self
             .schema_generation
             .load(std::sync::atomic::Ordering::Relaxed);
         let data_epoch = match self.storage.as_ref() {
             Some(storage) => storage.read().stats_epoch(),
-            None => return,
+            None => return 0,
         };
         if schema_version != 0 && data_epoch != 0 {
             match stats_manager.space_stamp(space) {
@@ -395,24 +405,28 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                 Some((stamped_schema, stamped_epoch))
                     if stamped_schema == schema_version && stamped_epoch == data_epoch =>
                 {
-                    return;
+                    return 0;
                 }
                 Some((stamped_schema, stamped_epoch))
                     if stamped_schema == schema_version
                         && data_epoch > stamped_epoch
                         && data_epoch - stamped_epoch < self.statistics_min_epoch_delta =>
                 {
-                    return;
+                    return 0;
                 }
                 _ => {}
             }
         }
-        if let Err(error) = self.collect_statistics(space, false) {
-            log::warn!(
-                "Statistics refresh for space '{}' failed, degrading to no-stats: {}",
-                space,
-                error
-            );
+        match self.collect_statistics(space, false) {
+            Ok(summary) => summary.elapsed_us,
+            Err(error) => {
+                log::warn!(
+                    "Statistics refresh for space '{}' failed, degrading to no-stats: {}",
+                    space,
+                    error
+                );
+                0
+            }
         }
     }
 
