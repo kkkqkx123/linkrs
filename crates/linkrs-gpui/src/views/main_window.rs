@@ -29,7 +29,7 @@ use crate::design_tokens;
 use crate::i18n::{self, t};
 use crate::metrics::{PAGE_PAD_X, SIDEBAR_MAX, SIDEBAR_MIN, SIDEBAR_W};
 use crate::services::connection_service;
-use crate::settings::{self, Density, ThemeModeSetting, WindowGeometry};
+use crate::settings::{self, Density, ThemeModeSetting};
 use crate::state::{self, AppState, Capability, ConnectionStatus};
 use crate::theme;
 use crate::views::{
@@ -247,19 +247,12 @@ impl MainWindow {
         )
         .detach();
 
-        // Persist window geometry when the application quits.
+        // Persist window geometry and drop the tray icon on the way out.
         cx.on_app_quit(|this, cx| {
             _ = this.window_handle.update(cx, |_, window, cx| {
-                let bounds = window.bounds();
-                settings::update(cx, |settings| {
-                    settings.window = Some(WindowGeometry {
-                        x: bounds.origin.x.to_f64(),
-                        y: bounds.origin.y.to_f64(),
-                        width: bounds.size.width.to_f64(),
-                        height: bounds.size.height.to_f64(),
-                    });
-                });
+                crate::tray::persist_window_geometry(window, cx);
             });
+            crate::tray::shutdown(cx);
             async {}
         })
         .detach();
@@ -745,7 +738,7 @@ impl MainWindow {
     }
 
     fn on_quit(&mut self, _: &Quit, _: &mut Window, cx: &mut Context<Self>) {
-        cx.quit();
+        crate::tray::quit(cx);
     }
 
     fn on_theme_light(&mut self, _: &ThemeLight, window: &mut Window, cx: &mut Context<Self>) {
@@ -1167,6 +1160,7 @@ impl MainWindow {
                             settings::Locale::Zh => settings::Locale::En,
                         };
                         i18n::set_locale(next, cx);
+                        crate::tray::refresh_menu(cx);
                         cx.notify();
                     })),
             )

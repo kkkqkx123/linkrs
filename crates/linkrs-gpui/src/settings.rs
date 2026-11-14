@@ -100,6 +100,12 @@ fn threshold_enabled() -> bool {
     true
 }
 
+/// Default switch for tray behavior: the tray icon and close-to-tray stay
+/// on unless the user explicitly disables them.
+fn tray_opt_in() -> bool {
+    true
+}
+
 /// One executed statement with its outcome, newest first in `query_history`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QueryHistoryItem {
@@ -189,6 +195,14 @@ pub struct Settings {
     /// Whether the sidebar starts collapsed to its icon rail.
     #[serde(default)]
     pub sidebar_collapsed: bool,
+    /// Whether the system tray icon is created at startup.
+    #[serde(default = "tray_opt_in")]
+    pub tray_enabled: bool,
+    /// Whether closing the main window keeps the process resident with
+    /// the tray icon instead of quitting. Only applies while a usable
+    /// tray exists; without a tray host closing quits the process.
+    #[serde(default = "tray_opt_in")]
+    pub close_to_tray: bool,
 }
 
 impl Settings {
@@ -375,4 +389,18 @@ pub fn remove_favorite(cx: &mut App, name: &str) {
             .position(|existing| existing.name.to_lowercase() == name.to_lowercase())
             .map(|ix| settings.favorites.remove(ix));
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tray_switches_default_on() {
+        // `load` parses an empty document on missing config, so the serde
+        // defaults below are the effective first-run values.
+        let fresh: Settings = toml::from_str("").expect("empty document parses");
+        assert!(fresh.tray_enabled);
+        assert!(fresh.close_to_tray);
+    }
 }

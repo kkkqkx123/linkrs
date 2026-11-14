@@ -17,6 +17,7 @@ pub mod actions {
         linkrs,
         [
             Quit,
+            ShowWindow,
             ThemeLight,
             ThemeDark,
             ThemeSystem,
@@ -49,6 +50,7 @@ pub fn run(settings: Settings) {
         bind_keys(cx);
         apply_saved_theme(cx);
         start_heartbeat(cx);
+        crate::tray::init(cx);
         open_main_window(cx);
     });
 }
@@ -126,7 +128,7 @@ pub fn to_theme_mode(mode: crate::settings::ThemeModeSetting, cx: &App) -> Theme
     }
 }
 
-fn open_main_window(cx: &mut App) {
+pub(crate) fn open_main_window(cx: &mut App) {
     let saved = settings::global(cx).window;
     let window_bounds = match saved {
         Some(geometry) => Some(WindowBounds::Windowed(Bounds {
@@ -157,7 +159,12 @@ fn open_main_window(cx: &mut App) {
     })
     .expect("failed to open main window");
 
-    _ = handle.update(cx, |_, window, _| {
+    crate::tray::set_main_window(cx, handle);
+
+    _ = handle.update(cx, |_, window, cx| {
+        window.on_window_should_close(cx, |window, cx| {
+            crate::tray::handle_window_close(window, cx)
+        });
         window.activate_window();
         window.set_window_title("Linkrs");
     });

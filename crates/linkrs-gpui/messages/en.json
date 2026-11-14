@@ -554,6 +554,8 @@
   "transfer.targetTypeHint": "tag/vertex or edge",
   "transfer.uploadImport": "Upload and import",
   "transfer.uploaded": "Uploaded {}; import accepted.",
+  "tray.quit": "Quit",
+  "tray.showWindow": "Show Window",
   "users.accountsCount": "Accounts Count: {}",
   "users.actionSucceeded": "Action Succeeded: {}",
   "users.changeMyPassword": "Change my password",

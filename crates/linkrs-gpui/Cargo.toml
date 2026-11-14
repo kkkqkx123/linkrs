@@ -66,6 +66,10 @@ compograph-types = { path = "../gpui-kit/crates/compograph/crates/cg-types" }
 compograph-geometry = { path = "../gpui-kit/crates/compograph/crates/cg-geometry" }
 linkrs-client = { path = "../linkrs-client" }
 linkrs-wire = { path = "../linkrs-wire" }
+# System tray / menu-bar icon. Pinned to the same gpui-pre snapshot the client
+# builds against (see the tray crate manifest), so tray actions dispatch
+# through the exact `gpui::App` the views use.
+gpui-tray = { path = "../gpui-kit/crates/tray", default-features = false, features = ["gpui-kit"] }
 # Tree-sitter grammar for the Linkrs dialect. Its runtime unifies with the
 # one gpui-kit links (see the root workspace pin), so highlighting and
 # completion share the exact grammar the backend parses with.

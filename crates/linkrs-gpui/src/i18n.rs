@@ -144,6 +144,7 @@ mod tests {
                     "migration",
                     "sessions",
                     "sync",
+                    "tray",
                     "transactions",
                     "users",
                     "vector",

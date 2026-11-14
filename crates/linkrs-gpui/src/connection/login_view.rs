@@ -402,7 +402,7 @@ impl Render for LoginView {
             .justify_center()
             .bg(theme.background)
             .text_color(theme.foreground)
-            .on_action(cx.listener(|_, _: &Quit, _, cx| cx.quit()))
+            .on_action(cx.listener(|_, _: &Quit, _, cx| crate::tray::quit(cx)))
             .child(
                 v_flex()
                     .w(px(380.))
@@ -508,6 +508,7 @@ impl Render for LoginView {
                                             .selected(locale == crate::settings::Locale::En)
                                             .on_click(cx.listener(|_, _, _, cx| {
                                                 i18n::set_locale(crate::settings::Locale::En, cx);
+                                                crate::tray::refresh_menu(cx);
                                                 cx.notify();
                                             })),
                                     )
@@ -519,6 +520,7 @@ impl Render for LoginView {
                                             .selected(locale == crate::settings::Locale::Zh)
                                             .on_click(cx.listener(|_, _, _, cx| {
                                                 i18n::set_locale(crate::settings::Locale::Zh, cx);
+                                                crate::tray::refresh_menu(cx);
                                                 cx.notify();
                                             })),
                                     ),

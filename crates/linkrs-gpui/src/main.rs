@@ -10,6 +10,7 @@ mod settings;
 mod state;
 mod syntax;
 mod theme;
+mod tray;
 mod views;
 
 fn main() {

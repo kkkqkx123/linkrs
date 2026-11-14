@@ -554,6 +554,8 @@
   "transfer.targetTypeHint": "tag/vertex 或 edge",
   "transfer.uploadImport": "上传并导入",
   "transfer.uploaded": "已上传 {}；导入已受理。",
+  "tray.quit": "退出",
+  "tray.showWindow": "显示窗口",
   "users.accountsCount": "账户数量：{}",
   "users.actionSucceeded": "操作成功：{}",
   "users.changeMyPassword": "修改我的密码",
