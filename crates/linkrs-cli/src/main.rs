@@ -66,7 +66,7 @@ async fn run(mut cli: Cli) -> Result<()> {
         cli.host.clone()
     };
 
-    let port = if cli.port == 8080 && config.connection.default_port != 8080 {
+    let port = if cli.port == 9758 && config.connection.default_port != 9758 {
         config.connection.default_port
     } else {
         cli.port
@@ -96,6 +96,10 @@ async fn run(mut cli: Cli) -> Result<()> {
 
     let mut executor =
         CommandExecutor::with_options(formatter, cli.exec.force, cli.exec.single_transaction);
+
+    if let Some(ref path) = cli.exec.output {
+        executor.set_output_file(path)?;
+    }
 
     match session_mgr.connect(&user, &password).await {
         Ok(()) => {

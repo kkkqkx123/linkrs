@@ -238,6 +238,22 @@ fn show_general_help() -> String {
     ));
     output.push_str(&format!(
         "  {:25} {}\n",
+        "\\autocommit [on|off]", "Toggle or show autocommit mode"
+    ));
+    output.push_str(&format!(
+        "  {:25} {}\n",
+        "\\isolation [level]", "Show or set the transaction isolation level"
+    ));
+    output.push_str(&format!(
+        "  {:25} {}\n",
+        "\\savepoint <name>", "Create a named savepoint"
+    ));
+    output.push_str(&format!(
+        "  {:25} {}\n",
+        "\\release <name>", "Release a named savepoint"
+    ));
+    output.push_str(&format!(
+        "  {:25} {}\n",
         "\\txstatus", "Local session transaction state (use \\transactions list for server truth)"
     ));
     output.push_str(&format!(

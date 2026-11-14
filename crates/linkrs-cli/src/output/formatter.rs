@@ -70,13 +70,64 @@ impl OutputFormatter {
     pub fn format(&self) -> OutputFormat {
         self.format
     }
-
     pub fn set_timing(&mut self, enabled: bool) {
         self.timing_enabled = enabled;
     }
 
     pub fn timing_enabled(&self) -> bool {
         self.timing_enabled
+    }
+
+    /// Render a result set as a standalone HTML document. Cell values are
+    /// escaped so data containing markup cannot break the generated table.
+    fn format_html(result: &QueryResult, null_string: &str) -> String {
+        fn escape(value: &str) -> String {
+            value
+                .replace('&', "&amp;")
+                .replace('<', "&lt;")
+                .replace('>', "&gt;")
+                .replace('"', "&quot;")
+                .replace('\'', "&#39;")
+        }
+
+        let mut html = String::from(concat!(
+            "<!DOCTYPE html>\n<html><head><meta charset=\"utf-8\">\n",
+            "<title>Linkrs query result</title>\n",
+            "<style>table{border-collapse:collapse;margin:1rem 0}\n",
+            "th,td{border:1px solid #ccc;padding:.35rem .6rem;text-align:left}\n",
+            "th{background:#f5f5f5}em{color:#888}</style>\n",
+            "</head><body>\n<table>\n<thead><tr>"
+        ));
+
+        for column in &result.columns {
+            html.push_str("<th>");
+            html.push_str(&escape(column));
+            html.push_str("</th>");
+        }
+        html.push_str("</tr></thead>\n<tbody>\n");
+
+        for row in &result.rows {
+            html.push_str("<tr>");
+            for column in &result.columns {
+                html.push_str("<td>");
+                match row.get(column) {
+                    None | Some(serde_json::Value::Null) => {
+                        html.push_str("<em>");
+                        html.push_str(&escape(null_string));
+                        html.push_str("</em>");
+                    }
+                    Some(serde_json::Value::String(value)) => html.push_str(&escape(value)),
+                    Some(value) => html.push_str(&escape(&value.to_string())),
+                }
+                html.push_str("</td>");
+            }
+            html.push_str("</tr>\n");
+        }
+
+        html.push_str("</tbody>\n</table>\n<p>");
+        html.push_str(&result.row_count.to_string());
+        html.push_str(" rows</p>\n</body></html>");
+        html
     }
 
     pub fn format_result(&self, result: &QueryResult) -> String {
@@ -87,7 +138,7 @@ impl OutputFormatter {
             }
             OutputFormat::CSV => crate::output::csv::format_csv(result, &self.null_string),
             OutputFormat::JSON => crate::output::json::format_json(result),
-            OutputFormat::HTML => crate::output::table::format_table(result, &self.null_string),
+            OutputFormat::HTML => Self::format_html(result, &self.null_string),
         };
 
         let mut output = formatted;

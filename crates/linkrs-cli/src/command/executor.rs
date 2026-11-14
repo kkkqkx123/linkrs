@@ -74,6 +74,19 @@ impl CommandExecutor {
         }
     }
 
+    /// Route all subsequent `write_output` calls to a file. The `--output/-o`
+    /// startup flag uses the same sink as the `\o` meta command; a later `\o`
+    /// call replaces the file.
+    pub fn set_output_file(&mut self, path: &str) -> Result<()> {
+        self.output_file = Some(fs::File::create(path).map_err(CliError::IoError)?);
+        Ok(())
+    }
+
+    /// Stop writing to a file and send subsequent output back to the terminal.
+    pub fn clear_output_file(&mut self) {
+        self.output_file = None;
+    }
+
     pub fn active_cursor(&self) -> Option<u64> {
         self.active_cursor
     }

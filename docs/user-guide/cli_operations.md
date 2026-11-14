@@ -9,13 +9,13 @@
 | 参数 | 短选项 | 说明 | 默认值 |
 |------|--------|------|--------|
 | `--host` | `-h` | 服务器主机 | `127.0.0.1` |
-| `--port` | `-p` | 服务器端口 | `8080` |
+| `--port` | `-p` | 服务器端口 | `9758` |
 | `--user` | `-u` | 认证用户名 | `root` |
 | `--password` | `-W` | 交互式提示输入密码 | `false` |
 | `--database` | `-d` | 启动后切换到指定空间 | 无 |
 | `--command` | `-c` | 执行单条命令并退出 | 无 |
 | `--file` | `-f` | 从文件执行命令 | 无 |
-| `--output` | `-o` | 查询结果输出文件 | 无 |
+| `--output` | `-o` | 查询结果输出文件（等价于会话内 `\o`） | 无 |
 | `--format` |  | 输出格式：`table`/`csv`/`json`/`vertical`/`html` | `table` |
 | `--quiet` | `-q` | 静默模式，抑制非必要输出 | `false` |
 | `--single-transaction` | `-1` | 在单个事务中执行命令 | `false` |
@@ -146,6 +146,7 @@ linkrs-cli service status
 | `\export-space <space> <path> [--format csv\|json\|jsonl] [--tags t1,t2] [--edges e1,e2]` | 导出整个空间数据 |
 | `\export-schema <path> [--format json\|yaml]` | 导出 Schema 定义 |
 | `\import-schema <file>` | 从文件导入 Schema 定义 |
+| `\migration <subcommand>` | Schema 迁移（`plan`/`dry-run`/`execute`/`rollback`/`status`/`history`/`watch`） |
 | `\batch <subcommand>` | 服务器批处理任务，见 3.5.1 |
 | `\fulltext <subcommand>` | 全文索引管理与搜索，见 3.5.2 |
 | `\vector <subcommand>` | 向量索引管理与搜索，见 3.5.3 |
@@ -211,6 +212,7 @@ linkrs-cli service status
 | `\savepoint <name>` | 创建保存点 |
 | `\release <name>` | 释放保存点 |
 | `\txstatus` | 显示事务状态 |
+| `\transactions <sub>` | 服务端事务管理（`list`/`metrics`/`kill`/`retry-outbox`/`savepoint-*`） |
 
 ### 3.9 流式与游标
 
@@ -227,6 +229,8 @@ linkrs-cli service status
 |------|------|
 | `\statistics [target]` | 显示统计信息（`queries`/`database`/`system`/`overview`/`session`/`search`/`freeze`/`migration`/`profile <trace_id>`；`freeze trigger`/`freeze run`） |
 | `\status` | 数据库概览（`\statistics overview` 的别名） |
+| `\health` | 服务健康检查 |
+| `\queries list\|kill` | 运行中的查询列表与终止（`kill <session_id> <query_id>`） |
 
 ### 3.11 配置
 
@@ -236,6 +240,7 @@ linkrs-cli service status
 | `\config get <section> <key>` | 获取单个配置项 |
 | `\config set <section> <key> <value>` | 更新配置项 |
 | `\config reset <section> <key>` | 重置配置项为默认值 |
+| `\config bulk <json\|@file>` | 批量更新配置（JSON 对象或 `@文件`） |
 
 ### 3.12 条件执行
 

@@ -20,6 +20,9 @@ pub struct ExecArgs {
     )]
     pub format: String,
 
+    #[clap(short = 'o', long = "output", help = "Write query results to a file")]
+    pub output: Option<String>,
+
     #[clap(short, long, help = "Quiet mode - suppress non-essential output")]
     pub quiet: bool,
 
@@ -55,7 +58,7 @@ pub struct Cli {
     #[clap(long, default_value = "127.0.0.1", help = "Server host")]
     pub host: String,
 
-    #[clap(short, long, default_value_t = 8080, help = "Server port")]
+    #[clap(short, long, default_value_t = 9758, help = "Server port")]
     pub port: u16,
 
     #[clap(

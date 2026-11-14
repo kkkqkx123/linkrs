@@ -13,13 +13,13 @@ pub fn execute_output_redirect(
 ) -> Result<bool> {
     match path {
         Some(p) => {
-            let _file =
-                std::fs::File::create(&p).map_err(crate::utils::error::CliError::IoError)?;
-            // Note: output_file is private, need to handle differently
-            // For now, just acknowledge
+            // Report on the current sink before switching, so the notice is
+            // visible on the terminal rather than only inside the new file.
             executor.write_output(&format!("Output redirected to: {}", p))?;
+            executor.set_output_file(&p)?;
         }
         None => {
+            executor.clear_output_file();
             executor.write_output("Output redirect closed.")?;
         }
     }
