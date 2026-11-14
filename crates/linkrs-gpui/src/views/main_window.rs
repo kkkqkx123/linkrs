@@ -24,7 +24,7 @@ use gpui_kit::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::app::{Quit, ThemeDark, ThemeLight, ThemeSystem, TogglePalette};
+use crate::app::{Quit, ThemeDark, ThemeLight, ThemeSystem, ToggleDensity, TogglePalette};
 use crate::design_tokens;
 use crate::i18n::{self, t};
 use crate::metrics::{PAGE_PAD_X, SIDEBAR_MAX, SIDEBAR_MIN, SIDEBAR_W};
@@ -427,6 +427,10 @@ impl MainWindow {
         cx.notify();
     }
 
+    fn on_toggle_density(&mut self, _: &ToggleDensity, _: &mut Window, cx: &mut Context<Self>) {
+        self.toggle_density(cx);
+    }
+
     /// Activate the palette row at `index`: panels by position in the
     /// capability-filtered panel list, then the two console actions.
     /// Theme rows dispatch their own actions.
@@ -619,6 +623,13 @@ impl MainWindow {
                                             ))
                                             .icon(IconName::Monitor)
                                             .action(Box::new(ThemeSystem)),
+                                        CommandItem::new()
+                                            .label(crate::i18n::t(
+                                                "common.toggleDensity",
+                                                crate::i18n::locale(cx),
+                                            ))
+                                            .icon(IconName::Rows3)
+                                            .action(Box::new(ToggleDensity)),
                                     ]),
                             )
                             .on_confirm(move |index, window, cx| {
@@ -1267,6 +1278,7 @@ impl Render for MainWindow {
             .on_action(cx.listener(Self::on_theme_dark))
             .on_action(cx.listener(Self::on_theme_system))
             .on_action(cx.listener(Self::on_toggle_palette))
+            .on_action(cx.listener(Self::on_toggle_density))
             .child({
                 let content = v_flex()
                     .flex_1()

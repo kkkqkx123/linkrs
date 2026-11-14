@@ -4,7 +4,7 @@ use gpui_kit::assets::IconName;
 use gpui_kit::base::dock::PanelEvent;
 use gpui_kit::base::{Disableable as _, Selectable as _};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::input::{Editor, EditorState};
+use gpui_kit::component::input::{Editor, EditorState, InputState};
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::table::{DataTable, TableState};
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _, Sizable as _, WindowExt as _};
@@ -15,8 +15,8 @@ use gpui_kit::{
 };
 
 use crate::components::{
-    card, confirm, empty_state, new_table_state, on_copy_row, panel_header, render_properties,
-    skeleton_rows, CopyRow, FilterControls, QueryTableData, QueryTableDelegate,
+    card, confirm, empty_state, form_row, new_table_state, on_copy_row, panel_header,
+    render_properties, skeleton_rows, CopyRow, FilterControls, QueryTableData, QueryTableDelegate,
 };
 use crate::i18n::{t, tf};
 use crate::services::{connection_service, data_browser_service, schema_service};
@@ -72,6 +72,12 @@ pub struct DataBrowserPanel {
     edit_editor: Entity<EditorState>,
     conflict: Option<SharedString>,
     allow_overwrite: bool,
+    create_open: bool,
+    create_vid: Entity<InputState>,
+    create_src: Entity<InputState>,
+    create_dst: Entity<InputState>,
+    create_rank: Entity<InputState>,
+    create_props: Entity<EditorState>,
     focus_handle: gpui_kit::FocusHandle,
 }
 
@@ -108,6 +114,12 @@ impl DataBrowserPanel {
             edit_editor,
             conflict: None,
             allow_overwrite: false,
+            create_open: false,
+            create_vid: cx.new(|cx| InputState::new(window, cx)),
+            create_src: cx.new(|cx| InputState::new(window, cx)),
+            create_dst: cx.new(|cx| InputState::new(window, cx)),
+            create_rank: cx.new(|cx| InputState::new(window, cx).placeholder("0")),
+            create_props: cx.new(|cx| EditorState::new(window, cx)),
             focus_handle: cx.focus_handle(),
         };
         panel.reload_schema(cx);
@@ -223,6 +235,7 @@ impl DataBrowserPanel {
         self.edit_target = None;
         self.conflict = None;
         self.allow_overwrite = false;
+        self.create_open = false;
         cx.notify();
 
         let kind = self.kind;
@@ -497,6 +510,147 @@ impl DataBrowserPanel {
         .detach();
     }
 
+    /// Parse the create-form properties; `None` when the text is not a
+    /// JSON object, so the preview stays empty instead of guessing.
+    fn parsed_create_props(&self, cx: &App) -> Option<serde_json::Map<String, serde_json::Value>> {
+        let raw = self.create_props.read(cx).text().to_string();
+        serde_json::from_str::<serde_json::Value>(&raw)
+            .ok()?
+            .as_object()
+            .cloned()
+    }
+
+    /// Statement preview for the create form; empty when inputs are
+    /// invalid so the confirm button stays disabled.
+    fn create_statement(&self, cx: &App) -> String {
+        let Some(props) = self.parsed_create_props(cx) else {
+            return String::new();
+        };
+        match self.kind {
+            BrowseKind::Vertex => {
+                let vid = self.create_vid.read(cx).value().trim().to_string();
+                if vid.is_empty() || self.selected.trim().is_empty() {
+                    return String::new();
+                }
+                data_browser_service::build_vertex_insert(&self.selected, &vid, &props)
+            }
+            BrowseKind::Edge => {
+                let src = self.create_src.read(cx).value().trim().to_string();
+                let dst = self.create_dst.read(cx).value().trim().to_string();
+                if src.is_empty() || dst.is_empty() || self.selected.trim().is_empty() {
+                    return String::new();
+                }
+                let rank = self
+                    .create_rank
+                    .read(cx)
+                    .value()
+                    .trim()
+                    .parse::<i64>()
+                    .unwrap_or(0);
+                data_browser_service::build_edge_insert(&self.selected, &src, &dst, rank, &props)
+            }
+        }
+    }
+
+    /// Open the create form for the current selection.
+    fn open_create(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.selected.trim().is_empty() {
+            self.message = Some(t("dataBrowser.pickEntity", crate::i18n::locale(cx)).into());
+            cx.notify();
+            return;
+        }
+        self.create_vid.update(cx, |field, cx| {
+            field.set_value(String::new(), window, cx);
+        });
+        self.create_src.update(cx, |field, cx| {
+            field.set_value(String::new(), window, cx);
+        });
+        self.create_dst.update(cx, |field, cx| {
+            field.set_value(String::new(), window, cx);
+        });
+        self.create_rank.update(cx, |field, cx| {
+            field.set_value(String::new(), window, cx);
+        });
+        self.create_props.update(cx, |editor, cx| {
+            editor.set_value("{}".to_string(), window, cx);
+        });
+        self.create_open = true;
+        cx.notify();
+    }
+
+    fn close_create(&mut self, cx: &mut Context<Self>) {
+        self.create_open = false;
+        cx.notify();
+    }
+
+    /// Run the create statement and reload the page on success; the form
+    /// stays open on failure so the input can be fixed.
+    fn confirm_create(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.writing {
+            return;
+        }
+        let statement = self.create_statement(cx);
+        if statement.is_empty() {
+            self.message = Some(t("dataBrowser.createInvalid", crate::i18n::locale(cx)).into());
+            cx.notify();
+            return;
+        }
+        let Some(props) = self.parsed_create_props(cx) else {
+            return;
+        };
+        let task = match self.kind {
+            BrowseKind::Vertex => {
+                let vid = self.create_vid.read(cx).value().trim().to_string();
+                let tag = self.selected.clone();
+                data_browser_service::create_vertex(cx, &tag, &vid, &props)
+            }
+            BrowseKind::Edge => {
+                let src = self.create_src.read(cx).value().trim().to_string();
+                let dst = self.create_dst.read(cx).value().trim().to_string();
+                let rank = self
+                    .create_rank
+                    .read(cx)
+                    .value()
+                    .trim()
+                    .parse::<i64>()
+                    .unwrap_or(0);
+                let edge_type = self.selected.clone();
+                data_browser_service::create_edge(cx, &edge_type, &src, &dst, rank, &props)
+            }
+        };
+        self.writing = true;
+        self.message = None;
+        cx.notify();
+        cx.spawn_in(window, async move |this, window| {
+            let outcome = task.await;
+            _ = this.update_in(window, move |this, _window, cx| {
+                this.writing = false;
+                match outcome {
+                    Ok(()) => {
+                        this.message = Some(
+                            crate::i18n::tf(
+                                "common.finished",
+                                crate::i18n::locale(cx),
+                                crate::i18n::t("dataBrowser.taskCreate", crate::i18n::locale(cx)),
+                            )
+                            .into(),
+                        );
+                        this.create_open = false;
+                        this.fetch(cx);
+                    }
+                    Err(error) => {
+                        if connection_service::is_session_expired(&error) {
+                            connection_service::invalidate_session(cx);
+                        }
+                        this.message = Some(error.to_string().into());
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     /// Delete the selected row behind an inline confirm step.
     fn delete_row(
         &mut self,
@@ -621,13 +775,21 @@ impl DataBrowserPanel {
         let detail_subtitle = (!detail_title.is_empty()).then_some(detail_title.as_str());
         let writing = self.writing;
         let editing = self.edit_open;
+        let creating = self.create_open;
         let overwrite = self.allow_overwrite;
         let conflict = self.conflict.clone();
         let editor = self.edit_editor.clone();
+        let create_editor = self.create_props.clone();
+        let is_vertex = self.kind == BrowseKind::Vertex;
+        let create_vid = self.create_vid.clone();
+        let create_src = self.create_src.clone();
+        let create_dst = self.create_dst.clone();
+        let create_rank = self.create_rank.clone();
+        let statement = self.create_statement(cx);
         let empty = self.raw_rows.is_empty();
         v_flex()
             .size_full()
-            .when(!editing, |panel| {
+            .when(!editing && !creating, |panel| {
                 panel
                     .child(
                         div()
@@ -779,6 +941,141 @@ impl DataBrowserPanel {
                             ),
                     )
             })
+            .when(creating, |panel| {
+                panel
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .px_2()
+                            .py_1()
+                            .text_sm()
+                            .text_color(cx.theme().foreground)
+                            .child(crate::i18n::t(
+                                if is_vertex {
+                                    "dataBrowser.createVertex"
+                                } else {
+                                    "dataBrowser.createEdge"
+                                },
+                                crate::i18n::locale(cx),
+                            )),
+                    )
+                    .when(is_vertex, |panel| {
+                        panel.child(div().flex_shrink_0().px_2().child(form_row(
+                            crate::i18n::t("dataBrowser.createVid", crate::i18n::locale(cx)),
+                            create_vid.clone(),
+                            cx,
+                        )))
+                    })
+                    .when(!is_vertex, |panel| {
+                        panel
+                            .child(div().flex_shrink_0().px_2().child(form_row(
+                                crate::i18n::t("dataBrowser.createSrc", crate::i18n::locale(cx)),
+                                create_src.clone(),
+                                cx,
+                            )))
+                            .child(div().flex_shrink_0().px_2().child(form_row(
+                                crate::i18n::t("dataBrowser.createDst", crate::i18n::locale(cx)),
+                                create_dst.clone(),
+                                cx,
+                            )))
+                            .child(div().flex_shrink_0().px_2().child(form_row(
+                                crate::i18n::t("dataBrowser.createRank", crate::i18n::locale(cx)),
+                                create_rank.clone(),
+                                cx,
+                            )))
+                    })
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .px_2()
+                            .py_1()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(crate::i18n::t(
+                                "dataBrowser.createProps",
+                                crate::i18n::locale(cx),
+                            ))
+                            .child(div().text_xs().child(crate::i18n::t(
+                                "dataBrowser.createPropsHint",
+                                crate::i18n::locale(cx),
+                            ))),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_h_0()
+                            .p_1()
+                            .child(Editor::new(&create_editor)),
+                    )
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .px_2()
+                            .py_1()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(crate::i18n::t(
+                                "dataBrowser.createStatement",
+                                crate::i18n::locale(cx),
+                            )),
+                    )
+                    .child(
+                        div().flex_shrink_0().px_2().child(
+                            div()
+                                .font_family(cx.theme().mono_font_family.clone())
+                                .text_xs()
+                                .text_color(if statement.is_empty() {
+                                    cx.theme().warning
+                                } else {
+                                    cx.theme().foreground
+                                })
+                                .child(SharedString::from(if statement.is_empty() {
+                                    crate::i18n::t(
+                                        "dataBrowser.createInvalid",
+                                        crate::i18n::locale(cx),
+                                    )
+                                    .to_string()
+                                } else {
+                                    statement.clone()
+                                })),
+                        ),
+                    )
+                    .child(
+                        h_flex()
+                            .flex_shrink_0()
+                            .items_center()
+                            .gap_1()
+                            .px_2()
+                            .py_1()
+                            .border_t_1()
+                            .border_color(cx.theme().border)
+                            .child(
+                                Button::new("browse-create-confirm")
+                                    .label(crate::i18n::t(
+                                        "dataBrowser.create",
+                                        crate::i18n::locale(cx),
+                                    ))
+                                    .primary()
+                                    .xsmall()
+                                    .disabled(writing || statement.is_empty())
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.confirm_create(window, cx);
+                                    })),
+                            )
+                            .child(
+                                Button::new("browse-create-cancel")
+                                    .label(crate::i18n::t(
+                                        "dataBrowser.cancel",
+                                        crate::i18n::locale(cx),
+                                    ))
+                                    .xsmall()
+                                    .ghost()
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.close_create(cx);
+                                    })),
+                            ),
+                    )
+            })
     }
 
     fn render_toolbar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -807,6 +1104,19 @@ impl DataBrowserPanel {
                     .selected(kind == BrowseKind::Edge)
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.set_kind(BrowseKind::Edge, cx);
+                    })),
+            )
+            .child(
+                Button::new("browse-new")
+                    .label(crate::i18n::t(
+                        "dataBrowser.create",
+                        crate::i18n::locale(cx),
+                    ))
+                    .icon(IconName::Plus)
+                    .small()
+                    .disabled(self.loading || self.writing)
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.open_create(window, cx);
                     })),
             )
             .child(div().flex_1().min_w_0().child(self.controls.render(cx)))

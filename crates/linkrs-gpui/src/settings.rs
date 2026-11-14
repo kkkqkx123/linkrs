@@ -94,6 +94,12 @@ pub fn default_auto_stream_threshold() -> u64 {
     1000
 }
 
+/// Default switch for a monitoring threshold: alerts stay on unless the
+/// user explicitly disables them.
+fn threshold_enabled() -> bool {
+    true
+}
+
 /// One executed statement with its outcome, newest first in `query_history`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QueryHistoryItem {
@@ -165,6 +171,15 @@ pub struct Settings {
     /// Interface language, persisted across restarts.
     #[serde(default)]
     pub locale: Locale,
+    /// Whether the CPU threshold raises an alert.
+    #[serde(default = "threshold_enabled")]
+    pub monitor_cpu_enabled: bool,
+    /// Whether the memory threshold raises an alert.
+    #[serde(default = "threshold_enabled")]
+    pub monitor_mem_enabled: bool,
+    /// Whether the slow-query threshold filters the slow list.
+    #[serde(default = "threshold_enabled")]
+    pub monitor_slow_enabled: bool,
     /// Table/card density preference.
     #[serde(default)]
     pub density: Density,
@@ -186,11 +201,13 @@ impl Settings {
     }
 
     /// Load settings from disk, falling back to defaults when missing or invalid.
+    /// The fallback parses an empty document so serde field defaults (notably
+    /// the enabled monitoring thresholds) apply instead of raw type defaults.
     pub fn load() -> Self {
         Self::path()
             .and_then(|path| fs::read_to_string(path).ok())
             .and_then(|raw| toml::from_str(&raw).ok())
-            .unwrap_or_default()
+            .unwrap_or_else(|| toml::from_str("").unwrap_or_default())
     }
 
     /// Atomically write settings to disk. Failures are logged and ignored so a

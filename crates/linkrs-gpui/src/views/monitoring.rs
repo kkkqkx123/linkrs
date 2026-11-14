@@ -8,6 +8,7 @@ use gpui_kit::component::alert::Alert;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::chart::AreaChart;
 use gpui_kit::component::input::InputState;
+use gpui_kit::component::switch::Switch;
 use gpui_kit::component::Sizable as _;
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _};
 use gpui_kit::{
@@ -25,6 +26,7 @@ use crate::services::{
     config_service, connection_service, fulltext_service, monitoring_service, query_service,
     stats_service, vector_service,
 };
+use crate::settings;
 
 /// Seconds between monitoring polls when auto-refresh is on.
 const POLL_INTERVAL: Duration = Duration::from_secs(5);
@@ -59,6 +61,9 @@ pub struct MonitoringPanel {
     cpu_threshold: Entity<InputState>,
     mem_threshold: Entity<InputState>,
     slow_threshold: Entity<InputState>,
+    cpu_enabled: bool,
+    mem_enabled: bool,
+    slow_enabled: bool,
     portrait_trace: Option<String>,
     portrait: serde_json::Value,
     portrait_loading: bool,
@@ -91,6 +96,9 @@ impl MonitoringPanel {
             cpu_threshold: cx.new(|cx| InputState::new(window, cx).placeholder("80")),
             mem_threshold: cx.new(|cx| InputState::new(window, cx).placeholder("80")),
             slow_threshold: cx.new(|cx| InputState::new(window, cx).placeholder("100")),
+            cpu_enabled: settings::global(cx).monitor_cpu_enabled,
+            mem_enabled: settings::global(cx).monitor_mem_enabled,
+            slow_enabled: settings::global(cx).monitor_slow_enabled,
             portrait_trace: None,
             portrait: serde_json::Value::Null,
             portrait_loading: false,
@@ -259,8 +267,13 @@ impl MonitoringPanel {
     }
 
     /// Slow queries at or above the configured millisecond threshold.
+    /// A disabled threshold keeps every reported row instead of filtering.
     fn slow_rows(&self, cx: &App) -> Vec<(String, i64, String, f64, String)> {
-        let min_ms = self.threshold(&self.slow_threshold, cx, 100.0);
+        let min_ms = if self.slow_enabled {
+            self.threshold(&self.slow_threshold, cx, 100.0)
+        } else {
+            0.0
+        };
         self.queries
             .get("slow_queries")
             .and_then(|rows| rows.as_array())
@@ -459,8 +472,28 @@ impl MonitoringPanel {
         section
     }
 
+    /// Persist one threshold switch and mirror it into the panel state.
+    fn set_cpu_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        self.cpu_enabled = enabled;
+        settings::update(cx, |settings| settings.monitor_cpu_enabled = enabled);
+        cx.notify();
+    }
+
+    fn set_mem_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        self.mem_enabled = enabled;
+        settings::update(cx, |settings| settings.monitor_mem_enabled = enabled);
+        cx.notify();
+    }
+
+    fn set_slow_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        self.slow_enabled = enabled;
+        settings::update(cx, |settings| settings.monitor_slow_enabled = enabled);
+        cx.notify();
+    }
+
     fn render_thresholds(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
+        let locale = crate::i18n::locale(cx);
         let cpu = pick(&self.system, &["cpu_usage_percent"]);
         let mem_ratio = self
             .system
@@ -474,35 +507,77 @@ impl MonitoringPanel {
         let cpu_limit = self.threshold(&self.cpu_threshold, cx, 80.0);
         let mem_limit = self.threshold(&self.mem_threshold, cx, 80.0);
         let mut exceeded = Vec::new();
-        if cpu.map(|value| value > cpu_limit).unwrap_or(false) {
+        if self.cpu_enabled && cpu.map(|value| value > cpu_limit).unwrap_or(false) {
             exceeded.push(format!("CPU {:.1}% > {cpu_limit:.0}%", cpu.unwrap_or(0.0)));
         }
-        if mem_ratio.map(|value| value > mem_limit).unwrap_or(false) {
+        if self.mem_enabled && mem_ratio.map(|value| value > mem_limit).unwrap_or(false) {
             exceeded.push(format!(
                 "Memory {:.1}% > {mem_limit:.0}%",
                 mem_ratio.unwrap_or(0.0)
             ));
         }
+        let cpu_enabled = self.cpu_enabled;
+        let mem_enabled = self.mem_enabled;
+        let slow_enabled = self.slow_enabled;
         h_flex()
             .flex_shrink_0()
             .items_center()
             .gap_3()
             .flex_wrap()
-            .child(form_row(
-                t("monitoring.cpuThreshold", crate::i18n::locale(cx)),
-                self.cpu_threshold.clone(),
-                cx,
-            ))
-            .child(form_row(
-                t("monitoring.memThreshold", crate::i18n::locale(cx)),
-                self.mem_threshold.clone(),
-                cx,
-            ))
-            .child(form_row(
-                t("monitoring.slowMs", crate::i18n::locale(cx)),
-                self.slow_threshold.clone(),
-                cx,
-            ))
+            .child(
+                h_flex()
+                    .items_center()
+                    .gap_1()
+                    .child(
+                        Switch::new("monitor-cpu-enabled")
+                            .checked(cpu_enabled)
+                            .accessibility_label(t("monitoring.cpuEnabled", locale))
+                            .on_change(cx.listener(|this, enabled: &bool, _, cx| {
+                                this.set_cpu_enabled(*enabled, cx);
+                            })),
+                    )
+                    .child(form_row(
+                        t("monitoring.cpuThreshold", locale),
+                        self.cpu_threshold.clone(),
+                        cx,
+                    )),
+            )
+            .child(
+                h_flex()
+                    .items_center()
+                    .gap_1()
+                    .child(
+                        Switch::new("monitor-mem-enabled")
+                            .checked(mem_enabled)
+                            .accessibility_label(t("monitoring.memEnabled", locale))
+                            .on_change(cx.listener(|this, enabled: &bool, _, cx| {
+                                this.set_mem_enabled(*enabled, cx);
+                            })),
+                    )
+                    .child(form_row(
+                        t("monitoring.memThreshold", locale),
+                        self.mem_threshold.clone(),
+                        cx,
+                    )),
+            )
+            .child(
+                h_flex()
+                    .items_center()
+                    .gap_1()
+                    .child(
+                        Switch::new("monitor-slow-enabled")
+                            .checked(slow_enabled)
+                            .accessibility_label(t("monitoring.slowEnabled", locale))
+                            .on_change(cx.listener(|this, enabled: &bool, _, cx| {
+                                this.set_slow_enabled(*enabled, cx);
+                            })),
+                    )
+                    .child(form_row(
+                        t("monitoring.slowMs", locale),
+                        self.slow_threshold.clone(),
+                        cx,
+                    )),
+            )
             .when(!exceeded.is_empty(), |row| {
                 row.child(
                     div()

@@ -206,6 +206,38 @@ fn value_text(value: &serde_json::Value) -> String {
 const MAX_GRAPH_NODES: usize = 800;
 const MAX_GRAPH_EDGES: usize = 1200;
 
+/// Object keys that commonly wrap a result list inside an envelope payload.
+/// Retrieval endpoints document one shape but return another depending on
+/// backend version, so the graph import unwraps at runtime instead of
+/// binding to a single schema.
+const LIST_KEYS: [&str; 6] = ["indexes", "items", "results", "points", "data", "list"];
+
+/// Build a display neighborhood from an opaque panel payload such as a
+/// vector or fulltext response. List envelopes are unwrapped first, then
+/// each item is treated as one hit row for the shared row extraction.
+/// Returns `None` when no item carried graph data.
+pub fn neighborhood_from_value(value: &serde_json::Value) -> Option<(Neighborhood, bool)> {
+    let items: Vec<&serde_json::Value> = match value {
+        serde_json::Value::Array(items) => items.iter().collect(),
+        serde_json::Value::Object(map) => LIST_KEYS
+            .iter()
+            .filter_map(|key| map.get(*key))
+            .filter_map(|inner| inner.as_array())
+            .next()?
+            .iter()
+            .collect(),
+        _ => return None,
+    };
+    if items.is_empty() {
+        return None;
+    }
+    let rows: Vec<HashMap<String, serde_json::Value>> = items
+        .into_iter()
+        .map(|item| HashMap::from([("hit".to_string(), item.clone())]))
+        .collect();
+    neighborhood_from_rows(&rows)
+}
+
 /// Build a display neighborhood from raw query rows, mirroring the web
 /// studio result-to-graph extraction: objects carrying `vid` become nodes,
 /// objects carrying endpoints plus an edge type become edges (missing
@@ -402,5 +434,16 @@ mod tests {
     fn rows_without_graph_data_yield_none() {
         let rows = vec![row(&[("count", serde_json::json!(7))])];
         assert!(neighborhood_from_rows(&rows).is_none());
+    }
+
+    #[test]
+    fn value_envelope_builds_neighborhood() {
+        let payload = serde_json::json!({
+            "results": [{"vid": "1", "tag": "Person"}],
+            "count": 1
+        });
+        let (neighborhood, truncated) = neighborhood_from_value(&payload).expect("graph data");
+        assert!(!truncated);
+        assert_eq!(neighborhood.nodes.len(), 1);
     }
 }

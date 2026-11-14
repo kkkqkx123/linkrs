@@ -141,6 +141,95 @@ pub fn delete_edge(
     run_statement(cx, &format!("DELETE EDGE {head}"))
 }
 
+/// Insert one vertex with JSON properties.
+pub fn create_vertex(
+    cx: &App,
+    tag: &str,
+    vid: &str,
+    properties: &serde_json::Map<String, serde_json::Value>,
+) -> Task<Result<(), ClientError>> {
+    run_statement(cx, &build_vertex_insert(tag, vid, properties))
+}
+
+/// Insert one edge with JSON properties.
+pub fn create_edge(
+    cx: &App,
+    edge_type: &str,
+    src: &str,
+    dst: &str,
+    rank: i64,
+    properties: &serde_json::Map<String, serde_json::Value>,
+) -> Task<Result<(), ClientError>> {
+    run_statement(
+        cx,
+        &build_edge_insert(edge_type, src, dst, rank, properties),
+    )
+}
+
+/// Preview/execution statement for a vertex insert. Callers gate on
+/// non-empty identity fields; an empty property map omits the column list.
+pub fn build_vertex_insert(
+    tag: &str,
+    vid: &str,
+    properties: &serde_json::Map<String, serde_json::Value>,
+) -> String {
+    if properties.is_empty() {
+        return format!("INSERT VERTEX {tag} VALUES {}", quote_vid(vid));
+    }
+    let mut keys: Vec<&String> = properties.keys().collect();
+    keys.sort();
+    let values: Vec<String> = keys
+        .iter()
+        .map(|key| format_value(&properties[*key]))
+        .collect();
+    format!(
+        "INSERT VERTEX {tag}({}) VALUES {}:({})",
+        keys.iter()
+            .map(|key| key.to_string())
+            .collect::<Vec<_>>()
+            .join(", "),
+        quote_vid(vid),
+        values.join(", ")
+    )
+}
+
+/// Preview/execution statement for an edge insert, with the same empty-map
+/// rule as [`build_vertex_insert`].
+pub fn build_edge_insert(
+    edge_type: &str,
+    src: &str,
+    dst: &str,
+    rank: i64,
+    properties: &serde_json::Map<String, serde_json::Value>,
+) -> String {
+    if properties.is_empty() {
+        return format!(
+            "INSERT EDGE {} VALUES {} -> {} @{rank}",
+            edge_type,
+            quote_vid(src),
+            quote_vid(dst)
+        );
+    }
+    let mut keys: Vec<&String> = properties.keys().collect();
+    keys.sort();
+    let values: Vec<String> = keys
+        .iter()
+        .map(|key| format_value(&properties[*key]))
+        .collect();
+    format!(
+        "INSERT EDGE {}({}) VALUES {} -> {} @{}:({})",
+        edge_type,
+        keys.iter()
+            .map(|key| key.to_string())
+            .collect::<Vec<_>>()
+            .join(", "),
+        quote_vid(src),
+        quote_vid(dst),
+        rank,
+        values.join(", ")
+    )
+}
+
 fn run_statement(cx: &App, statement: &str) -> Task<Result<(), ClientError>> {
     let manager = SessionStore::manager(cx);
     let statement = statement.to_string();
@@ -350,5 +439,28 @@ mod tests {
         assert_eq!(id, "e1");
         assert_eq!(kind, "Knows");
         assert_eq!(properties.get("since").and_then(|v| v.as_i64()), Some(2020));
+    }
+
+    fn props(raw: serde_json::Value) -> serde_json::Map<String, serde_json::Value> {
+        raw.as_object().cloned().expect("object")
+    }
+
+    #[test]
+    fn builds_vertex_insert_with_properties() {
+        let statement = build_vertex_insert(
+            "Person",
+            "1",
+            &props(serde_json::json!({"name": "ada", "age": 36})),
+        );
+        assert_eq!(
+            statement,
+            "INSERT VERTEX Person(age, name) VALUES 1:(36, \"ada\")"
+        );
+    }
+
+    #[test]
+    fn builds_edge_insert_without_properties() {
+        let statement = build_edge_insert("Knows", "1", "2", 0, &props(serde_json::json!({})));
+        assert_eq!(statement, "INSERT EDGE Knows VALUES 1 -> 2 @0");
     }
 }

@@ -15,7 +15,14 @@ use crate::views::{RunQuery, Shell};
 pub mod actions {
     gpui_kit::actions!(
         linkrs,
-        [Quit, ThemeLight, ThemeDark, ThemeSystem, TogglePalette]
+        [
+            Quit,
+            ThemeLight,
+            ThemeDark,
+            ThemeSystem,
+            TogglePalette,
+            ToggleDensity
+        ]
     );
 }
 

@@ -3,7 +3,8 @@ use gpui_kit::base::dock::PanelEvent;
 use gpui_kit::base::Disableable as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::InputState;
-use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _, Sizable as _};
+use gpui_kit::component::notification::Notification;
+use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _, Sizable as _, WindowExt as _};
 use gpui_kit::{
     div, prelude::FluentBuilder as _, px, App, AppContext as _, ClickEvent, Context, Entity,
     EventEmitter, Focusable, InteractiveElement as _, IntoElement, ParentElement as _, Render,
@@ -12,7 +13,7 @@ use gpui_kit::{
 
 use crate::components::{confirm, form_row, panel_header, render_json_block};
 use crate::i18n::{locale, t, tf};
-use crate::services::{connection_service, schema_service, vector_service};
+use crate::services::{connection_service, graph_service, schema_service, vector_service};
 use crate::state::AppState;
 
 /// How often the rebuild status is re-polled after a rebuild starts.
@@ -210,6 +211,37 @@ impl VectorPanel {
             }
         }
         cx.notify();
+    }
+
+    /// Push the current result payload into the graph panel through the
+    /// global drop box; the shell switches to the graph panel on arrival.
+    fn send_output_to_graph(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let locale = locale(cx);
+        match graph_service::neighborhood_from_value(&self.output) {
+            Some((neighborhood, truncated)) => {
+                let truncated_suffix = if truncated {
+                    t("console.truncated", locale)
+                } else {
+                    ""
+                };
+                let summary = crate::i18n::tf_args(
+                    "console.sentGraph",
+                    locale,
+                    &[
+                        &neighborhood.nodes.len(),
+                        &neighborhood.edges.len(),
+                        &truncated_suffix,
+                    ],
+                );
+                AppState::global(cx).update(cx, |state, cx| {
+                    state.push_graph_drop(neighborhood, cx);
+                });
+                window.push_notification(Notification::success(summary), cx);
+            }
+            None => {
+                window.push_notification(Notification::info(t("common.noGraphData", locale)), cx);
+            }
+        }
     }
 
     fn list(&mut self, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>) {
@@ -987,13 +1019,36 @@ impl Render for VectorPanel {
                             .min_w_0()
                             .gap_1()
                             .p_3()
-                            .child(div().text_sm().text_color(theme.foreground).child(
-                                SharedString::from(if output_title.is_empty() {
-                                    t("common.result", locale).to_string()
-                                } else {
-                                    output_title
-                                }),
-                            ))
+                            .child(
+                                h_flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .text_sm()
+                                            .text_color(theme.foreground)
+                                            .child(SharedString::from(
+                                                if output_title.is_empty() {
+                                                    t("common.result", locale).to_string()
+                                                } else {
+                                                    output_title
+                                                },
+                                            )),
+                                    )
+                                    .child(
+                                        Button::new("vector-view-graph")
+                                            .label(t("common.viewInGraph", locale))
+                                            .icon(IconName::Network)
+                                            .xsmall()
+                                            .ghost()
+                                            .disabled(self.busy || output.is_null())
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                this.send_output_to_graph(window, cx);
+                                            })),
+                                    ),
+                            )
                             .child(render_json_block(&output, cx)),
                     ),
             )

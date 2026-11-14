@@ -24,12 +24,16 @@ use crate::i18n::t;
 use crate::services::{connection_service, graph_service};
 use crate::state::AppState;
 
+/// Upper bound for the search match list; the total is still reported.
+const SEARCH_MATCH_LIMIT: usize = 50;
+
 /// Graph explorer panel: seed-vid lookup, N-hop neighborhood expansion and
 /// click-to-inspect, rendered natively by compograph (`components/graph_host`
 /// owns the store/layout/camera session; this view only forwards frames and
 /// gestures).
 pub struct GraphPanel {
     seed: Entity<InputState>,
+    search: Entity<InputState>,
     depth: usize,
     direction: String,
     model: GraphModel,
@@ -51,6 +55,10 @@ impl GraphPanel {
             InputState::new(window, cx)
                 .placeholder(t("graph.seedPlaceholder", crate::i18n::locale(cx)))
         });
+        let search = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(t("graph.searchPlaceholder", crate::i18n::locale(cx)))
+        });
         let store = cx.new(|_| GraphStore::new());
         let layout = cx.new(|cx| {
             LayoutDriver::new(
@@ -66,6 +74,7 @@ impl GraphPanel {
             .detach();
         Self {
             seed,
+            search,
             depth: 1,
             direction: "BOTH".to_string(),
             model,
@@ -188,6 +197,27 @@ impl GraphPanel {
         cx.notify();
     }
 
+    /// Nodes matching the search query, capped for the match list.
+    /// Matching mirrors the web studio predicate: vid or tag contains the
+    /// query, case-insensitively. An empty query disables filtering.
+    fn search_matches(&self, cx: &App) -> Option<(usize, Vec<(String, String)>)> {
+        let query = self.search.read(cx).value().trim().to_lowercase();
+        if query.is_empty() {
+            return None;
+        }
+        let mut total = 0;
+        let mut items = Vec::new();
+        for (vid, label) in self.model.node_list() {
+            if vid.to_lowercase().contains(&query) || label.to_lowercase().contains(&query) {
+                total += 1;
+                if items.len() < SEARCH_MATCH_LIMIT {
+                    items.push((vid, label));
+                }
+            }
+        }
+        Some((total, items))
+    }
+
     fn render_toolbar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let depth = self.depth;
         let direction = self.direction.clone();
@@ -271,6 +301,7 @@ impl GraphPanel {
                         nodes, edges
                     ))),
             )
+            .child(div().w(px(200.)).child(Input::new(&self.search)))
             .child(div().flex_1())
             .child(
                 Button::new("graph-zoom-in")
@@ -448,6 +479,16 @@ impl Render for GraphPanel {
                 serde_json::Value::Null,
             ),
         };
+        let search_result = self.search_matches(cx);
+        let search_count = search_result.as_ref().map(|(total, _)| *total);
+        let search_nodes: Vec<(String, String)> = match search_result {
+            Some((_, items)) => items,
+            None => self.model.node_list(),
+        };
+        let nodes_title = match search_count {
+            Some(total) => crate::i18n::tf("graph.matchCount", crate::i18n::locale(cx), total),
+            None => crate::i18n::t("graph.nodes", crate::i18n::locale(cx)).to_string(),
+        };
 
         v_flex()
             .id("graph-panel")
@@ -507,17 +548,14 @@ impl Render for GraphPanel {
                                             div()
                                                 .text_xs()
                                                 .text_color(theme.muted_foreground)
-                                                .child(SharedString::from(crate::i18n::t(
-                                                    "graph.nodes",
-                                                    crate::i18n::locale(cx),
-                                                ))),
+                                                .child(SharedString::from(nodes_title)),
                                         )
                                         .child(
                                             div()
                                                 .id("graph-nodes")
                                                 .max_h(px(120.))
                                                 .overflow_y_scroll()
-                                                .children(self.model.node_list().into_iter().map(
+                                                .children(search_nodes.into_iter().map(
                                                     |(vid, label)| {
                                                         let view = view.clone();
                                                         let select_vid = vid.clone();
