@@ -45,3 +45,10 @@ pub fn execute_write_buffer(executor: &mut CommandExecutor, file: &str) -> Resul
     executor.write_output(&format!("Query buffer written to: {}", file))?;
     Ok(true)
 }
+
+pub async fn execute_replay_buffer(
+    executor: &mut CommandExecutor,
+    session_mgr: &mut SessionManager,
+) -> Result<bool> {
+    executor.replay_buffer_once(session_mgr).await
+}

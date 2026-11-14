@@ -3,6 +3,7 @@
 	import PageHeader from '$components/layout/PageHeader.svelte';
 	import { transferService } from '$services/transfer';
 	import { resolveSessionId } from '$utils/http';
+	import { storage } from '$utils/storage';
 	import { notificationStore } from '$stores/notification';
 
 	let space = $state('');
@@ -17,6 +18,29 @@
 
 	let loading = $state(false);
 	let resultText = $state('');
+
+	interface TransferRecord {
+		at: number;
+		kind: string;
+		summary: string;
+	}
+
+	const RECORDS_KEY = 'transfer.records';
+	let records = $state<TransferRecord[]>(
+		storage.get<TransferRecord[]>(RECORDS_KEY, []) ?? [],
+	);
+
+	// Local operation trace of the existing import/export calls. It is a
+	// logical transfer log only, never presented as backup or restore.
+	function pushRecord(kind: string, summary: string) {
+		records = [...records, { at: Date.now(), kind, summary }].slice(-50);
+		storage.set(RECORDS_KEY, records);
+	}
+
+	function clearRecords() {
+		records = [];
+		storage.remove(RECORDS_KEY);
+	}
 
 	function reportError(err: unknown, key: MessageKey = 'notification.requestFailed') {
 		notificationStore.error(
@@ -51,6 +75,7 @@
 				file,
 			});
 			resultText = stringify(payload);
+			pushRecord('import', `${format} -> ${targetType} ${targetName} (${file.name})`);
 		} catch (err) {
 			reportError(err);
 		} finally {
@@ -62,6 +87,7 @@
 		loading = true;
 		try {
 			resultText = stringify(await transferService.importStatus(importId));
+			pushRecord('status', importId);
 		} catch (err) {
 			reportError(err);
 		} finally {
@@ -91,6 +117,7 @@
 			document.body.removeChild(link);
 			URL.revokeObjectURL(url);
 			resultText = t('transfer.exported');
+			pushRecord('export', `${exportFormat} (${exportQuery.slice(0, 80)})`);
 		} catch (err) {
 			reportError(err, 'notification.serverExportFailed');
 		} finally {
@@ -206,4 +233,46 @@
 			<pre class="ui-pre">{resultText}</pre>
 		</section>
 	{/if}
+
+	<section class="ui-card shadow-sm p-6">
+		<div class="flex items-center justify-between mb-1">
+			<h2 class="ui-section-title mb-0">
+				{t('transfer.records')}
+			</h2>
+			<button
+				class="ui-btn ui-btn-ghost ui-btn-sm"
+				onclick={clearRecords}
+				disabled={records.length === 0}
+			>
+				{t('common.clear')}
+			</button>
+		</div>
+		<p class="text-xs text-muted mb-3">{t('transfer.recordsHint')}</p>
+		{#if records.length === 0}
+			<p class="text-sm text-muted">{t('transfer.recordsEmpty')}</p>
+		{:else}
+			<div class="overflow-x-auto">
+				<table class="ui-table w-full border-collapse">
+					<thead>
+						<tr class="bg-secondary">
+							<th>{t('transfer.recordTime')}</th>
+							<th>{t('common.type')}</th>
+							<th>{t('transfer.recordSummary')}</th>
+						</tr>
+					</thead>
+					<tbody>
+						{#each records as record, idx (idx)}
+							<tr>
+								<td class="font-mono text-xs">
+									{new Date(record.at).toLocaleString()}
+								</td>
+								<td class="font-mono text-xs">{record.kind}</td>
+								<td class="font-mono text-xs break-all">{record.summary}</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			</div>
+		{/if}
+	</section>
 </div>

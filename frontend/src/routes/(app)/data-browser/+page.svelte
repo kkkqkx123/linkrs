@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { t } from '$i18n';
-	import { RefreshCw, Search, Package, ArrowLeftRight, VectorSquare, FileSearch } from '@lucide/svelte';
+	import { RefreshCw, Search, Package, ArrowLeftRight, VectorSquare, FileSearch, Plus } from '@lucide/svelte';
 	import { get, fromStore } from 'svelte/store';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
@@ -14,8 +14,10 @@
 	import { dataBrowserService } from '$services/dataBrowser';
 	import {
 		buildEdgeDelete,
+		buildEdgeInsert,
 		buildEdgeUpdate,
 		buildVertexDelete,
+		buildVertexInsert,
 		buildVertexUpdate,
 	} from '$utils/cypherTemplates';
 	import PageSkeleton from '$components/common/PageSkeleton.svelte';
@@ -166,7 +168,7 @@
 
 	function handleTabChange(tab: DataBrowserTab) {
 		dataBrowserStore.setActiveTab(tab);
-		goto(`?tab=${tab}`, { replaceState: true, keepFocus: true, noScroll: true });
+		goto(`?tab=${tab}`, { replace: true, reset: false });
 		if (tab === 'vertices' && currentSpace) {
 			schemaStore.fetchTags(currentSpace);
 			if (selectedTag) loadVertices();
@@ -482,6 +484,82 @@
 		}
 	}
 
+	// --- Create form with statement preview and confirm ---
+
+	let createOpen = $state(false);
+	let createVid = $state('');
+	let createSrc = $state('');
+	let createDst = $state('');
+	let createRank = $state(0);
+	let createTag = $state('');
+	let createEdgeType = $state('');
+	let createPropsText = $state('{}');
+	let createBusy = $state(false);
+	let createError = $state<string | null>(null);
+
+	const createKind = $derived<'vertex' | 'edge'>(activeTab === 'edges' ? 'edge' : 'vertex');
+
+	function parseCreateProps(): Record<string, unknown> | null {
+		try {
+			const parsed: unknown = JSON.parse(createPropsText.trim() || '{}');
+			if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+				return parsed as Record<string, unknown>;
+			}
+		return null;
+		} catch {
+			return null;
+		}
+	}
+
+	// Statement preview for the create form; empty when inputs are invalid.
+	const createStatement = $derived.by(() => {
+		const props = parseCreateProps();
+		if (props === null) return '';
+		if (createKind === 'vertex') {
+			const tag = createTag || selectedTag || '';
+			if (!createVid.trim() || !tag) return '';
+			return buildVertexInsert(createVid.trim(), tag, props);
+		}
+		const type = createEdgeType || selectedEdgeType || '';
+		if (!createSrc.trim() || !createDst.trim() || !type) return '';
+		return buildEdgeInsert(type, createSrc.trim(), createDst.trim(), createRank, props);
+	});
+
+	function openCreate() {
+		createVid = '';
+		createSrc = '';
+		createDst = '';
+		createRank = 0;
+		createTag = selectedTag ?? '';
+		createEdgeType = selectedEdgeType ?? '';
+		createPropsText = '{}';
+		createError = null;
+		createOpen = true;
+	}
+
+	function closeCreate() {
+		createOpen = false;
+		createError = null;
+	}
+
+	async function confirmCreate() {
+		if (createBusy || !createStatement) return;
+		createBusy = true;
+		createError = null;
+		try {
+			const outcome = await queryService.execute({ query: createStatement });
+			if (!outcome.success) {
+				createError = outcome.error?.message ?? t('errors.executeQuery');
+			return;
+			}
+			createOpen = false;
+			if (createKind === 'vertex') loadVertices();
+			else loadEdges();
+		} finally {
+			createBusy = false;
+		}
+	}
+
 	function viewInGraph(data: VertexData | EdgeData, type: 'vertex' | 'edge') {
 		if (type === 'vertex') {
 			const v = data as VertexData;
@@ -550,6 +628,9 @@
 					onclick={() => dataBrowserStore.toggleFilterPanel()}
 				>
 					<Search size={16} /> {t('dataBrowser.filter')}
+				</button>
+				<button class="ui-btn ui-btn-primary ui-btn-sm" onclick={openCreate}>
+					<Plus size={16} /> {t('common.create')}
 				</button>
 			{/if}
 		</PageHeader>
@@ -778,6 +859,117 @@
 					onclick={() => confirmEdit(true)}
 				>
 					{t('dataBrowser.edit.conflictRebase')}
+				</button>
+			</div>
+		</div>
+	</div>
+{/if}
+
+<!-- Create Modal -->
+{#if createOpen}
+	<div class="fixed inset-0 z-50 flex items-center justify-center">
+		<div
+			role="presentation"
+			class="absolute inset-0 bg-mask"
+			onclick={closeCreate}
+		></div>
+		<div
+			class="relative ui-card shadow-lg p-6 w-[28rem] max-h-[85vh] overflow-y-auto"
+		>
+			<h2 class="text-base font-semibold text-ink mb-2">
+				{createKind === 'vertex'
+					? t('dataBrowser.create.titleVertex')
+					: t('dataBrowser.create.titleEdge')}
+			</h2>
+			<div class="space-y-3 text-sm">
+				{#if createKind === 'vertex'}
+					<label class="ui-field">
+						{t('dataBrowser.create.tag')}
+						<select class="ui-input ui-input-sm font-mono" bind:value={createTag}>
+							<option value="">-- {t('common.select')} --</option>
+							{#each tags as tag (tag.name)}
+								<option value={tag.name}>{tag.name}</option>
+							{/each}
+						</select>
+					</label>
+					<label class="ui-field">
+						{t('dataBrowser.create.vid')}
+						<input
+							class="ui-input ui-input-sm font-mono"
+							bind:value={createVid}
+						/>
+					</label>
+				{:else}
+					<label class="ui-field">
+						{t('dataBrowser.create.edgeType')}
+						<select
+							class="ui-input ui-input-sm font-mono"
+							bind:value={createEdgeType}
+						>
+							<option value="">-- {t('common.select')} --</option>
+							{#each edgeTypes as et (et.name)}
+								<option value={et.name}>{et.name}</option>
+							{/each}
+						</select>
+					</label>
+					<div class="grid grid-cols-2 gap-2">
+						<label class="ui-field">
+							{t('dataBrowser.source')}
+							<input
+								class="ui-input ui-input-sm font-mono"
+								bind:value={createSrc}
+							/>
+						</label>
+						<label class="ui-field">
+							{t('dataBrowser.target')}
+							<input
+								class="ui-input ui-input-sm font-mono"
+								bind:value={createDst}
+							/>
+						</label>
+					</div>
+					<label class="ui-field">
+						{t('dataBrowser.rank')}
+						<input
+							type="number"
+							class="ui-input ui-input-sm font-mono"
+							bind:value={createRank}
+						/>
+					</label>
+				{/if}
+				<label class="ui-field">
+					{t('dataBrowser.create.properties')}
+					<textarea
+						rows="3"
+						class="ui-input ui-input-sm font-mono"
+						bind:value={createPropsText}
+					></textarea>
+					<span class="text-xs text-muted">{t('dataBrowser.create.propertiesHint')}</span>
+				</label>
+				<div>
+					<p class="text-xs font-medium text-muted mb-1">
+						{t('dataBrowser.edit.statement')}
+					</p>
+					{#if createStatement}
+						<pre class="ui-pre ui-pre-sm whitespace-pre-wrap">{createStatement}</pre>
+					{:else}
+						<p class="text-xs text-warning">{t('dataBrowser.create.invalidInput')}</p>
+					{/if}
+				</div>
+				{#if createError}
+					<div class="ui-alert ui-alert-error text-sm">{createError}</div>
+				{/if}
+			</div>
+			<div class="mt-4 flex justify-end gap-2">
+				<button class="ui-btn ui-btn-ghost" onclick={closeCreate}>
+					{t('common.cancel')}
+				</button>
+				<button
+					class="ui-btn ui-btn-primary"
+					disabled={createBusy || !createStatement}
+					onclick={confirmCreate}
+				>
+					{createBusy ? t('console.executing') : t('common.create')}
 				</button>
 			</div>
 		</div>

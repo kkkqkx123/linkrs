@@ -2,6 +2,7 @@
 	import { onDestroy, onMount } from 'svelte';
 	import { get, fromStore } from 'svelte/store';
 	import { t } from '$i18n';
+	import { appendAuditLog, loadAuditLog, type AuditEntry } from '$utils/auditLog';
 	import {
 		monitoringStore,
 		type MonitoringSnapshots,
@@ -72,11 +73,47 @@
 	});
 
 	const cpuExceeded = $derived(
-		cpuRatio !== null && cpuRatio * 100 > thresholds.cpuPercent,
+		thresholds.cpuEnabled !== false &&
+			cpuRatio !== null &&
+			cpuRatio * 100 > thresholds.cpuPercent,
 	);
 	const memExceeded = $derived(
-		memRatio !== null && memRatio * 100 > thresholds.memPercent,
+		thresholds.memEnabled !== false &&
+			memRatio !== null &&
+			memRatio * 100 > thresholds.memPercent,
 	);
+
+	// Readonly audit event stream: slow-query events come from the existing
+	// query statistics snapshot; maintenance entries come from the local
+	// operation log. No server persistence is assumed.
+	let auditLog = $state<AuditEntry[]>(loadAuditLog());
+
+	$effect(() => {
+		// Reload the local maintenance log whenever a refresh lands so
+		// records written by sibling panels appear without new fetching.
+		void monitorState.current.lastRefreshAt;
+		auditLog = loadAuditLog();
+	});
+
+	const auditEvents = $derived.by(() => {
+		const slow = slowRows.slice(0, 20).map((row) => ({
+			at: monitorState.current.lastRefreshAt ?? Date.now(),
+			kind: 'slow-query',
+			summary: `${String(row.query)} (${String(row.duration_ms)}ms)`,
+			traceId: String(row.trace_id),
+		}));
+		const local = auditLog.map((entry) => ({
+			at: entry.at,
+			kind: entry.kind,
+			summary: entry.summary,
+			traceId: null as string | null,
+		}));
+		return [...slow, ...local].sort((a, b) => b.at - a.at).slice(0, 50);
+	});
+
+	function logThreshold(kind: string, summary: string) {
+		auditLog = appendAuditLog(kind, summary);
+	}
 
 	onMount(() => {
 		monitoringStore.start();
@@ -150,11 +187,21 @@
 		>
 			{t('monitoring.cpu')} &gt;
 			<input
+				type="checkbox"
+				bind:checked={thresholds.cpuEnabled}
+				onchange={() =>
+					logThreshold(
+						'threshold',
+						`cpu ${thresholds.cpuEnabled ? 'enabled' : 'disabled'} > ${thresholds.cpuPercent}%`,
+					)}
+			/>
+			<input
 				type="number"
 				min="1"
 				max="100"
 				class="w-16 ui-input ui-input-sm font-mono"
 				bind:value={thresholds.cpuPercent}
+				onchange={() => logThreshold('threshold', `cpu > ${thresholds.cpuPercent}%`)}
 			/>%
 		</label>
 		<label
@@ -162,11 +209,21 @@
 		>
 			{t('monitoring.memory')} &gt;
 			<input
+				type="checkbox"
+				bind:checked={thresholds.memEnabled}
+				onchange={() =>
+					logThreshold(
+						'threshold',
+						`memory ${thresholds.memEnabled ? 'enabled' : 'disabled'} > ${thresholds.memPercent}%`,
+					)}
+			/>
+			<input
 				type="number"
 				min="1"
 				max="100"
 				class="w-16 ui-input ui-input-sm font-mono"
 				bind:value={thresholds.memPercent}
+				onchange={() => logThreshold('threshold', `memory > ${thresholds.memPercent}%`)}
 			/>%
 		</label>
 		<label
@@ -174,10 +231,20 @@
 		>
 			{t('monitoring.slowQueries')} &gt;
 			<input
+				type="checkbox"
+				bind:checked={thresholds.slowEnabled}
+				onchange={() =>
+					logThreshold(
+						'threshold',
+						`slow queries ${thresholds.slowEnabled ? 'enabled' : 'disabled'} > ${thresholds.slowMs}ms`,
+					)}
+			/>
+			<input
 				type="number"
 				min="1"
 				class="w-20 ui-input ui-input-sm font-mono"
 				bind:value={thresholds.slowMs}
+				onchange={() => logThreshold('threshold', `slow queries > ${thresholds.slowMs}ms`)}
 			/>ms
 		</label>
 		{#if cpuExceeded || memExceeded}
@@ -225,7 +292,7 @@
 	</h2>
 	<SlowQueryTable
 		rows={slowRows}
-		slowMs={thresholds.slowMs}
+		slowMs={thresholds.slowEnabled === false ? Number.POSITIVE_INFINITY : thresholds.slowMs}
 		onselect={(traceId) => (selectedTrace = traceId)}
 	/>
 
@@ -269,6 +336,40 @@
 
 	<!-- Operations -->
 	<OpsPanel />
+
+	<!-- Audit: readonly event stream over query stats plus local maintenance -->
+	<section class="ui-card shadow-sm p-6">
+		<h2 class="ui-section-title">
+			{t('monitoring.audit')}
+		</h2>
+		<p class="text-xs text-muted mb-3">{t('monitoring.auditHint')}</p>
+		{#if auditEvents.length === 0}
+			<p class="text-sm text-muted">{t('monitoring.noData')}</p>
+		{:else}
+			<div class="overflow-x-auto max-h-64 overflow-y-auto">
+				<table class="ui-table w-full border-collapse">
+					<thead>
+						<tr class="bg-secondary">
+							<th>{t('monitoring.auditTime')}</th>
+							<th>{t('common.type')}</th>
+							<th>{t('monitoring.query')}</th>
+						</tr>
+					</thead>
+					<tbody>
+						{#each auditEvents as event (event.traceId ?? `${event.kind}-${event.at}-${event.summary}`)}
+							<tr>
+								<td class="font-mono text-xs whitespace-nowrap">
+									{new Date(event.at).toLocaleString()}
+								</td>
+								<td class="font-mono text-xs">{event.kind}</td>
+								<td class="font-mono text-xs break-all">{event.summary}</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			</div>
+		{/if}
+	</section>
 
 	<!-- Portrait drawer -->
 	{#if selectedTrace}

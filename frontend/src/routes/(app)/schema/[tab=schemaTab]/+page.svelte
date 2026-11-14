@@ -406,6 +406,48 @@
 		}
 	}
 
+	// Modeling assist: statement preview executed through the existing
+	// Schema service (no clipboard-only flow, no drag-and-drop builder).
+	let showModelAssist = $state(false);
+	let modelKind = $state<'tag' | 'edge'>('tag');
+	let modelName = $state('');
+	let modelProps = $state<
+		Array<{ name: string; data_type: string; nullable: boolean }>
+	>([]);
+	let modelBusy = $state(false);
+	let modelError = $state<string | null>(null);
+
+	const modelStatement = $derived.by(() => {
+		const name = modelName.trim();
+		if (!name) return '';
+		const fields = modelProps
+			.filter((p) => p.name.trim())
+			.map((p) => `${p.name.trim()} ${p.data_type}`)
+			.join(', ');
+		const kind = modelKind === 'tag' ? 'TAG' : 'EDGE';
+		return `CREATE ${kind} ${name}(${fields})`;
+	});
+
+	async function submitModel() {
+		if (!currentSpace || !modelStatement || modelBusy) return;
+		modelBusy = true;
+		modelError = null;
+		try {
+			const params = {
+				name: modelName.trim(),
+				properties: modelProps.filter((p) => p.name.trim()),
+			};
+			if (modelKind === 'tag') await schemaStore.createTag(currentSpace, params);
+			else await schemaStore.createEdgeType(currentSpace, params);
+			modelName = '';
+			modelProps = [];
+		} catch (err) {
+			modelError = err instanceof Error ? err.message : t('notification.requestFailed');
+		} finally {
+			modelBusy = false;
+		}
+	}
+
 	function addProp(
 		props: Array<{ name: string; data_type: string; nullable: boolean }>,
 	) {
@@ -860,6 +902,78 @@
 						<EmptyState message={t('versions.hint')} />
 					{/if}
 				{:else if activeTab === 'visualization'}
+					<div class="mb-3 ui-card shadow-sm px-4 py-3">
+						<button
+							class="ui-btn ui-btn-ghost ui-btn-sm"
+							onclick={() => (showModelAssist = !showModelAssist)}
+						>
+							{showModelAssist
+								? t('schema.model.hide')
+								: t('schema.model.assist')}
+						</button>
+						{#if showModelAssist}
+							<div class="mt-3 grid md:grid-cols-3 gap-2 text-sm">
+								<label class="flex flex-col gap-1 text-xs text-muted">
+									{t('schema.model.kind')}
+									<select class="ui-input ui-input-sm" bind:value={modelKind}>
+										<option value="tag">{t('sidebar.tags')}</option>
+										<option value="edge">{t('sidebar.edges')}</option>
+									</select>
+								</label>
+								<label class="flex flex-col gap-1 text-xs text-muted">
+									{t('common.name')}
+									<input
+										class="ui-input ui-input-sm font-mono"
+										bind:value={modelName}
+									/>
+								</label>
+								<div class="flex items-end">
+									<button
+										class="ui-link text-xs"
+										onclick={() => addProp(modelProps)}
+									>
+										+ {t('common.addProperty')}
+								</button>
+							</div>
+							</div>
+							{#each modelProps as prop, i (i)}
+								<div class="mt-2 flex gap-2 items-start">
+									<input
+										type="text"
+										bind:value={prop.name}
+										class="ui-input ui-input-sm"
+										placeholder={t('common.name')}
+									/>
+									<select bind:value={prop.data_type} class="ui-input ui-input-sm">
+										{#each dataTypes as dt (dt)}
+											<option value={dt}>{dt}</option>
+										{/each}
+									</select>
+									<button
+										class="ui-link-danger px-1"
+										onclick={() => removeProp(modelProps, i)}><X size={12} /></button
+									>
+								</div>
+							{/each}
+							{#if modelStatement}
+								<pre class="ui-pre ui-pre-sm mt-3 whitespace-pre-wrap">{modelStatement}</pre>
+							{:else}
+								<p class="text-xs text-muted mt-3">{t('schema.model.hint')}</p>
+							{/if}
+							{#if modelError}
+								<p class="text-xs text-error mt-2">{modelError}</p>
+							{/if}
+							<div class="mt-3 flex justify-end">
+								<button
+									class="ui-btn ui-btn-primary ui-btn-sm"
+									disabled={modelBusy || !modelStatement || !currentSpace}
+									onclick={submitModel}
+								>
+									{modelBusy ? t('console.executing') : t('common.create')}
+								</button>
+							</div>
+						{/if}
+					</div>
 					{#await import('$components/business/SchemaErGraph.svelte')}
 						<LoadingState />
 					{:then { default: SchemaErGraph }}

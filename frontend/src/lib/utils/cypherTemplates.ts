@@ -53,3 +53,25 @@ export function buildEdgeDelete(
 ): string {
 	return `DELETE EDGE ${quoteVid(src)} -> ${quoteVid(dst)} @${rank} OF ${edgeType}`;
 }
+
+export function buildVertexInsert(
+	vid: string,
+	tag: string,
+	properties: Record<string, unknown>,
+): string {
+	const keys = Object.keys(properties);
+	const values = keys.map((key) => formatCypherValue(properties[key]));
+	return `INSERT VERTEX ${tag}(${keys.join(', ')}) VALUES ${quoteVid(vid)}:(${values.join(', ')})`;
+}
+
+export function buildEdgeInsert(
+	edgeType: string,
+	src: string,
+	dst: string,
+	rank: number,
+	properties: Record<string, unknown>,
+): string {
+	const keys = Object.keys(properties);
+	const values = keys.map((key) => formatCypherValue(properties[key]));
+	return `INSERT EDGE ${edgeType}(${keys.join(', ')}) VALUES ${quoteVid(src)} -> ${quoteVid(dst)} @${rank}:(${values.join(', ')})`;
+}

@@ -2,6 +2,7 @@
 	import { t } from '$i18n';
 	import ConfirmDialog from '$components/common/ConfirmDialog.svelte';
 	import { operationsService } from '$services/operations';
+	import { appendAuditLog } from '$utils/auditLog';
 
 	let opsLoading = $state(false);
 	let opsError = $state<string | null>(null);
@@ -91,6 +92,7 @@
 			const value = parseDraftValue(configDrafts[entry] ?? '');
 			await operationsService.updateConfigKey(section, key, value);
 			configMessage = t('monitoring.configSaved', { id: entry });
+			appendAuditLog('config', t('monitoring.configSaved', { id: entry }));
 			await loadOps();
 		} catch (err) {
 			opsError =
@@ -111,6 +113,7 @@
 				try {
 					await operationsService.resetConfigKey(section, key);
 					configMessage = t('monitoring.configReset', { id: entry });
+					appendAuditLog('config', t('monitoring.configReset', { id: entry }));
 					await loadOps();
 				} catch (err) {
 					opsError =

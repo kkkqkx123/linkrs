@@ -137,6 +137,14 @@ pub enum MetaCommand {
     WriteBuffer {
         file: String,
     },
+    ReplayBuffer,
+    WatchBuffer {
+        interval_secs: f64,
+        count: usize,
+    },
+    SetNull {
+        text: Option<String>,
+    },
     History {
         action: HistoryAction,
     },

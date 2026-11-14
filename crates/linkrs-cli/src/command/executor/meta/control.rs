@@ -46,6 +46,33 @@ pub fn execute_format(executor: &mut CommandExecutor, format: OutputFormat) -> R
     Ok(true)
 }
 
+pub fn execute_set_null(executor: &mut CommandExecutor, text: Option<String>) -> Result<bool> {
+    match text {
+        Some(value) => {
+            executor.formatter_mut().set_null_string(value.clone());
+            executor.write_output(&format!("Null string set to: '{}'", value))?;
+        }
+        None => {
+            executor.write_output(&format!(
+                "Null string is: '{}'",
+                executor.formatter().null_string()
+            ))?;
+        }
+    }
+    Ok(true)
+}
+
+pub async fn execute_watch(
+    executor: &mut CommandExecutor,
+    interval_secs: f64,
+    count: usize,
+    session_mgr: &mut SessionManager,
+) -> Result<bool> {
+    executor
+        .watch_buffer(interval_secs, count, session_mgr)
+        .await
+}
+
 pub fn execute_pager(executor: &mut CommandExecutor, command: Option<String>) -> Result<bool> {
     // Note: pager field is private, need to add accessor or handle differently
     // For now, just acknowledge the command

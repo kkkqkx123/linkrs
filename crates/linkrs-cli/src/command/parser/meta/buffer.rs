@@ -20,6 +20,14 @@ pub fn parse_history(arg: &str) -> Result<MetaCommand, String> {
     Ok(MetaCommand::History { action })
 }
 
+pub fn parse_replay(arg: &str) -> Result<MetaCommand, String> {
+    if arg.is_empty() {
+        Ok(MetaCommand::ReplayBuffer)
+    } else {
+        Err("Usage: \\replay".to_string())
+    }
+}
+
 fn parse_edit_args(arg: &str) -> (Option<String>, Option<usize>) {
     if arg.is_empty() {
         return (None, None);

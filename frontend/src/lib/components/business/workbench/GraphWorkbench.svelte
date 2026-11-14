@@ -16,9 +16,10 @@
 	import { theme } from '$stores/theme';
 	import { getLayoutOptions } from '$utils/graphLayout';
 	import { LABEL_HIDE_ZOOM } from '$utils/graphLimits';
+	import { storage } from '$utils/storage';
 	import { makeEdgeId } from '$utils/cytoscapeConfig';
 	import CytoscapeCanvas from '$components/common/CytoscapeCanvas.svelte';
-	import type { GraphStyleConfig, LayoutType } from '$types/graph';
+	import type { GraphData, GraphStyleConfig, LayoutType } from '$types/graph';
 	import type cytoscape from 'cytoscape';
 
 	let nodeLabelFields = $state<Record<string, string[]>>({});
@@ -26,6 +27,14 @@
 	let stylePanelOpen = $state(false);
 	let filterPanelOpen = $state(false);
 	let exportOpen = $state(false);
+	let sceneOpen = $state(false);
+	let sceneName = $state('');
+	let scenes = $state<Array<{ name: string; savedAt: number; data: GraphData }>>(
+		storage.get<Array<{ name: string; savedAt: number; data: GraphData }>>(
+			'graph.scenes',
+			[],
+		) ?? [],
+	);
 	let exportMenuEl = $state<HTMLDivElement | null>(null);
 
 	/** Close the export dropdown when focus leaves its container. */
@@ -437,6 +446,42 @@
 		link.click();
 		URL.revokeObjectURL(url);
 	}
+
+	// Saved exploration scenes reuse the same canvas data; they are local
+	// snapshots of the current exploration, not a new navigation entry.
+	function persistScenes() {
+		storage.set('graph.scenes', scenes.slice(-20));
+	}
+
+	function saveScene() {
+		const name = sceneName.trim();
+		if (!name || !graphData) return;
+		scenes = [
+			...scenes.filter((s) => s.name !== name),
+			{
+				name,
+				savedAt: Date.now(),
+				data: JSON.parse(JSON.stringify(graphData)) as GraphData,
+			},
+		].slice(-20);
+		persistScenes();
+		sceneName = '';
+	}
+
+	function loadScene(name: string) {
+		const scene = scenes.find((s) => s.name === name);
+		if (!scene) return;
+		graphStore.setGraphData({
+			nodes: scene.data.nodes ?? [],
+			edges: scene.data.edges ?? [],
+		});
+		relayoutToken += 1;
+	}
+
+	function deleteScene(name: string) {
+		scenes = scenes.filter((s) => s.name !== name);
+		persistScenes();
+	}
 </script>
 
 <div class="ui-page">
@@ -538,6 +583,12 @@
 					</div>
 				{/if}
 			</div>
+			<button
+				class="ui-btn ui-btn-ghost ui-btn-sm whitespace-nowrap"
+				onclick={() => (sceneOpen = !sceneOpen)}
+			>
+				{t('graph.scene')}
+			</button>
 			<button
 				class="ui-btn ui-btn-ghost ui-btn-sm"
 				onclick={handleFitToScreen}
@@ -774,6 +825,56 @@
 					</label>
 				</div>
 			</div>
+		</div>
+	{/if}
+
+	{#if sceneOpen}
+		<div class="ui-card shadow-sm px-6 py-4">
+			<h2 class="text-sm font-medium text-ink mb-2">
+				{t('graph.sceneTitle')}
+			</h2>
+			<p class="text-xs text-muted mb-3">{t('graph.sceneHint')}</p>
+			<div class="flex gap-2 mb-3">
+				<input
+					type="text"
+					class="ui-input ui-input-sm flex-1"
+					placeholder={t('graph.sceneName')}
+					bind:value={sceneName}
+					disabled={!graphData}
+				/>
+				<button
+					class="ui-btn ui-btn-primary ui-btn-sm"
+					onclick={saveScene}
+					disabled={!graphData || !sceneName.trim()}
+				>
+					{t('common.save')}
+				</button>
+			</div>
+			{#if scenes.length === 0}
+				<p class="text-xs text-muted">{t('graph.sceneEmpty')}</p>
+			{:else}
+				<ul class="space-y-1 max-h-40 overflow-y-auto">
+					{#each scenes as scene (scene.name)}
+						<li class="flex items-center gap-2 text-sm">
+							<button
+								class="ui-link text-xs font-mono"
+								onclick={() => loadScene(scene.name)}
+							>
+								{scene.name}
+							</button>
+							<span class="text-xs text-muted">
+								{scene.data.nodes.length}/{scene.data.edges.length}
+							</span>
+							<button
+								class="ml-auto ui-link-danger text-xs"
+								onclick={() => deleteScene(scene.name)}
+							>
+								{t('common.delete')}
+							</button>
+						</li>
+					{/each}
+				</ul>
+				{/if}
 		</div>
 	{/if}
 

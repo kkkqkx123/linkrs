@@ -91,6 +91,46 @@ impl CommandExecutor {
         self.active_cursor
     }
 
+    /// Execute the current query-buffer content through the normal query
+    /// path (transaction checks, `USE` handling, formatting, accounting).
+    pub async fn replay_buffer_once(&mut self, session_mgr: &mut SessionManager) -> Result<bool> {
+        if !self.conditional_stack.is_active() {
+            return Ok(true);
+        }
+        let content = self.query_buffer.content();
+        if content.trim().is_empty() {
+            self.write_output("(query buffer is empty)")?;
+            return Ok(true);
+        }
+        self.execute_query(&content, session_mgr).await
+    }
+
+    /// Re-execute the current buffer a bounded number of times with a fixed
+    /// pause between runs. The loop is finite by construction so control
+    /// always returns to the REPL without signal handling.
+    pub async fn watch_buffer(
+        &mut self,
+        interval_secs: f64,
+        count: usize,
+        session_mgr: &mut SessionManager,
+    ) -> Result<bool> {
+        if !self.conditional_stack.is_active() {
+            return Ok(true);
+        }
+        if self.query_buffer.content().trim().is_empty() {
+            self.write_output("(query buffer is empty)")?;
+            return Ok(true);
+        }
+        for i in 0..count {
+            let content = self.query_buffer.content();
+            self.execute_query(&content, session_mgr).await?;
+            if i + 1 < count {
+                tokio::time::sleep(std::time::Duration::from_secs_f64(interval_secs)).await;
+            }
+        }
+        Ok(true)
+    }
+
     pub fn set_active_cursor(&mut self, cursor_id: Option<u64>) {
         self.active_cursor = cursor_id;
     }
@@ -374,6 +414,14 @@ impl CommandExecutor {
             MetaCommand::PrintBuffer => meta::buffer::execute_print_buffer(self),
             MetaCommand::ResetBuffer => meta::buffer::execute_reset_buffer(self),
             MetaCommand::WriteBuffer { file } => meta::buffer::execute_write_buffer(self, &file),
+            MetaCommand::ReplayBuffer => {
+                meta::buffer::execute_replay_buffer(self, session_mgr).await
+            }
+            MetaCommand::WatchBuffer {
+                interval_secs,
+                count,
+            } => meta::control::execute_watch(self, interval_secs, count, session_mgr).await,
+            MetaCommand::SetNull { text } => meta::control::execute_set_null(self, text),
             MetaCommand::History { .. } => {
                 // Command history lives in the line editor (`InputHandler`);
                 // the executor never sees it, so `\history` only documents

@@ -57,6 +57,9 @@ export interface Thresholds {
 	cpuPercent: number;
 	memPercent: number;
 	slowMs: number;
+	cpuEnabled: boolean;
+	memEnabled: boolean;
+	slowEnabled: boolean;
 }
 
 const THRESHOLDS_STORAGE_KEY = 'monitor.thresholds';
@@ -65,6 +68,9 @@ const DEFAULT_THRESHOLDS: Thresholds = {
 	cpuPercent: 80,
 	memPercent: 80,
 	slowMs: 500,
+	cpuEnabled: true,
+	memEnabled: true,
+	slowEnabled: true,
 };
 
 function loadThresholds(): Thresholds {
@@ -84,6 +90,18 @@ function loadThresholds(): Thresholds {
 			typeof parsed.slowMs === 'number'
 				? parsed.slowMs
 				: DEFAULT_THRESHOLDS.slowMs,
+		cpuEnabled:
+			typeof parsed.cpuEnabled === 'boolean'
+				? parsed.cpuEnabled
+				: DEFAULT_THRESHOLDS.cpuEnabled,
+		memEnabled:
+			typeof parsed.memEnabled === 'boolean'
+				? parsed.memEnabled
+				: DEFAULT_THRESHOLDS.memEnabled,
+		slowEnabled:
+			typeof parsed.slowEnabled === 'boolean'
+				? parsed.slowEnabled
+				: DEFAULT_THRESHOLDS.slowEnabled,
 	};
 }
 

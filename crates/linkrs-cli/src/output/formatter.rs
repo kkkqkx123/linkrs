@@ -67,6 +67,14 @@ impl OutputFormatter {
         self.format = format;
     }
 
+    pub fn set_null_string(&mut self, text: String) {
+        self.null_string = text;
+    }
+
+    pub fn null_string(&self) -> &str {
+        &self.null_string
+    }
+
     pub fn format(&self) -> OutputFormat {
         self.format
     }

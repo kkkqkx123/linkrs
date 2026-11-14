@@ -108,6 +108,10 @@ fn show_general_help() -> String {
         "  {:25} {}\n",
         "\\x", "Toggle expanded/vertical display"
     ));
+    output.push_str(&format!(
+        "  {:25} {}\n",
+        "\\null [text]", "Show or set the NULL placeholder (output control)"
+    ));
 
     output.push_str(&format!("\n{}\n", "Variables".yellow().bold()));
     output.push_str(&format!(
@@ -206,6 +210,14 @@ fn show_general_help() -> String {
     output.push_str(&format!(
         "  {:25} {}\n",
         "\\w <file>", "Write query buffer to file"
+    ));
+    output.push_str(&format!(
+        "  {:25} {}\n",
+        "\\replay", "Re-execute the current query buffer"
+    ));
+    output.push_str(&format!(
+        "  {:25} {}\n",
+        "\\watch <secs> <n>", "Re-execute buffer n times every secs seconds"
     ));
 
     output.push_str(&format!("\n{}\n", "History".yellow().bold()));
@@ -575,6 +587,34 @@ Example:
             s.push_str("Use UP/DOWN arrows to navigate history in the REPL.\n");
             s
         }
+        "replay" => {
+            let mut s = String::new();
+            s.push_str("Buffer Replay\n\n");
+            s.push_str("Commands:\n");
+            s.push_str("  \\replay            - Re-execute the current query buffer\n");
+            s.push_str("  \\watch <secs> <n> - Re-execute buffer n times every secs seconds\n\n");
+            s.push_str("Both commands run through the normal query path with\n");
+            s.push_str("transaction accounting and output formatting.\n");
+            s
+        }
+        "watch" => {
+            let mut s = String::new();
+            s.push_str("Bounded Timed Replay\n\n");
+            s.push_str("Syntax:\n");
+            s.push_str("  \\watch <interval_secs> <count>\n\n");
+            s.push_str("Re-executes the current query buffer <count> times with a\n");
+            s.push_str("fixed pause between runs. The loop is bounded (count 1-1000,\n");
+            s.push_str("interval (0, 3600]s) and always returns to the REPL.\n");
+            s
+        }
+        "null" => {
+            let mut s = String::new();
+            s.push_str("Null Placeholder (Output Control)\n\n");
+            s.push_str("Commands:\n");
+            s.push_str("  \\null [text]  - Show (no arg) or set the NULL placeholder\n\n");
+            s.push_str("Applies to table, vertical, CSV and HTML rendering.\n");
+            s
+        }
         "stream" => {
             let mut s = String::new();
             s.push_str("Streaming query execution (SSE)\n\n");
@@ -621,7 +661,9 @@ Example:
             s.push_str("  \\e [file] [+line]  - Edit in external editor\n");
             s.push_str("  \\p                  - Print current buffer\n");
             s.push_str("  \\r                  - Reset (clear) buffer\n");
-            s.push_str("  \\w <file>           - Write buffer to file\n\n");
+            s.push_str("  \\w <file>           - Write buffer to file\n");
+            s.push_str("  \\replay              - Re-execute current buffer\n");
+            s.push_str("  \\watch <secs> <n>   - Re-execute buffer n times every secs seconds\n\n");
             s.push_str("The editor is determined by:\n");
             s.push_str("  1. \\set EDITOR <cmd>\n");
             s.push_str("  2. EDITOR environment variable\n");

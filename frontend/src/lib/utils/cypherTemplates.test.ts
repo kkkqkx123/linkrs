@@ -2,8 +2,10 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
 	buildEdgeDelete,
+	buildEdgeInsert,
 	buildEdgeUpdate,
 	buildVertexDelete,
+	buildVertexInsert,
 	buildVertexUpdate,
 	formatCypherValue,
 	quoteVid,
@@ -43,6 +45,22 @@ describe('edge templates', () => {
 		assert.equal(
 			buildEdgeDelete('follow', '101', '102', 0),
 			'DELETE EDGE 101 -> 102 @0 OF follow',
+		);
+	});
+});
+
+describe('insert templates', () => {
+	it('builds vertex insert statements', () => {
+		assert.equal(
+			buildVertexInsert('101', 'person', { name: 'Alice', age: 26 }),
+			'INSERT VERTEX person(name, age) VALUES 101:("Alice", 26)',
+		);
+	});
+
+	it('builds edge insert statements', () => {
+		assert.equal(
+			buildEdgeInsert('follow', '101', '102', 0, { degree: 0.9 }),
+			'INSERT EDGE follow(degree) VALUES 101 -> 102 @0:(0.9)',
 		);
 	});
 });

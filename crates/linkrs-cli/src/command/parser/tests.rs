@@ -1118,3 +1118,59 @@ fn test_parse_sync_requeue_rejects_mixed_filters_and_ids() {
         Command::MetaCommand(MetaCommand::Help { topic: Some(_) })
     ));
 }
+
+#[test]
+fn test_parse_replay_buffer() {
+    assert!(matches!(
+        parse_command("\\replay"),
+        Command::MetaCommand(MetaCommand::ReplayBuffer)
+    ));
+    assert!(matches!(
+        parse_command("\\replay extra"),
+        Command::MetaCommand(MetaCommand::Help { topic: Some(_) })
+    ));
+}
+
+#[test]
+fn test_parse_watch_buffer() {
+    match parse_command("\\watch 1 3") {
+        Command::MetaCommand(MetaCommand::WatchBuffer {
+            interval_secs,
+            count,
+        }) => {
+            assert!((interval_secs - 1.0).abs() < f64::EPSILON);
+            assert_eq!(count, 3);
+        }
+        _ => panic!("Expected WatchBuffer command"),
+    }
+    for bad in [
+        "\\watch",
+        "\\watch 1",
+        "\\watch 0 3",
+        "\\watch 1 0",
+        "\\watch abc 3",
+    ] {
+        assert!(
+            matches!(
+                parse_command(bad),
+                Command::MetaCommand(MetaCommand::Help { topic: Some(_) })
+            ),
+            "expected usage error for {}",
+            bad
+        );
+    }
+}
+
+#[test]
+fn test_parse_null_placeholder() {
+    match parse_command("\\null") {
+        Command::MetaCommand(MetaCommand::SetNull { text }) => assert!(text.is_none()),
+        _ => panic!("Expected SetNull without text"),
+    }
+    match parse_command("\\null N/A") {
+        Command::MetaCommand(MetaCommand::SetNull { text }) => {
+            assert_eq!(text, Some("N/A".to_string()));
+        }
+        _ => panic!("Expected SetNull with text"),
+    }
+}

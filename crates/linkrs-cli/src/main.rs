@@ -87,6 +87,7 @@ async fn run(mut cli: Cli) -> Result<()> {
     };
 
     let mut formatter = OutputFormatter::new();
+    formatter.set_null_string(config.output.null_string.clone());
 
     if let Some(fmt) = OutputFormat::parse(&cli.exec.format) {
         formatter.set_format(fmt);

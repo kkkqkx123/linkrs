@@ -119,6 +119,7 @@ linkrs-cli service status
 | 命令 | 说明 |
 |------|------|
 | `\format <fmt>` | 设置输出格式：`table`/`csv`/`json`/`vertical`/`html` |
+| `\null [text]` | 显示（无参数）或设置空值占位符，作用于表格/纵表/CSV/HTML 渲染 |
 | `\pager [cmd]` | 设置或关闭分页器 |
 | `\timing` | 切换执行时间显示 |
 | `\x` | 切换展开/垂直显示 |
@@ -187,6 +188,8 @@ linkrs-cli service status
 | `\p` | 打印当前查询缓冲区 |
 | `\r` | 清空查询缓冲区 |
 | `\w <file>` | 将查询缓冲区写入文件 |
+| `\replay` | 重放当前查询缓冲区，走正常查询执行与输出格式化 |
+| `\watch <secs> <n>` | 有界定时重放：每隔 `secs` 秒重放一次，共 `n` 次（`1-1000`，必返回交互循环） |
 
 ### 3.7 历史
 
