@@ -3,7 +3,7 @@
 	import { page } from '$app/state';
 	import { t } from '$i18n';
 	import { canManageUsers } from '$stores/connection';
-	import { storage, getLegacyRaw } from '$utils/storage';
+	import { storage } from '$utils/storage';
 	import { fromStore } from 'svelte/store';
 	import {
 		GROUP_ORDER,
@@ -24,11 +24,9 @@
 	const SIDEBAR_MAX = 300;
 	const SNAP_PX = 6;
 	const WIDTH_KEY = 'layout.sidebar-width';
-	// Key used before storage access was unified; read once as a fallback.
-	const LEGACY_WIDTH_KEY = 'linkrs.sidebar-width.v2';
 
 	function loadWidth(): number {
-		const saved = Number(storage.get<string>(WIDTH_KEY) ?? getLegacyRaw(LEGACY_WIDTH_KEY));
+		const saved = Number(storage.get<string>(WIDTH_KEY));
 		if (Number.isFinite(saved)) {
 			return Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, saved));
 		}

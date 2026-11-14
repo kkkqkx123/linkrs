@@ -152,12 +152,14 @@ function escapeSelector(value: string): string {
 export function generateCytoscapeStyle(
 	config: GraphStyleConfig,
 	dark = false,
+	hideLabels = false,
 ): cytoscape.StylesheetCSS[] {
+	const nodeLabel = hideLabels ? '' : 'data(id)';
 	const baseNodeStyle: cytoscape.Css.Node = {
 		'background-color': '#666',
 		width: 40,
 		height: 40,
-		label: 'data(id)',
+		label: nodeLabel,
 		'font-size': '12px',
 		'text-valign': 'center',
 		'text-halign': 'center',
@@ -183,7 +185,11 @@ export function generateCytoscapeStyle(
 			'background-color': style.color,
 			width: getNodeSize(style.size),
 			height: getNodeSize(style.size),
-			label: style.labelProperty === 'id' ? 'data(id)' : `data(label)`,
+			label: hideLabels
+				? ''
+				: style.labelProperty === 'id'
+					? 'data(id)'
+					: `data(label)`,
 		} as cytoscape.Css.Node,
 	}));
 	const edgeStyles = Object.entries(config.edges).map(([type, style]) => ({

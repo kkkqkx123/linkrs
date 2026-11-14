@@ -5,8 +5,15 @@
 	import SpaceIdSelect from '$components/business/retrieval/SpaceIdSelect.svelte';
 	import { queryService } from '$services/query';
 	import { fulltextService } from '$services/fulltext';
+	import { retrievalHitId } from '$utils/dataBrowserTab';
 
-	let { currentSpace }: { currentSpace: string | null } = $props();
+	let {
+		currentSpace,
+		onViewInGraph,
+	}: {
+		currentSpace: string | null;
+		onViewInGraph?: (row: Record<string, unknown>) => void;
+	} = $props();
 
 	let indexName = $state('');
 	let query = $state('');
@@ -128,6 +135,7 @@
 							{#each columns as col (col)}
 								<th>{col}</th>
 							{/each}
+							<th>{t('common.actions')}</th>
 						</tr>
 					</thead>
 					<tbody>
@@ -138,6 +146,17 @@
 										{String(row[col] ?? '')}
 									</td>
 								{/each}
+								<td>
+									{#if onViewInGraph && retrievalHitId(row)}
+										<button
+											type="button"
+											class="ui-btn ui-btn-ghost ui-btn-xs"
+											onclick={() => onViewInGraph?.(row)}
+										>
+											{t('dataBrowser.retrieval.viewInGraph')}
+										</button>
+									{/if}
+								</td>
 							</tr>
 						{/each}
 					</tbody>

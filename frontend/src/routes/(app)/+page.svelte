@@ -1,7 +1,8 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onDestroy, onMount } from 'svelte';
 	import { t } from '$i18n';
 	import { goto } from '$app/navigation';
+	import { fromStore } from 'svelte/store';
 	import {
 		Keyboard,
 		Database,
@@ -10,8 +11,7 @@
 		LineChart,
 		ArrowRight,
 	} from '@lucide/svelte';
-	import { statisticsService } from '$services/statistics';
-	import type { DatabaseOverviewResponse } from '$services/statistics';
+	import { monitoringStore } from '$stores/monitoring';
 	import {
 		formatBytes,
 		formatCount,
@@ -19,19 +19,20 @@
 		formatQps,
 	} from '$utils/metricsFormat';
 
-	let overview = $state<DatabaseOverviewResponse | null>(null);
-	let failed = $state(false);
+	const monitorState = fromStore(monitoringStore);
+	// The dashboard consumes the shared monitoring snapshot instead of
+	// fetching its own copy, so returning home never fires extra requests.
+	const overview = $derived(monitorState.current.snapshots.database);
+	const failed = $derived(
+		overview === null && monitorState.current.error !== null,
+	);
 
-	onMount(async () => {
-		try {
-			overview = await statisticsService.database();
-		} catch {
-			// The dashboard silently degrades to pure navigation; request
-			// failures stay visible through the health monitor and the
-			// monitoring page instead of a blocking error here.
-			failed = true;
-		}
+	onMount(() => {
+		monitoringStore.start();
+		return () => monitoringStore.stop();
 	});
+
+	onDestroy(() => monitoringStore.stop());
 </script>
 
 <div class="max-w-5xl mx-auto space-y-6 animate-fade-in">

@@ -4,6 +4,7 @@
 	import { RefreshCw, Search, Package, ArrowLeftRight, VectorSquare, FileSearch } from '@lucide/svelte';
 	import { get, fromStore } from 'svelte/store';
 	import { goto } from '$app/navigation';
+	import { page } from '$app/state';
 	import { SvelteSet } from 'svelte/reactivity';
 	import { dataBrowserStore } from '$stores/dataBrowser';
 	import { notificationStore } from '$stores/notification';
@@ -28,6 +29,7 @@
 	import type { DataBrowserTab } from '$types/dataBrowser';
 	import EditPreviewModal from '$components/business/EditPreviewModal.svelte';
 	import type { VertexData, EdgeData } from '$types/dataBrowser';
+	import { parseDataBrowserTab, retrievalHitId } from '$utils/dataBrowserTab';
 	import { copyToClipboard } from '$utils/function';
 	import { queryService } from '$services/query';
 
@@ -67,6 +69,8 @@
 	});
 
 	onMount(() => {
+		const initial = parseDataBrowserTab(page.url.searchParams.get('tab'));
+		if (initial !== activeTab) dataBrowserStore.setActiveTab(initial);
 		pageInitialized = true;
 	});
 
@@ -162,6 +166,7 @@
 
 	function handleTabChange(tab: DataBrowserTab) {
 		dataBrowserStore.setActiveTab(tab);
+		goto(`?tab=${tab}`, { replaceState: true, keepFocus: true, noScroll: true });
 		if (tab === 'vertices' && currentSpace) {
 			schemaStore.fetchTags(currentSpace);
 			if (selectedTag) loadVertices();
@@ -514,6 +519,21 @@
 		graphStore.openWorkbench();
 		goto('/console');
 	}
+
+	function viewRetrievalHitInGraph(row: Record<string, unknown>) {
+		const id = retrievalHitId(row);
+		if (!id || !currentSpace) {
+			notificationStore.error('dataBrowser.retrieval.noHitId');
+			return;
+		}
+		graphStore.mergeGraphData({
+			nodes: [{ id, tag: 'unknown', properties: { ...row } }],
+			edges: [],
+		});
+		graphStore.selectNode(id);
+		graphStore.openWorkbench();
+		goto('/console');
+	}
 </script>
 
 {#if !pageInitialized}
@@ -603,9 +623,9 @@
 
 				<div class="p-5 flex-1 overflow-auto">
 					{#if activeTab === 'vector'}
-						<VectorSearchPanel {currentSpace} />
+						<VectorSearchPanel {currentSpace} onViewInGraph={viewRetrievalHitInGraph} />
 					{:else if activeTab === 'fulltext'}
-						<FulltextSearchPanel {currentSpace} />
+						<FulltextSearchPanel {currentSpace} onViewInGraph={viewRetrievalHitInGraph} />
 					{:else if activeTab === 'vertices'}
 						<EntityTable
 							filterOptions={tags.map((tg) => tg.name)}

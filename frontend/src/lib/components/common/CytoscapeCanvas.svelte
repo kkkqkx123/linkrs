@@ -6,6 +6,7 @@
 		generateCytoscapeStyle,
 	} from '$utils/cytoscapeConfig';
 	import { applyLayout, type LayoutParams } from '$utils/graphLayout';
+	import { resolveCanvasLayout } from '$utils/graphLimits';
 	import type { GraphData, GraphStyleConfig, LayoutType } from '$types/graph';
 
 	interface NodeTapData {
@@ -32,6 +33,7 @@
 		zoom = 1,
 		relayoutToken = 0,
 		layoutParams = { nodeRepulsion: 4500, gravity: 0.1, numIter: 1500 },
+		hideLabels = false,
 		cyInstance = $bindable<cytoscape.Core | null>(null),
 		onNodeTap,
 		onEdgeTap,
@@ -45,6 +47,7 @@
 		zoom?: number;
 		relayoutToken?: number;
 		layoutParams?: LayoutParams;
+		hideLabels?: boolean;
 		cyInstance?: cytoscape.Core | null;
 		onNodeTap?: (data: NodeTapData) => void;
 		onEdgeTap?: (data: EdgeTapData) => void;
@@ -82,7 +85,7 @@
 
 	function refreshStyle() {
 		if (!cyInstance) return;
-		cyInstance.style(generateCytoscapeStyle(styleConfig, isDark));
+		cyInstance.style(generateCytoscapeStyle(styleConfig, isDark, hideLabels));
 		syncElements(false);
 	}
 
@@ -124,7 +127,11 @@
 		syncDuration = performance.now() - startSync;
 		if (relayout) {
 			const startLayout = performance.now();
-			applyLayout(cyInstance, layout, cyInstance.elements().length, layoutParams);
+			const effective = resolveCanvasLayout(
+				layout,
+				cyInstance.elements().length,
+			);
+			applyLayout(cyInstance, effective, cyInstance.elements().length, layoutParams);
 			layoutDuration = performance.now() - startLayout;
 		}
 	}
@@ -141,7 +148,7 @@
 			const cy = cytoscape({
 				container: containerEl,
 				elements: convertToCytoscapeElements(data, styleConfig),
-				style: generateCytoscapeStyle(styleConfig, isDark),
+				style: generateCytoscapeStyle(styleConfig, isDark, hideLabels),
 				layout: { name: 'preset' },
 				minZoom: 0.1,
 				maxZoom: 10,
@@ -168,9 +175,17 @@
 		syncElements(false);
 		if (relayoutToken !== lastRelayoutToken) {
 			lastRelayoutToken = relayoutToken;
-			applyLayout(cyInstance, layout, cyInstance.elements().length, layoutParams);
+			const effective = resolveCanvasLayout(
+				layout,
+				cyInstance.elements().length,
+			);
+			applyLayout(cyInstance, effective, cyInstance.elements().length, layoutParams);
 		} else if (layout) {
-			applyLayout(cyInstance, layout, cyInstance.elements().length, layoutParams);
+			const effective = resolveCanvasLayout(
+				layout,
+				cyInstance.elements().length,
+			);
+			applyLayout(cyInstance, effective, cyInstance.elements().length, layoutParams);
 		}
 	});
 

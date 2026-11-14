@@ -13,7 +13,7 @@ import {
 	type MonitoringStreamStatus,
 } from '$services/monitoringStream';
 import { t } from '$i18n';
-import { storage, getLegacyRaw } from '$utils/storage';
+import { storage } from '$utils/storage';
 import { rangeQueryBounds, type TrendRange } from '$utils/timeWindow';
 import type {
 	DatabaseOverviewResponse,
@@ -60,8 +60,6 @@ export interface Thresholds {
 }
 
 const THRESHOLDS_STORAGE_KEY = 'monitor.thresholds';
-// Key used before storage access was unified; read once as a fallback.
-const LEGACY_THRESHOLDS_STORAGE_KEY = 'linkrs_monitor_thresholds';
 
 const DEFAULT_THRESHOLDS: Thresholds = {
 	cpuPercent: 80,
@@ -71,9 +69,7 @@ const DEFAULT_THRESHOLDS: Thresholds = {
 
 function loadThresholds(): Thresholds {
 	const fallback = { ...DEFAULT_THRESHOLDS };
-	const parsed =
-		storage.get<Partial<Thresholds>>(THRESHOLDS_STORAGE_KEY) ??
-		parseLegacyThresholds();
+	const parsed = storage.get<Partial<Thresholds>>(THRESHOLDS_STORAGE_KEY);
 	if (!parsed) return fallback;
 	return {
 		cpuPercent:
@@ -89,16 +85,6 @@ function loadThresholds(): Thresholds {
 				? parsed.slowMs
 				: DEFAULT_THRESHOLDS.slowMs,
 	};
-}
-
-function parseLegacyThresholds(): Partial<Thresholds> | null {
-	try {
-		const raw = getLegacyRaw(LEGACY_THRESHOLDS_STORAGE_KEY);
-		if (!raw) return null;
-		return JSON.parse(raw) as Partial<Thresholds>;
-	} catch {
-		return null;
-	}
 }
 
 function persistThresholds(thresholds: Thresholds): void {

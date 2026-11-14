@@ -3684,7 +3684,7 @@ export interface components {
         /** @description List of vector indexes response */
         ListVectorIndexesResponse: {
             count: number;
-            indexes: string[];
+            indexes: components["schemas"]["VectorIndexInfo"][];
         };
         /** @description Liveness probe payload. */
         LiveResponse: {
@@ -4876,6 +4876,19 @@ export interface components {
         VectorIndexDroppedResponse: {
             message: string;
             success: boolean;
+        };
+        /** @description Vector index information */
+        VectorIndexInfo: {
+            distance: string;
+            field_name: string;
+            name: string;
+            /** Format: int64 */
+            points_count: number;
+            /** Format: int64 */
+            space_id: number;
+            status: string;
+            tag_name: string;
+            vector_size: number;
         };
         /** @description One vector point. */
         VectorPoint: {

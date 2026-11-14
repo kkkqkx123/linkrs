@@ -144,17 +144,19 @@ export const managementHandlers: MockRegistry = {
 	'GET /v1/migration/status/{space}/{label}': { status: scenarioIsEmpty() ? 'idle' : 'completed', current_version: 1, target_version: 1 } satisfies MockEntry,
 
 	'GET /v1/vector/indexes': {
+		count: scenarioIsEmpty() ? 0 : 1,
 		indexes: scenarioIsEmpty()
 			? []
 			: [
 			{
+				name: 'space_vec_1',
 				space_id: 1,
 				tag_name: 'person',
 				field_name: 'embedding',
 				vector_size: 128,
 				distance: 'Cosine',
-				status: 'ready',
-				point_count: 4,
+				points_count: 4,
+				status: 'green',
 			},
 		],
 	} satisfies MockEntry,

@@ -1,6 +1,6 @@
 import { writable } from 'svelte/store';
 import { t } from '$i18n';
-import { storage, getLegacyRaw } from '$utils/storage';
+import { storage } from '$utils/storage';
 
 export interface QueryHistoryItem {
 	id: string;
@@ -30,28 +30,9 @@ const MAX_FAVORITES = 30;
 // Own persistence key: the console store also writes its UI preferences, so
 // sharing one key made the two writers overwrite each other's fields.
 const STORAGE_KEY = 'console.history';
-// Keys used before the storage access was unified; read once for migration.
-const LEGACY_SPLIT_KEY = 'linkrs-history-storage';
-const LEGACY_SHARED_KEY = 'linkrs-console-storage';
 
 function generateId(): string {
 	return `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
-}
-
-function parsePersisted(raw: string): {
-	history: QueryHistoryItem[];
-	favorites: QueryFavoriteItem[];
-} | null {
-	try {
-		const parsed = JSON.parse(raw);
-		return {
-			history: Array.isArray(parsed.history) ? parsed.history : [],
-			favorites: Array.isArray(parsed.favorites) ? parsed.favorites : [],
-		};
-	} catch {
-		/* ignore */
-	}
-	return null;
 }
 
 function loadPersisted(): { history: QueryHistoryItem[]; favorites: QueryFavoriteItem[] } {
@@ -61,13 +42,6 @@ function loadPersisted(): { history: QueryHistoryItem[]; favorites: QueryFavorit
 			history: saved.history as QueryHistoryItem[],
 			favorites: saved.favorites as QueryFavoriteItem[],
 		};
-	}
-	// One-time migration from the pre-unification keys.
-	const legacy =
-		getLegacyRaw(LEGACY_SPLIT_KEY) ?? getLegacyRaw(LEGACY_SHARED_KEY);
-	if (legacy) {
-		const parsed = parsePersisted(legacy);
-		if (parsed) return parsed;
 	}
 	return { history: [], favorites: [] };
 }

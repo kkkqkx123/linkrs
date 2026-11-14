@@ -5,7 +5,9 @@
 use crate::api_core::error::{CoreError, CoreResult};
 use linkrs_core::SearchIndexMetadata;
 use linkrs_sync::backend::VectorBackend;
-use linkrs_sync::vector_sync::{SearchOptions, VectorIndexLocation, VectorSyncCoordinator};
+use linkrs_sync::vector_sync::{
+    IndexMetadataWrapper, SearchOptions, VectorIndexLocation, VectorSyncCoordinator,
+};
 use simvec::{
     types::{IndexConfig, IndexMetadata, PointId},
     CollectionConfig, DistanceMetric, VectorPoint,
@@ -195,13 +197,17 @@ impl VectorApi {
         Ok(self.coordinator.index_info(space_id, tag_name, field_name))
     }
 
-    /// List all vector indexes
-    pub fn list_indexes(&self) -> Vec<String> {
-        self.coordinator
-            .list_indexes()
-            .into_iter()
-            .map(|w| w.collection_name)
-            .collect()
+    /// List all vector indexes with their stored metadata.
+    ///
+    /// Each entry pairs the logical location (collection, space, tag,
+    /// field) with the stored index metadata when the collection still
+    /// exists. Transports assemble their own response shapes from this
+    /// pair instead of depending on a name-only listing.
+    pub fn list_indexes(&self) -> Vec<(IndexMetadataWrapper, Option<IndexMetadata>)> {
+        self.coordinator.list_indexes().into_iter().map(|w| {
+            let meta = self.coordinator.index_info(w.space_id, &w.tag_name, &w.field_name);
+            (w, meta)
+        }).collect()
     }
 
     /// List vector indexes as the common search-index descriptor.

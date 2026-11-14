@@ -6,8 +6,15 @@
 	import { queryService } from '$services/query';
 	import { vectorService } from '$services/vector';
 	import { formatScore } from '$utils/metricsFormat';
+	import { retrievalHitId } from '$utils/dataBrowserTab';
 
-	let { currentSpace }: { currentSpace: string | null } = $props();
+	let {
+		currentSpace,
+		onViewInGraph,
+	}: {
+		currentSpace: string | null;
+		onViewInGraph?: (row: Record<string, unknown>) => void;
+	} = $props();
 
 	let indexName = $state('');
 	let mode = $state<'vector' | 'text'>('vector');
@@ -192,6 +199,7 @@
 		{#each columns as col (col)}
 							<th>{col}</th>
 						{/each}
+							<th>{t('common.actions')}</th>
 					</tr>
 				</thead>
 				<tbody>
@@ -203,6 +211,17 @@
 										? formatScore(row[col])
 										: String(row[col] ?? '')}
 								</td>
+							<td>
+								{#if onViewInGraph && retrievalHitId(row)}
+									<button
+										type="button"
+										class="ui-btn ui-btn-ghost ui-btn-xs"
+										onclick={() => onViewInGraph?.(row)}
+									>
+										{t('dataBrowser.retrieval.viewInGraph')}
+									</button>
+								{/if}
+							</td>
 							{/each}
 						</tr>
 					{/each}

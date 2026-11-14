@@ -9,7 +9,7 @@ import {
 	type ExecutionPreference,
 } from '$utils/autoRoute';
 import { t } from '$i18n';
-import { storage, getLegacyRaw } from '$utils/storage';
+import { storage } from '$utils/storage';
 import { streamStore, type StreamState } from '$stores/stream';
 import { cursorStore, type CursorState } from '$stores/cursor';
 import { historyStore, type QueryHistoryItem, type QueryFavoriteItem } from '$stores/history';
@@ -64,22 +64,9 @@ const PREFS_KEY = 'console.preferences';
 const DRAFT_KEY = 'console.editor-draft';
 const PARAMETERS_KEY = 'console.parameters';
 const SESSION_VARIABLES_KEY = 'console.session-variables';
-// Key used before storage access was unified; read once as a fallback.
-const LEGACY_PREFS_KEY = 'linkrs-console-storage';
-const LEGACY_DRAFT_KEY = 'linkrs_editor_draft';
-const LEGACY_PARAMETERS_KEY = 'linkrs_console_parameters';
-const LEGACY_SESSION_VARIABLES_KEY = 'linkrs_console_session_variables';
 
 function loadPersisted(): Partial<ConsoleState> {
-	const saved = storage.get<Partial<ConsoleState>>(PREFS_KEY);
-	if (saved) return saved;
-	try {
-		const legacy = getLegacyRaw(LEGACY_PREFS_KEY);
-		if (legacy) return JSON.parse(legacy);
-	} catch {
-		/* ignore */
-	}
-	return {};
+	return storage.get<Partial<ConsoleState>>(PREFS_KEY) ?? {};
 }
 
 function persist(state: ConsoleState): void {
@@ -113,18 +100,9 @@ function toEntry(item: BatchStatementResult): StatementResultEntry {
 	};
 }
 
-function loadBindings(key: string, legacyKey: string): Record<string, unknown> {
+function loadBindings(key: string): Record<string, unknown> {
 	const saved = storage.get<unknown>(key);
 	if (isRecord(saved)) return saved;
-	try {
-		const legacy = getLegacyRaw(legacyKey);
-		if (legacy) {
-			const parsed: unknown = JSON.parse(legacy);
-			if (isRecord(parsed)) return parsed;
-		}
-	} catch {
-		/* ignore */
-	}
 	return {};
 }
 
@@ -134,19 +112,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 export function createConsoleStore() {
 	const { subscribe, update } = writable<ConsoleState>({
-		editorContent:
-			storage.get<string>(DRAFT_KEY) ?? getLegacyRaw(LEGACY_DRAFT_KEY) ?? '',
+		editorContent: storage.get<string>(DRAFT_KEY) ?? '',
 		isExecuting: false,
 		currentResult: null,
 		results: [],
 		executionTime: 0,
 		error: null,
 		activeView: (persisted.activeView as 'table' | 'json' | 'graph') || 'table',
-		parameters: loadBindings(PARAMETERS_KEY, LEGACY_PARAMETERS_KEY),
-		sessionVariables: loadBindings(
-			SESSION_VARIABLES_KEY,
-			LEGACY_SESSION_VARIABLES_KEY,
-		),
+		parameters: loadBindings(PARAMETERS_KEY),
+		sessionVariables: loadBindings(SESSION_VARIABLES_KEY),
 		resultMode: null,
 		executionPreference: restorePreference(),
 		autoStreamThreshold: clampAutoThreshold(

@@ -15,6 +15,7 @@
 	import { graphService } from '$services/graph';
 	import { theme } from '$stores/theme';
 	import { getLayoutOptions } from '$utils/graphLayout';
+	import { LABEL_HIDE_ZOOM } from '$utils/graphLimits';
 	import { makeEdgeId } from '$utils/cytoscapeConfig';
 	import CytoscapeCanvas from '$components/common/CytoscapeCanvas.svelte';
 	import type { GraphStyleConfig, LayoutType } from '$types/graph';
@@ -105,6 +106,10 @@
 	let filterEdgeTypes = $derived(graphState.current.filterEdgeTypes);
 	let simplifiedMode = $derived(graphState.current.simplifiedMode);
 	let layoutParams = $derived(graphState.current.layoutParams);
+	let nodeTotal = $derived(graphState.current.nodeTotal);
+	let edgeTotal = $derived(graphState.current.edgeTotal);
+	let truncated = $derived(graphState.current.truncated);
+	let hideLabels = $derived(storeZoom < LABEL_HIDE_ZOOM);
 
 	const layoutOptions = getLayoutOptions();
 
@@ -784,6 +789,7 @@
 					zoom={storeZoom}
 					{relayoutToken}
 					{layoutParams}
+					{hideLabels}
 					onNodeTap={handleNodeTap}
 					onEdgeTap={handleEdgeTap}
 					onBackgroundTap={handleBackgroundTap}
@@ -823,7 +829,12 @@
 				<div
 					class="absolute bottom-2 right-2 text-xs text-muted bg-surface/80 px-2 py-1 rounded"
 				>
-					{t('graph.perfLayout')}: {layoutDuration.toFixed(0)}ms |
+					{t('graph.nodes')}: {graphData.nodes.length}/{nodeTotal} |
+					{t('graph.edges')}: {graphData.edges.length}/{edgeTotal}
+					{#if truncated}
+						<span class="text-warning">({t('graph.truncated')})</span>
+					{/if}
+					| {t('graph.perfLayout')}: {layoutDuration.toFixed(0)}ms |
 					{t('graph.perfSync')}:
 					{syncDuration.toFixed(0)}ms
 				</div>

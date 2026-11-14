@@ -9,16 +9,15 @@ import { BASE_URL } from '$lib/api/client';
  */
 
 import { STORAGE_KEYS } from '$config/constants';
-import { storage, getLegacyRaw } from '$utils/storage';
+import { storage } from '$utils/storage';
 
 export function getApiBaseUrl(): string {
 	return BASE_URL;
 }
 
-/** Session id persistence via the unified storage helpers; the pre-unification
- * raw entry is kept as a one-time read fallback. */
+/** Session id persistence via the unified storage helpers. */
 function getStoredSessionId(): string | null {
-	return storage.get<string>(STORAGE_KEYS.SESSION_ID) ?? getLegacyRaw(STORAGE_KEYS.SESSION_ID);
+	return storage.get<string>(STORAGE_KEYS.SESSION_ID);
 }
 
 function setStoredSessionId(id: string): void {

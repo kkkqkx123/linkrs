@@ -1,5 +1,5 @@
 import { writable } from 'svelte/store';
-import { storage, getLegacyRaw } from '$utils/storage';
+import { storage } from '$utils/storage';
 import { schemaService } from '$services/schema';
 import { queryService } from '$services/query';
 import type {
@@ -36,8 +36,6 @@ interface SchemaState {
 }
 
 const CURRENT_SPACE_KEY = 'schema.current-space';
-// Key used before storage access was unified; read once as a fallback.
-const LEGACY_CURRENT_SPACE_KEY = 'schema-current-space';
 
 function persistCurrentSpace(name: string | null) {
 	if (name) storage.set(CURRENT_SPACE_KEY, name);
@@ -45,9 +43,7 @@ function persistCurrentSpace(name: string | null) {
 }
 
 function createSchemaStore() {
-	const savedSpace =
-		storage.get<string>(CURRENT_SPACE_KEY) ??
-		getLegacyRaw(LEGACY_CURRENT_SPACE_KEY);
+	const savedSpace = storage.get<string>(CURRENT_SPACE_KEY);
 	const { subscribe, update } = writable<SchemaState>({
 		spaces: [],
 		isLoadingSpaces: false,

@@ -5,12 +5,16 @@ import type {
 	EdgeDetail,
 } from '$types/graph';
 import type { GraphData } from '$types/graph';
-import { storage, getLegacyRaw } from '$utils/storage';
+import { storage } from '$utils/storage';
+import {
+	MAX_GRAPH_EDGES,
+	MAX_GRAPH_NODES,
+	shouldSimplify,
+	truncateToLimit,
+} from '$utils/graphLimits';
 
 // Persistence key, unified through `utils/storage.ts` (prefixed, safe).
 const PREFS_KEY = 'graph.preferences';
-// Key used before storage access was unified; read once as a fallback.
-const LEGACY_PREFS_KEY = 'graph-storage';
 
 export type { NodeDetail, EdgeDetail };
 
@@ -43,6 +47,10 @@ export interface GraphState {
 	filterTags: Set<string>;
 	filterEdgeTypes: Set<string>;
 	simplifiedMode: boolean;
+	/** Attempted totals before canvas truncation and whether any cut happened. */
+	nodeTotal: number;
+	edgeTotal: number;
+	truncated: boolean;
 	/** Deduplication indexes mirroring `graphData`; never persisted. */
 	nodeIndex: Map<string, GraphData['nodes'][number]>;
 	edgeIndex: Map<string, GraphData['edges'][number]>;
@@ -84,15 +92,7 @@ const generateEdgeColor = (index: number): string => {
 };
 
 function loadPersisted(): Partial<GraphState> {
-	const saved = storage.get<Partial<GraphState>>(PREFS_KEY);
-	if (saved) return saved;
-	try {
-		const legacy = getLegacyRaw(LEGACY_PREFS_KEY);
-		if (legacy) return JSON.parse(legacy);
-	} catch {
-		/* ignore */
-	}
-	return {};
+	return storage.get<Partial<GraphState>>(PREFS_KEY) ?? {};
 }
 
 const persisted = loadPersisted();
@@ -148,6 +148,9 @@ function createGraphStore() {
 		filterTags: new Set<string>(),
 		filterEdgeTypes: new Set<string>(),
 		simplifiedMode: false,
+		nodeTotal: 0,
+		edgeTotal: 0,
+		truncated: false,
 		nodeIndex: new Map(),
 		edgeIndex: new Map(),
 		layoutParams: {
@@ -171,17 +174,26 @@ function createGraphStore() {
 		subscribe,
 		setGraphData: (data: GraphData) =>
 			update((s) => {
+				const nodes = truncateToLimit(data.nodes, MAX_GRAPH_NODES);
+				const edges = truncateToLimit(data.edges, MAX_GRAPH_EDGES);
+				const capped: GraphData = { nodes: nodes.items, edges: edges.items };
 				const { nodeStyles, edgeStyles } = ensureStylesForData(
 					s.nodeStyles,
 					s.edgeStyles,
-					data,
+					capped,
 				);
 				const newState = {
 					...s,
-					graphData: data,
+					graphData: capped,
+					nodeTotal: nodes.total,
+					edgeTotal: edges.total,
+					truncated: nodes.truncated || edges.truncated,
+					simplifiedMode: shouldSimplify(nodes.total + edges.total)
+						? true
+						: s.simplifiedMode,
 					nodeStyles,
 					edgeStyles,
-					...buildIndexes(data),
+					...buildIndexes(capped),
 				};
 				persistStyles(newState);
 				return newState;
@@ -190,6 +202,9 @@ function createGraphStore() {
 			update((s) => ({
 				...s,
 				graphData: null,
+				nodeTotal: 0,
+				edgeTotal: 0,
+				truncated: false,
 				selectedNodes: [],
 				selectedEdges: [],
 				...buildIndexes(null),
@@ -213,7 +228,12 @@ function createGraphStore() {
 						edges.push(edge);
 					}
 				}
-				const merged: GraphData = { nodes, edges };
+				const cappedNodes = truncateToLimit(nodes, MAX_GRAPH_NODES);
+				const cappedEdges = truncateToLimit(edges, MAX_GRAPH_EDGES);
+				const merged: GraphData = {
+					nodes: cappedNodes.items,
+					edges: cappedEdges.items,
+				};
 				const { nodeStyles, edgeStyles } = ensureStylesForData(
 					s.nodeStyles,
 					s.edgeStyles,
@@ -222,10 +242,12 @@ function createGraphStore() {
 				const newState = {
 					...s,
 					graphData: merged,
+					nodeTotal: cappedNodes.total,
+					edgeTotal: cappedEdges.total,
+					truncated: cappedNodes.truncated || cappedEdges.truncated,
 					nodeStyles,
 					edgeStyles,
-					nodeIndex,
-					edgeIndex,
+					...buildIndexes(merged),
 				};
 				persistStyles(newState);
 				return newState;

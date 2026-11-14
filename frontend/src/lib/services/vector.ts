@@ -1,4 +1,12 @@
 import { call, client } from '$lib/api/client';
+import type { components } from '$lib/api/schema';
+
+export type VectorIndexInfo = components['schemas']['VectorIndexInfo'];
+
+export interface VectorIndexListResponse {
+	indexes: VectorIndexInfo[];
+	count: number;
+}
 
 export interface CreateVectorIndexParams {
 	space_id: number;
@@ -9,12 +17,12 @@ export interface CreateVectorIndexParams {
 }
 
 /**
- * Vector index management. Payloads stay opaque (`unknown`)
- * because index info shapes vary by backend; the page renders them as
- * JSON plus the key result tables.
+ * Vector index management. The list endpoint returns index descriptors;
+ * the management table renders them directly, falling back to generic
+ * payload rendering only for unexpected shapes.
  */
 export const vectorService = {
-	list: async (): Promise<unknown> =>
+	list: async (): Promise<VectorIndexListResponse> =>
 		call(client.GET('/v1/vector/indexes')),
 
 	info: async (

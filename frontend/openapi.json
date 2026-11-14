@@ -11033,7 +11033,7 @@
           "indexes": {
             "type": "array",
             "items": {
-              "type": "string"
+              "$ref": "#/components/schemas/VectorIndexInfo"
             }
           }
         }
@@ -14752,6 +14752,51 @@
           },
           "success": {
             "type": "boolean"
+          }
+        }
+      },
+      "VectorIndexInfo": {
+        "type": "object",
+        "description": "Vector index information",
+        "required": [
+          "name",
+          "space_id",
+          "tag_name",
+          "field_name",
+          "vector_size",
+          "distance",
+          "points_count",
+          "status"
+        ],
+        "properties": {
+          "distance": {
+            "type": "string"
+          },
+          "field_name": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "points_count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "space_id": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "status": {
+            "type": "string"
+          },
+          "tag_name": {
+            "type": "string"
+          },
+          "vector_size": {
+            "type": "integer",
+            "minimum": 0
           }
         }
       },

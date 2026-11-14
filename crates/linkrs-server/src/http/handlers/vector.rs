@@ -53,6 +53,7 @@ pub struct VectorIndexInfo {
     pub vector_size: usize,
     pub distance: String,
     pub points_count: u64,
+    pub status: String,
 }
 
 /// Vector search request
@@ -111,7 +112,7 @@ pub struct VectorSearchResult {
 /// List of vector indexes response
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct ListVectorIndexesResponse {
-    pub indexes: Vec<String>,
+    pub indexes: Vec<VectorIndexInfo>,
     pub count: usize,
 }
 
@@ -335,7 +336,7 @@ pub async fn get_index_info<
                 collection_name: info.name.clone(),
                 status: "green".to_string(),
                 vectors_count: info.vector_count,
-                points_count: 0,
+                points_count: info.vector_count,
                 indexed_vectors_count: 0,
                 vector_size: info.config.vector_size,
                 distance: format!("{:?}", info.config.distance),
@@ -382,7 +383,27 @@ pub async fn list_indexes<
     let vector_api = graph_service.vector_api();
 
     if let Some(vector_api) = vector_api {
-        let indexes = vector_api.list_indexes();
+        let mut indexes = Vec::new();
+        for (wrapper, meta) in vector_api.list_indexes() {
+            let (vector_size, distance, points_count) = match meta {
+                Some(info) => (
+                    info.config.vector_size,
+                    format!("{:?}", info.config.distance),
+                    info.vector_count,
+                ),
+                None => (0, "Cosine".to_string(), 0),
+            };
+            indexes.push(VectorIndexInfo {
+                name: wrapper.collection_name,
+                space_id: wrapper.space_id,
+                tag_name: wrapper.tag_name,
+                field_name: wrapper.field_name,
+                vector_size,
+                distance,
+                points_count,
+                status: "green".to_string(),
+            });
+        }
         let count = indexes.len();
         Ok(JsonResponse(ListVectorIndexesResponse { indexes, count }))
     } else {
