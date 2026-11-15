@@ -209,7 +209,15 @@ pub(super) fn convert_flatten(
     if let Some(var) = n.output_var {
         node.set_output_var(var);
     }
-    node.set_col_names(n.col_names);
+    // Flatten replays its input unchanged: an empty logical column list
+    // would erase probe/build bindings for WCO validation, so fall back to
+    // the converted input contract instead of propagating the emptiness.
+    if n.col_names.is_empty() {
+        let input_cols = node.input().col_names().to_vec();
+        node.set_col_names(input_cols);
+    } else {
+        node.set_col_names(n.col_names);
+    }
     node.set_column_types(n.column_types);
     PlanNodeEnum::Flatten(node)
 }

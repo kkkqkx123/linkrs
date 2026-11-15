@@ -56,13 +56,17 @@ impl FactorizationRewriter {
         let mut flattens = groups.iter().copied().collect::<Vec<_>>();
         flattens.sort_unstable();
         for pos in flattens {
+            // Flatten replays child rows unchanged, so its column contract
+            // mirrors the input. An empty list would erase the probe/build
+            // bindings that WCO validation reads statically.
+            let col_names = plan.col_names().to_vec();
             *plan = LogicalNodeEnum::Flatten(
                 crate::planning::plan::logical::logical_nodes::flatten::LogicalFlattenNode {
                     id: crate::planning::plan::core::node_id_generator::next_node_id(),
                     input: Some(Box::new(plan.clone())),
                     group_pos: pos,
                     output_var: None,
-                    col_names: vec![],
+                    col_names,
                     column_types: vec![],
                     expected_groups: None,
                     group_columns: vec![],

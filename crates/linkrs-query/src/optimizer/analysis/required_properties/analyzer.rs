@@ -203,6 +203,16 @@ impl RequiredPropertyAnalyzer {
                 self.propagate(n.input(), &passed, map);
                 self.propagate(n.intersect_input(), &passed, map);
             }
+            WcoIntersect(n) => {
+                // N-way intersect shares one variable across N build sides:
+                // every input carries the bound columns plus the intersect
+                // column, so all of them receive the full requirement set.
+                Self::merge_join_keys(n.bound_keys(), &[n.intersect_key().clone()], &mut passed);
+                self.propagate(n.probe_input(), &passed, map);
+                for build in n.build_inputs() {
+                    self.propagate(build, &passed, map);
+                }
+            }
 
             // Traversal nodes pass requirements through to their inputs.
             Expand(n) => {

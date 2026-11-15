@@ -108,6 +108,15 @@ pub(super) fn expand_skip_rows(
     if !expand_closed_loop(expand) {
         return false;
     }
+    // Rowless output carries only the seed prefix plus edge/dst bypass
+    // columns. A downstream `seed.prop` read without a flat slot would fall
+    // back to per-row evaluation over an empty row view and drop rows, so
+    // any seed property demand keeps the row path.
+    if let Some(seed_var) = expand.col_names().first() {
+        if ancestors.iter().any(|anc| ancestor_uses_seed_prop(anc, seed_var)) {
+            return false;
+        }
+    }
     let mut rest = ancestors.iter().rev();
     let terminator = loop {
         match rest.next() {
@@ -193,6 +202,59 @@ pub(super) fn expand_skip_rows(
                 && next.src_vids().is_empty()
         }
         _ => false,
+    }
+}
+
+
+/// Whether any ancestor demands `seed_var.prop`: such reads need the seed
+/// row view (no flat slot is guaranteed for the seed), so the hop must stay
+/// rowful. Bare `seed` references stay columnar-safe via typed gathering.
+fn ancestor_uses_seed_prop(anc: &PlanNodeEnum, seed_var: &str) -> bool {
+    match anc {
+        PlanNodeEnum::Project(p) => p.columns().iter().any(|c| {
+            c.expression
+                .expression()
+                .is_some_and(|meta| expr_uses_seed_prop(meta.inner(), seed_var))
+        }),
+        PlanNodeEnum::Filter(f) => f
+            .condition()
+            .get_expression()
+            .is_some_and(|e| expr_uses_seed_prop(&e, seed_var)),
+        PlanNodeEnum::Aggregate(a) => {
+            if a.group_keys().iter().any(|k| k == seed_var) {
+                return false;
+            }
+            a.aggregation_args().iter().flatten().any(|e| expr_uses_seed_prop(e, seed_var))
+        }
+        PlanNodeEnum::Sort(s) => s
+            .sort_items()
+            .iter()
+            .any(|i| expr_uses_seed_prop(&i.expression, seed_var)),
+        PlanNodeEnum::TopN(t) => t
+            .sort_items()
+            .iter()
+            .any(|i| expr_uses_seed_prop(&i.expression, seed_var)),
+        PlanNodeEnum::ExpandAll(e) => e
+            .filter()
+            .and_then(|f| f.get_expression())
+            .is_some_and(|ex| expr_uses_seed_prop(&ex, seed_var)),
+        _ => false,
+    }
+}
+
+/// Whether `expr` reads `seed_var.prop` (directly or nested). Bare variable
+/// uses stay columnar-safe and do not count.
+fn expr_uses_seed_prop(expr: &Expression, seed_var: &str) -> bool {
+    match expr {
+        Expression::Property { object, .. } => {
+            if let Expression::Variable(v) = object.as_ref() {
+                if v == seed_var {
+                    return true;
+                }
+            }
+            expr_uses_seed_prop(object, seed_var)
+        }
+        _ => expr.children().iter().any(|c| expr_uses_seed_prop(c, seed_var)),
     }
 }
 
