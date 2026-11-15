@@ -86,7 +86,9 @@ fn test_transaction_cascading_operations() {
         .assert_success()
         .exec_ddl("CREATE EDGE IF NOT EXISTS KNOWS")
         .assert_success()
-        .exec_dml("INSERT VERTEX Person(id, name) VALUES 1:(1, 'Alice'), 2:(2, 'Bob'), 3:(3, 'Charlie')")
+        .exec_dml(
+            "INSERT VERTEX Person(id, name) VALUES 1:(1, 'Alice'), 2:(2, 'Bob'), 3:(3, 'Charlie')",
+        )
         .assert_success()
         .exec_dml("INSERT EDGE KNOWS VALUES 1->2")
         .assert_success()
@@ -106,7 +108,9 @@ fn test_transaction_statistics_consistency() {
         .setup_space("test_space")
         .exec_ddl("CREATE TAG IF NOT EXISTS Person(id INT, name STRING)")
         .assert_success()
-        .exec_dml("INSERT VERTEX Person(id, name) VALUES 1:(1, 'Alice'), 2:(2, 'Bob'), 3:(3, 'Charlie')")
+        .exec_dml(
+            "INSERT VERTEX Person(id, name) VALUES 1:(1, 'Alice'), 2:(2, 'Bob'), 3:(3, 'Charlie')",
+        )
         .assert_success()
         .assert_vertex_count("Person", 3)
         .exec_dml("INSERT VERTEX Person(id, name) VALUES 4:(4, 'David')")

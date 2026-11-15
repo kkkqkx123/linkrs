@@ -19,7 +19,10 @@ use super::{VectorOperator, VectorOperatorKind};
 #[cfg(feature = "vector")]
 pub(crate) const DEFAULT_MATCH_TOP_K: usize = 100;
 
-pub(crate) fn handle(op: &mut VectorOperator, input: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
+pub(crate) fn handle(
+    op: &mut VectorOperator,
+    input: &mut StreamingExecutor,
+) -> Result<Option<DataChunk>, QueryError> {
     match &mut op.kind {
         VectorOperatorKind::VectorMatch {
             storage: _,
@@ -59,11 +62,10 @@ pub(crate) fn handle(op: &mut VectorOperator, input: &mut StreamingExecutor) -> 
                     )
                     .with_threshold(thr);
                     let _ = ryw_config;
-                    let search_results =
-                        crate::executor::streaming::helpers::runtime_bridge::wait(
-                            "Vector match",
-                            coordinator.index_manager().search_with_options(options),
-                        )?;
+                    let search_results = crate::executor::streaming::helpers::runtime_bridge::wait(
+                        "Vector match",
+                        coordinator.index_manager().search_with_options(options),
+                    )?;
                     let mut rows = Vec::new();
                     for result in search_results {
                         rows.push(vec![

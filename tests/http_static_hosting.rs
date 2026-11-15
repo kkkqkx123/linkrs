@@ -161,3 +161,54 @@ async fn enabled_static_dir_with_missing_dir_refuses_router() {
         "unusable static dir must fail router construction"
     );
 }
+
+#[tokio::test]
+async fn enabled_static_dir_with_missing_fallback_page_refuses_router() {
+    let dir = tempfile::tempdir().expect("static fixture dir");
+    std::fs::write(dir.path().join("app.js"), "console.log(1)").expect("asset");
+    let storage = Arc::new(
+        GraphStorage::new_with_config(PropertyGraphConfig::test()).expect("in-memory storage"),
+    );
+    let mut config = Config::default();
+    config.server.auth.enable_authorize = false;
+    config.server.http.static_dir = Some(dir.path().to_string_lossy().into_owned());
+    let graph_service: Arc<GraphService<GraphStorage>> =
+        GraphService::new_for_test(config.clone(), storage.clone()).await;
+    let txn_manager = Arc::new(TransactionManager::new(TransactionManagerConfig::default()));
+    let http_server = Arc::new(HttpServer::new(
+        graph_service,
+        Arc::new(RwLock::new((*storage).clone())),
+        txn_manager,
+        &config,
+        None,
+    ));
+    let state = AppState::new(http_server);
+    assert!(
+        create_router(state, None).is_err(),
+        "missing fallback page must fail router construction"
+    );
+}
+
+#[tokio::test]
+async fn disabled_fallback_keeps_page_paths_missing_beside_api() {
+    let dir = fixture_dir();
+    let mut config = enabled_config(&dir);
+    config.server.http.static_fallback = false;
+    let app = build_app(config).await;
+
+    let response = app.clone().oneshot(get("/dashboard")).await.expect("page");
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+    let response = app.clone().oneshot(get("/")).await.expect("root");
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+    let response = app
+        .clone()
+        .oneshot(get("/_app/immutable/app.abc123.js"))
+        .await
+        .expect("fingerprinted asset");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = app.oneshot(get("/v1/metrics")).await.expect("metrics");
+    assert_eq!(response.status(), StatusCode::OK);
+}

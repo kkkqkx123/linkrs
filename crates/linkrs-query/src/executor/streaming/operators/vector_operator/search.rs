@@ -6,7 +6,10 @@ use linkrs_core::Value;
 
 use super::{VectorOperator, VectorOperatorKind};
 
-pub(crate) fn handle(op: &mut VectorOperator, input: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
+pub(crate) fn handle(
+    op: &mut VectorOperator,
+    input: &mut StreamingExecutor,
+) -> Result<Option<DataChunk>, QueryError> {
     match &mut op.kind {
         VectorOperatorKind::VectorSearch {
             storage: _,
@@ -62,11 +65,10 @@ pub(crate) fn handle(op: &mut VectorOperator, input: &mut StreamingExecutor) -> 
                         options.filter = Some(filter.clone());
                     }
                     let _ = ryw_config;
-                    let search_results =
-                        crate::executor::streaming::helpers::runtime_bridge::wait(
-                            "Vector search",
-                            coordinator.index_manager().search_with_options(options),
-                        )?;
+                    let search_results = crate::executor::streaming::helpers::runtime_bridge::wait(
+                        "Vector search",
+                        coordinator.index_manager().search_with_options(options),
+                    )?;
                     let mut rows = Vec::new();
                     for result in search_results.into_iter().skip(*offset) {
                         rows.push(vec![

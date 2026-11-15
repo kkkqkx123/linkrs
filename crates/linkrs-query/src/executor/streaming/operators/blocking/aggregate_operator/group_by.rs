@@ -14,9 +14,9 @@ use crate::executor::streaming::spill::{
     finalize_partitions_with_runtime, HashPartitionConfig, HashPartitionSpiller, SpillManager,
 };
 
-use super::shared::eval_group_key;
 use super::super::aggregate::GroupByState;
 use super::super::helpers::{emit_batch_slice, BlockingContext};
+use super::shared::eval_group_key;
 
 pub(crate) fn open_groupby(state: &mut Option<GroupByState>) {
     *state = Some(GroupByState {

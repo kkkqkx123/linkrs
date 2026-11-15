@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 
-use crate::optimizer::cost_based::join_order::{JoinCondition, JoinOrderOptimizer, JoinOrderResult, TableInfo};
+use crate::optimizer::cost_based::join_order::{
+    JoinCondition, JoinOrderOptimizer, JoinOrderResult, TableInfo,
+};
 use crate::optimizer::JoinAlgorithm;
 use linkrs_core::types::expr::analysis_utils::collect_variables_from_contextual;
 use linkrs_core::types::expr::contextual::ContextualExpression;

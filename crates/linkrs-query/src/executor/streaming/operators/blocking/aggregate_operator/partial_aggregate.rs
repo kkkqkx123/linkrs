@@ -14,9 +14,9 @@ use crate::executor::streaming::helpers::accumulator_states::{
     accumulator_to_value, AggregateAccumulator,
 };
 
-use super::shared::eval_group_key;
 use super::super::aggregate::PartialAggregateState;
 use super::super::helpers::{aggregate_arg_field_name, emit_batch_slice, BlockingContext};
+use super::shared::eval_group_key;
 
 pub(crate) fn open_partial_aggregate(state: &mut Option<PartialAggregateState>) {
     *state = Some(PartialAggregateState {

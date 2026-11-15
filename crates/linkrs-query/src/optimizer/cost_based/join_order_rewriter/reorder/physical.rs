@@ -11,9 +11,7 @@ use crate::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
 use crate::planning::plan::PlanNodeEnum;
 use linkrs_core::types::expr::contextual::ContextualExpression;
 
-use super::super::flatten::{
-    assign_leaf_info, classify_join, flatten_join_chain, leaf_id,
-};
+use super::super::flatten::{assign_leaf_info, classify_join, flatten_join_chain, leaf_id};
 use super::super::types::{
     accumulated_join_rows, build_optimizer_input_from_parts, build_pred_map,
     format_join_order_note, normalize_join_algorithm_decision, should_swap_join_keys,

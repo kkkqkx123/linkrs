@@ -102,7 +102,12 @@ impl PartitioningPlanner {
     /// fixed plus exchange overhead, all in row-equivalents. Returns a
     /// fallback reason when serial wins. All-zero cost params disable the
     /// comparison and leave the row-count threshold as the only gate.
-    pub(crate) fn cost_gate_reason(&self, work: u64, output_rows: u64, partitions: usize) -> Option<String> {
+    pub(crate) fn cost_gate_reason(
+        &self,
+        work: u64,
+        output_rows: u64,
+        partitions: usize,
+    ) -> Option<String> {
         let fixed = self.config.fixed_overhead_rows;
         let per_partition = self.config.per_partition_rows;
         let per_mille = self.config.exchange_row_per_mille;
@@ -231,9 +236,7 @@ impl PartitioningPlanner {
             return fallback("plan contains write operations; partitioning not supported");
         }
         if has_transaction_boundary(root) {
-            return fallback(
-                "plan crosses a transaction boundary; partitioning not supported",
-            );
+            return fallback("plan crosses a transaction boundary; partitioning not supported");
         }
         if has_graph_traversal(root) {
             // E4: allow an anchored *bounded* traversal (a single ExpandAll
@@ -245,9 +248,7 @@ impl PartitioningPlanner {
             {
                 return decision;
             }
-            return fallback(
-                "plan contains recursive graph traversal; partitioning not supported",
-            );
+            return fallback("plan contains recursive graph traversal; partitioning not supported");
         }
 
         let mut scans = Vec::new();
@@ -310,9 +311,7 @@ impl PartitioningPlanner {
                         tag, desired
                     ),
                 },
-                Err(error) => {
-                    fallback(format!("invalid configured partition layout: {error}"))
-                }
+                Err(error) => fallback(format!("invalid configured partition layout: {error}")),
             }
         } else if scans.is_empty() {
             decide_edge_scan(self, root, statistics, &range, layout)
@@ -348,75 +347,75 @@ impl PartitioningPlanner {
     }
 }
 
-    /// Returns true when the plan tree contains any write operation node.
+/// Returns true when the plan tree contains any write operation node.
 pub(crate) fn has_write_operation(node: &PlanNodeEnum) -> bool {
-        matches!(
-            node,
-            PlanNodeEnum::CopyFrom(_)
-                | PlanNodeEnum::CopyTo(_)
-                | PlanNodeEnum::InsertVertices(_)
-                | PlanNodeEnum::InsertEdges(_)
-                | PlanNodeEnum::DeleteVertices(_)
-                | PlanNodeEnum::DeleteEdges(_)
-                | PlanNodeEnum::DeleteIndex(_)
-                | PlanNodeEnum::PipeDeleteVertices(_)
-                | PlanNodeEnum::PipeDeleteEdges(_)
-                | PlanNodeEnum::Update(_)
-        ) || node.children().iter().any(|c| has_write_operation(c))
-    }
+    matches!(
+        node,
+        PlanNodeEnum::CopyFrom(_)
+            | PlanNodeEnum::CopyTo(_)
+            | PlanNodeEnum::InsertVertices(_)
+            | PlanNodeEnum::InsertEdges(_)
+            | PlanNodeEnum::DeleteVertices(_)
+            | PlanNodeEnum::DeleteEdges(_)
+            | PlanNodeEnum::DeleteIndex(_)
+            | PlanNodeEnum::PipeDeleteVertices(_)
+            | PlanNodeEnum::PipeDeleteEdges(_)
+            | PlanNodeEnum::Update(_)
+    ) || node.children().iter().any(|c| has_write_operation(c))
+}
 
-    /// Returns true when the plan tree contains a transaction-control node.
+/// Returns true when the plan tree contains a transaction-control node.
 pub(crate) fn has_transaction_boundary(node: &PlanNodeEnum) -> bool {
-        matches!(
-            node,
-            PlanNodeEnum::BeginTransaction(_) | PlanNodeEnum::Commit(_) | PlanNodeEnum::Rollback(_)
-        ) || node
-            .children()
-            .iter()
-            .any(|c| has_transaction_boundary(c))
-    }
+    matches!(
+        node,
+        PlanNodeEnum::BeginTransaction(_) | PlanNodeEnum::Commit(_) | PlanNodeEnum::Rollback(_)
+    ) || node.children().iter().any(|c| has_transaction_boundary(c))
+}
 
-    /// Returns true when the plan tree contains a recursive graph traversal
-    /// or path-algorithm node (single-hop `Expand`/`BiExpand` are
-    /// morsel-parallel and no longer block partitioning; only variable-length
-    /// `ExpandAll`/`Traverse` and path algorithms are considered graph
-    /// traversals for partition blocking).
+/// Returns true when the plan tree contains a recursive graph traversal
+/// or path-algorithm node (single-hop `Expand`/`BiExpand` are
+/// morsel-parallel and no longer block partitioning; only variable-length
+/// `ExpandAll`/`Traverse` and path algorithms are considered graph
+/// traversals for partition blocking).
 pub(crate) fn has_graph_traversal(node: &PlanNodeEnum) -> bool {
-        matches!(
-            node,
-            PlanNodeEnum::ExpandAll(_)
-                | PlanNodeEnum::Traverse(_)
-                | PlanNodeEnum::AppendVertices(_)
-                | PlanNodeEnum::BiTraverse(_)
-                | PlanNodeEnum::Loop(_)
-                | PlanNodeEnum::RecursiveCte(_)
-                | PlanNodeEnum::MultiShortestPath(_)
-                | PlanNodeEnum::BFSShortest(_)
-                | PlanNodeEnum::AllPaths(_)
-                | PlanNodeEnum::ShortestPath(_)
-        ) || node.children().iter().any(|c| has_graph_traversal(c))
-    }
+    matches!(
+        node,
+        PlanNodeEnum::ExpandAll(_)
+            | PlanNodeEnum::Traverse(_)
+            | PlanNodeEnum::AppendVertices(_)
+            | PlanNodeEnum::BiTraverse(_)
+            | PlanNodeEnum::Loop(_)
+            | PlanNodeEnum::RecursiveCte(_)
+            | PlanNodeEnum::MultiShortestPath(_)
+            | PlanNodeEnum::BFSShortest(_)
+            | PlanNodeEnum::AllPaths(_)
+            | PlanNodeEnum::ShortestPath(_)
+    ) || node.children().iter().any(|c| has_graph_traversal(c))
+}
 
 pub(crate) fn fallback(reason: impl Into<String>) -> PartitioningDecision {
-        PartitioningDecision {
-            partition_spec: None,
-            reason: reason.into(),
-        }
+    PartitioningDecision {
+        partition_spec: None,
+        reason: reason.into(),
     }
+}
 
-    /// Walk a linear chain that must end in a tagged vertex scan.
-pub(crate) fn collect_vertex_chain<'a>(node: &'a PlanNodeEnum, chain: &mut Vec<&'a PlanNodeEnum>) -> bool {
-        chain.push(node);
-        match node {
-            PlanNodeEnum::ScanVertices(_) => true,
-            PlanNodeEnum::Filter(filter) => collect_vertex_chain(filter.input(), chain),
-            PlanNodeEnum::Project(project) => collect_vertex_chain(project.input(), chain),
-            PlanNodeEnum::Limit(limit) => collect_vertex_chain(limit.input(), chain),
-            PlanNodeEnum::Sort(sort) => collect_vertex_chain(sort.input(), chain),
-            PlanNodeEnum::Aggregate(agg) => collect_vertex_chain(agg.input(), chain),
-            PlanNodeEnum::TopN(topn) => collect_vertex_chain(topn.input(), chain),
-            PlanNodeEnum::Dedup(dedup) => collect_vertex_chain(dedup.input(), chain),
-            PlanNodeEnum::Window(window) => collect_vertex_chain(window.input(), chain),
-            _ => false,
-        }
+/// Walk a linear chain that must end in a tagged vertex scan.
+pub(crate) fn collect_vertex_chain<'a>(
+    node: &'a PlanNodeEnum,
+    chain: &mut Vec<&'a PlanNodeEnum>,
+) -> bool {
+    chain.push(node);
+    match node {
+        PlanNodeEnum::ScanVertices(_) => true,
+        PlanNodeEnum::Filter(filter) => collect_vertex_chain(filter.input(), chain),
+        PlanNodeEnum::Project(project) => collect_vertex_chain(project.input(), chain),
+        PlanNodeEnum::Limit(limit) => collect_vertex_chain(limit.input(), chain),
+        PlanNodeEnum::Sort(sort) => collect_vertex_chain(sort.input(), chain),
+        PlanNodeEnum::Aggregate(agg) => collect_vertex_chain(agg.input(), chain),
+        PlanNodeEnum::TopN(topn) => collect_vertex_chain(topn.input(), chain),
+        PlanNodeEnum::Dedup(dedup) => collect_vertex_chain(dedup.input(), chain),
+        PlanNodeEnum::Window(window) => collect_vertex_chain(window.input(), chain),
+        _ => false,
     }
+}

@@ -41,7 +41,10 @@ pub(crate) fn collect_condition_properties(expr: &Expression, out: &mut Vec<Stri
     }
 }
 
-pub(crate) fn split_range(range: &std::ops::Range<i64>, partition_count: usize) -> Vec<std::ops::Range<i64>> {
+pub(crate) fn split_range(
+    range: &std::ops::Range<i64>,
+    partition_count: usize,
+) -> Vec<std::ops::Range<i64>> {
     let total = range.end - range.start;
     let width = (total + partition_count as i64 - 1) / partition_count as i64;
     let mut ranges = Vec::with_capacity(partition_count);

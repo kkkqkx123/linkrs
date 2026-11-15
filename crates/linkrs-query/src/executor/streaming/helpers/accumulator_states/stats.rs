@@ -27,7 +27,14 @@ pub(crate) fn welford_update(n: &mut u64, mean: &mut f64, m2: &mut f64, x: f64) 
     *m2 += delta * delta2;
 }
 
-pub(crate) fn welford_merge(n1: &mut u64, mean1: &mut f64, m21: &mut f64, n2: &u64, mean2: &f64, m22: &f64) {
+pub(crate) fn welford_merge(
+    n1: &mut u64,
+    mean1: &mut f64,
+    m21: &mut f64,
+    n2: &u64,
+    mean2: &f64,
+    m22: &f64,
+) {
     if *n2 == 0 {
         return;
     }

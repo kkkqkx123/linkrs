@@ -113,7 +113,10 @@ pub(super) fn expand_skip_rows(
     // back to per-row evaluation over an empty row view and drop rows, so
     // any seed property demand keeps the row path.
     if let Some(seed_var) = expand.col_names().first() {
-        if ancestors.iter().any(|anc| ancestor_uses_seed_prop(anc, seed_var)) {
+        if ancestors
+            .iter()
+            .any(|anc| ancestor_uses_seed_prop(anc, seed_var))
+        {
             return false;
         }
     }
@@ -205,7 +208,6 @@ pub(super) fn expand_skip_rows(
     }
 }
 
-
 /// Whether any ancestor demands `seed_var.prop`: such reads need the seed
 /// row view (no flat slot is guaranteed for the seed), so the hop must stay
 /// rowful. Bare `seed` references stay columnar-safe via typed gathering.
@@ -224,7 +226,10 @@ fn ancestor_uses_seed_prop(anc: &PlanNodeEnum, seed_var: &str) -> bool {
             if a.group_keys().iter().any(|k| k == seed_var) {
                 return false;
             }
-            a.aggregation_args().iter().flatten().any(|e| expr_uses_seed_prop(e, seed_var))
+            a.aggregation_args()
+                .iter()
+                .flatten()
+                .any(|e| expr_uses_seed_prop(e, seed_var))
         }
         PlanNodeEnum::Sort(s) => s
             .sort_items()
@@ -254,7 +259,10 @@ fn expr_uses_seed_prop(expr: &Expression, seed_var: &str) -> bool {
             }
             expr_uses_seed_prop(object, seed_var)
         }
-        _ => expr.children().iter().any(|c| expr_uses_seed_prop(c, seed_var)),
+        _ => expr
+            .children()
+            .iter()
+            .any(|c| expr_uses_seed_prop(c, seed_var)),
     }
 }
 

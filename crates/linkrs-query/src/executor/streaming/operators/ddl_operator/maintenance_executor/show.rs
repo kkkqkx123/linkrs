@@ -4,7 +4,6 @@ use crate::executor::streaming::chunk::{ColumnInfo, DataChunk, Schema};
 use linkrs_core::error::QueryError;
 use linkrs_core::Value;
 
-
 pub(crate) fn execute_show_stats(
     op: &mut super::super::DdlOperator,
 ) -> Result<Option<DataChunk>, QueryError> {

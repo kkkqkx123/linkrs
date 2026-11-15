@@ -204,10 +204,16 @@ impl VectorApi {
     /// exists. Transports assemble their own response shapes from this
     /// pair instead of depending on a name-only listing.
     pub fn list_indexes(&self) -> Vec<(IndexMetadataWrapper, Option<IndexMetadata>)> {
-        self.coordinator.list_indexes().into_iter().map(|w| {
-            let meta = self.coordinator.index_info(w.space_id, &w.tag_name, &w.field_name);
-            (w, meta)
-        }).collect()
+        self.coordinator
+            .list_indexes()
+            .into_iter()
+            .map(|w| {
+                let meta = self
+                    .coordinator
+                    .index_info(w.space_id, &w.tag_name, &w.field_name);
+                (w, meta)
+            })
+            .collect()
     }
 
     /// List vector indexes as the common search-index descriptor.

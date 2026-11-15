@@ -18,11 +18,11 @@ use crate::executor::streaming::spill::{
     finalize_partitions_with_runtime, HashPartitionConfig, HashPartitionSpiller, SpillManager,
 };
 
-use super::shared::eval_group_key;
 use super::super::aggregate::{
     value_to_partial_accumulator, AggregateState, ACCUMULATOR_OVERHEAD_BYTES,
 };
 use super::super::helpers::{count_identity_arg, emit_batch_slice, BlockingContext};
+use super::shared::eval_group_key;
 
 type BatchEvalResult = Option<(Vec<Vec<Value>>, Vec<Vec<Value>>)>;
 

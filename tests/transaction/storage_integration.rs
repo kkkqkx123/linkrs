@@ -110,7 +110,9 @@ fn test_storage_edge_delete_persistence() {
         .assert_success()
         .exec_ddl("CREATE EDGE IF NOT EXISTS KNOWS")
         .assert_success()
-        .exec_dml("INSERT VERTEX Person(id, name) VALUES 1:(1, 'Alice'), 2:(2, 'Bob'), 3:(3, 'Charlie')")
+        .exec_dml(
+            "INSERT VERTEX Person(id, name) VALUES 1:(1, 'Alice'), 2:(2, 'Bob'), 3:(3, 'Charlie')",
+        )
         .assert_success()
         .exec_dml("INSERT EDGE KNOWS VALUES 1->2, 2->3, 1->3")
         .assert_success()
@@ -189,7 +191,9 @@ fn test_storage_cascading_delete() {
         .assert_success()
         .exec_ddl("CREATE EDGE IF NOT EXISTS KNOWS")
         .assert_success()
-        .exec_dml("INSERT VERTEX Person(id, name) VALUES 1:(1, 'Alice'), 2:(2, 'Bob'), 3:(3, 'Charlie')")
+        .exec_dml(
+            "INSERT VERTEX Person(id, name) VALUES 1:(1, 'Alice'), 2:(2, 'Bob'), 3:(3, 'Charlie')",
+        )
         .assert_success()
         .exec_dml("INSERT EDGE KNOWS VALUES 1->2, 2->3, 3->1")
         .assert_success()

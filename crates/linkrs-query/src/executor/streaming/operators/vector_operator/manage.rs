@@ -1,9 +1,9 @@
 #[cfg(feature = "vector")]
 use std::sync::Arc;
 
+use crate::executor::streaming::chunk::DataChunk;
 #[cfg(feature = "vector")]
 use crate::executor::streaming::chunk::{ColumnInfo, Schema};
-use crate::executor::streaming::chunk::DataChunk;
 use crate::executor::streaming::executor::StreamingExecutor;
 #[cfg(feature = "vector")]
 use crate::executor::streaming::operators::ddl_operator::make_single_row;
@@ -35,7 +35,10 @@ fn make_manage_result(
 /// Candidate count for MATCH VECTOR searches.
 ///
 
-pub(crate) fn handle(op: &mut VectorOperator, _input: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
+pub(crate) fn handle(
+    op: &mut VectorOperator,
+    _input: &mut StreamingExecutor,
+) -> Result<Option<DataChunk>, QueryError> {
     match &mut op.kind {
         VectorOperatorKind::VectorManage {
             storage,
@@ -273,9 +276,9 @@ pub(crate) fn handle(op: &mut VectorOperator, _input: &mut StreamingExecutor) ->
                                 .into_iter()
                                 .map(|m| {
                                     vec![
-                                        m.index_name.map(Value::string).unwrap_or(Value::Null(
-                                            linkrs_core::NullType::Null,
-                                        )),
+                                        m.index_name
+                                            .map(Value::string)
+                                            .unwrap_or(Value::Null(linkrs_core::NullType::Null)),
                                         Value::string(m.collection_name),
                                         Value::BigInt(m.space_id as i64),
                                         Value::string(m.tag_name),
