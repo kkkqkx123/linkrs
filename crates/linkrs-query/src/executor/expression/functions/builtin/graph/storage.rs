@@ -1,5 +1,5 @@
-use crate::executor::expression::ExpressionError;
 use crate::executor::expression::evaluation_context::graph_storage::GraphStorageRef;
+use crate::executor::expression::ExpressionError;
 use linkrs_core::types::VertexId;
 use linkrs_core::value::list::List;
 use linkrs_core::value::NullType;

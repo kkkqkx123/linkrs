@@ -378,13 +378,10 @@ impl<
             )
             .await
             {
-                Ok(axum::Json(resp)) => {
-                    let count = resp.get("count").and_then(|v| v.as_u64()).unwrap_or(0);
-                    Ok(Response::new(GetVectorCountResponse {
-                        count,
-                        error: String::new(),
-                    }))
-                }
+                Ok(axum::Json(resp)) => Ok(Response::new(GetVectorCountResponse {
+                    count: resp.count,
+                    error: String::new(),
+                })),
                 Err(e) => Err(vector_http_status(e)),
             }
         }

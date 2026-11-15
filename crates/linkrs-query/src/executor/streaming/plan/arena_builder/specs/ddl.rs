@@ -16,6 +16,8 @@ pub use vector::*;
 mod tests {
     use super::*;
     use crate::executor::base::ExecutionContext;
+    use crate::executor::build_error::PlanBuildError;
+    use crate::executor::streaming::operators::spec::{DdlSpec, FulltextManageCommand};
     use crate::parser::ast::fulltext::{BM25Options, IndexFieldDef, IndexOptions};
     use crate::planning::plan::core::nodes::management::manage_node_enums::{
         FulltextManageNode, SequenceManageNode,

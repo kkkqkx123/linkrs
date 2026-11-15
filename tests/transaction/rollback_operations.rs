@@ -19,10 +19,10 @@ fn test_rollback_insert_vertex() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG IF NOT EXISTS Person(name STRING)")
+        .exec_ddl("CREATE TAG IF NOT EXISTS Person(id INT, name STRING)")
         .assert_success()
         // Insert a vertex
-        .exec_dml("INSERT VERTEX Person(name) VALUES 1:('Alice')")
+        .exec_dml("INSERT VERTEX Person(id, name) VALUES 1:(1, 'Alice')")
         .assert_success()
         .assert_vertex_exists(1, "Person")
         // Delete the vertex (simulating rollback scenario)
@@ -38,10 +38,10 @@ fn test_rollback_update_vertex() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG IF NOT EXISTS Person(name STRING, age INT)")
+        .exec_ddl("CREATE TAG IF NOT EXISTS Person(id INT, name STRING, age INT)")
         .assert_success()
         // Insert initial vertex
-        .exec_dml("INSERT VERTEX Person(name, age) VALUES 1:('Alice', 25)")
+        .exec_dml("INSERT VERTEX Person(id, name, age) VALUES 1:(1, 'Alice', 25)")
         .assert_success()
         .assert_vertex_props(
             1,
@@ -64,10 +64,10 @@ fn test_rollback_delete_vertex() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG IF NOT EXISTS Person(name STRING)")
+        .exec_ddl("CREATE TAG IF NOT EXISTS Person(id INT, name STRING)")
         .assert_success()
         // Insert vertex
-        .exec_dml("INSERT VERTEX Person(name) VALUES 1:('Alice')")
+        .exec_dml("INSERT VERTEX Person(id, name) VALUES 1:(1, 'Alice')")
         .assert_success()
         .assert_vertex_exists(1, "Person")
         // Delete vertex
@@ -75,7 +75,7 @@ fn test_rollback_delete_vertex() {
         .assert_success()
         .assert_vertex_not_exists(1, "Person")
         // Re-insert vertex (simulating rollback of delete)
-        .exec_dml("INSERT VERTEX Person(name) VALUES 1:('Alice')")
+        .exec_dml("INSERT VERTEX Person(id, name) VALUES 1:(1, 'Alice')")
         .assert_success()
         .assert_vertex_exists(1, "Person");
 }
@@ -86,12 +86,12 @@ fn test_rollback_insert_edge() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG IF NOT EXISTS Person(name STRING)")
+        .exec_ddl("CREATE TAG IF NOT EXISTS Person(id INT, name STRING)")
         .assert_success()
         .exec_ddl("CREATE EDGE IF NOT EXISTS KNOWS")
         .assert_success()
         // Insert vertices
-        .exec_dml("INSERT VERTEX Person(name) VALUES 1:('Alice'), 2:('Bob')")
+        .exec_dml("INSERT VERTEX Person(id, name) VALUES 1:(1, 'Alice'), 2:(2, 'Bob')")
         .assert_success()
         // Insert edge
         .exec_dml("INSERT EDGE KNOWS VALUES 1->2")
@@ -109,12 +109,12 @@ fn test_rollback_delete_edge() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG IF NOT EXISTS Person(name STRING)")
+        .exec_ddl("CREATE TAG IF NOT EXISTS Person(id INT, name STRING)")
         .assert_success()
         .exec_ddl("CREATE EDGE IF NOT EXISTS KNOWS(since INT)")
         .assert_success()
         // Insert vertices
-        .exec_dml("INSERT VERTEX Person(name) VALUES 1:('Alice'), 2:('Bob')")
+        .exec_dml("INSERT VERTEX Person(id, name) VALUES 1:(1, 'Alice'), 2:(2, 'Bob')")
         .assert_success()
         // Insert edge with property
         .exec_dml("INSERT EDGE KNOWS(since) VALUES 1->2:(2020)")
@@ -136,16 +136,13 @@ fn test_rollback_multiple_operations() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG IF NOT EXISTS Person(name STRING)")
+        .exec_ddl("CREATE TAG IF NOT EXISTS Person(id INT, name STRING)")
         .assert_success()
         .exec_ddl("CREATE EDGE IF NOT EXISTS KNOWS")
         .assert_success()
         // Insert multiple vertices
         .exec_dml(
-            "INSERT VERTEX Person(name) VALUES \
-            1:('Alice'), \
-            2:('Bob'), \
-            3:('Charlie')",
+            "INSERT VERTEX Person(id, name) VALUES 1:(1, 'Alice'),  2:(2, 'Bob'),  3:(3, 'Charlie')",
         )
         .assert_success()
         // Insert multiple edges
@@ -174,17 +171,17 @@ fn test_savepoint_mixed_operations() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG IF NOT EXISTS Person(name STRING)")
+        .exec_ddl("CREATE TAG IF NOT EXISTS Person(id INT, name STRING)")
         .assert_success()
         .exec_ddl("CREATE EDGE IF NOT EXISTS KNOWS")
         .assert_success()
         // Initial state
-        .exec_dml("INSERT VERTEX Person(name) VALUES 1:('Alice'), 2:('Bob')")
+        .exec_dml("INSERT VERTEX Person(id, name) VALUES 1:(1, 'Alice'), 2:(2, 'Bob')")
         .assert_success()
         .exec_dml("INSERT EDGE KNOWS VALUES 1->2")
         .assert_success()
         // Add more data
-        .exec_dml("INSERT VERTEX Person(name) VALUES 3:('Charlie')")
+        .exec_dml("INSERT VERTEX Person(id, name) VALUES 3:(3, 'Charlie')")
         .assert_success()
         .exec_dml("INSERT EDGE KNOWS VALUES 2->3, 3->1")
         .assert_success()
@@ -199,15 +196,13 @@ fn test_operation_sequence_with_modifications() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG IF NOT EXISTS Person(name STRING, age INT)")
+        .exec_ddl("CREATE TAG IF NOT EXISTS Person(id INT, name STRING, age INT)")
         .assert_success()
         .exec_ddl("CREATE EDGE IF NOT EXISTS KNOWS(since INT)")
         .assert_success()
         // Create initial data
         .exec_dml(
-            "INSERT VERTEX Person(name, age) VALUES \
-            1:('Alice', 30), \
-            2:('Bob', 25)",
+            "INSERT VERTEX Person(id, name, age) VALUES 1:(1, 'Alice', 30),  2:(2, 'Bob', 25)",
         )
         .assert_success()
         .exec_dml("INSERT EDGE KNOWS(since) VALUES 1->2:(2020)")

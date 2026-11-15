@@ -7,10 +7,10 @@ use linkrs::core::types::DataType;
 use linkrs::core::Value;
 use linkrs::test_utils::sync_helpers::{create_test_vertex, SyncTestHarness};
 
-/// TC-100: Non-transactional direct path (on_vertex_change → BatchBuffer → commit)
+/// TC-100: Non-transactional direct path (stage intent → commit path)
 ///
-/// Verifies that non-transactional vertex inserts go through the
-/// BatchBuffer and are flushed by the background timeout task.
+/// Verifies that non-transactional vertex inserts are staged and driven
+/// through the commit path so the indexes observe them synchronously.
 #[test]
 fn test_non_transactional_direct_path() {
     let mut harness = SyncTestHarness::new().expect("Failed to create test harness");
@@ -39,15 +39,6 @@ fn test_non_transactional_direct_path() {
     }
 
     harness.wait_for_async(300);
-
-    let rt = &harness.rt;
-    rt.block_on(async {
-        harness
-            .sync_coordinator
-            .commit_all()
-            .await
-            .expect("Commit all should succeed");
-    });
 
     for i in 0..5 {
         let results = harness
@@ -270,15 +261,6 @@ fn test_batch_size_exact_boundary() {
 
     harness.wait_for_async(500);
 
-    let rt = &harness.rt;
-    rt.block_on(async {
-        harness
-            .sync_coordinator
-            .commit_all()
-            .await
-            .expect("Commit all should succeed");
-    });
-
     let mut found = 0;
     for i in 0..100 {
         let results = harness
@@ -437,15 +419,6 @@ fn test_mixed_transactional_non_transactional() {
         .expect("Failed to insert initial vertex");
 
     harness.wait_for_async(300);
-
-    let rt = &harness.rt;
-    rt.block_on(async {
-        harness
-            .sync_coordinator
-            .commit_all()
-            .await
-            .expect("Commit all should succeed");
-    });
 
     let results = harness
         .search_fulltext("test_space", "Person", "name", "Original", 10)

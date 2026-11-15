@@ -1,4 +1,7 @@
-use super::{accumulator_to_value, AggregateAccumulator};
+use super::{
+    accumulator_to_value, decode_partial_with_args, finalize_accumulator_value,
+    AggregateAccumulator,
+};
 use linkrs_core::types::expr::Expression;
 use linkrs_core::types::operators::AggregateFunction;
 use linkrs_core::value::NullType;

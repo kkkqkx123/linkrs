@@ -1,8 +1,6 @@
 use crate::executor::base::ExecutionContext;
 use crate::executor::build_error::PlanBuildError;
-use crate::executor::streaming::operators::spec::{
-    VectorManageCommand, VectorSpec
-};
+use crate::executor::streaming::operators::spec::{VectorManageCommand, VectorSpec};
 
 fn vector_manage_to_command(
     node: &crate::planning::plan::core::nodes::management::manage_node_enums::VectorManageNode,

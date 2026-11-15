@@ -9,6 +9,7 @@ pub mod openapi;
 pub mod router;
 pub mod server;
 pub mod state;
+pub mod static_files;
 pub mod typed_path;
 
 pub use error::HttpError;

@@ -15,15 +15,10 @@ fn test_empty_batch_handling() {
         .create_space("test_space")
         .expect("Failed to create space");
 
-    // Force commit all with no operations
-    let rt = &harness.rt;
-    rt.block_on(async {
-        harness
-            .sync_coordinator
-            .commit_all()
-            .await
-            .expect("Commit all should succeed even with no operations");
-    });
+    // Committing with no active transaction is a no-op and must not panic.
+    harness
+        .commit_transaction()
+        .expect("Commit with no operations should succeed");
 
     // No panic = success
 }
@@ -60,15 +55,6 @@ fn test_batch_flush_on_timeout() {
         .expect("Failed to insert vertex");
 
     harness.wait_for_async(300);
-
-    let rt = &harness.rt;
-    rt.block_on(async {
-        harness
-            .sync_coordinator
-            .commit_all()
-            .await
-            .expect("Commit all should succeed");
-    });
 
     harness
         .assert_vertex_exists("test_space", &Value::Int(1))
@@ -108,15 +94,6 @@ fn test_batch_flush_on_size_trigger() {
     }
 
     harness.wait_for_async(500);
-
-    let rt = &harness.rt;
-    rt.block_on(async {
-        harness
-            .sync_coordinator
-            .commit_all()
-            .await
-            .expect("Commit all should succeed");
-    });
 
     let mut found_count = 0;
     for i in 0..100 {
@@ -169,15 +146,6 @@ fn test_large_batch_processing() {
     }
 
     harness.wait_for_async(800);
-
-    let rt = &harness.rt;
-    rt.block_on(async {
-        harness
-            .sync_coordinator
-            .commit_all()
-            .await
-            .expect("Commit all should succeed");
-    });
 
     let mut found_count = 0;
     for i in 0..200 {
@@ -287,15 +255,6 @@ fn test_rapid_successive_commits() {
         harness
             .insert_vertex("test_space", vertex)
             .expect("Failed to insert vertex");
-
-        let rt = &harness.rt;
-        rt.block_on(async {
-            harness
-                .sync_coordinator
-                .commit_all()
-                .await
-                .expect("Commit all should succeed");
-        });
 
         std::thread::sleep(std::time::Duration::from_millis(10));
     }

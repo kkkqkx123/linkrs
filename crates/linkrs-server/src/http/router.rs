@@ -57,6 +57,12 @@ use super::{
 /// /v1/transactions/* – Transaction management (authentication required)
 /// – /v1/schema/* – Schema management (requires authentication)
 /// – /api/* – Web management APIs (authentication required)
+///
+/// When `[http].static_dir` is configured, the static file router merges in
+/// beside the API routes. Concrete API routes always win on conflicts: the
+/// file service only answers paths nothing else matched. A misconfigured
+/// static directory fails router construction so the server refuses to
+/// start instead of serving a half-broken page.
 pub fn create_router<
     S: StorageClient
         + StorageSchemaContextOps
@@ -73,7 +79,7 @@ pub fn create_router<
 >(
     state: AppState<S>,
     web_router: Option<Router>,
-) -> Router {
+) -> Result<Router, String> {
     // Public route (no authentication required)
     let public_routes = Router::new()
         .route("/health", get(health::check))
@@ -313,7 +319,13 @@ pub fn create_router<
         router = router.route("/api-docs/openapi.json", get(serve_openapi));
     }
 
-    router
+    // Static frontend hosting merges beside the API routes when enabled.
+    let http_config = state.server.get_config().server.http.clone();
+    if let Some(static_router) = super::static_files::static_router_from_config(&http_config)? {
+        router = router.merge(static_router);
+    }
+
+    Ok(router)
 }
 
 /// Serve the aggregated OpenAPI document in debug builds.

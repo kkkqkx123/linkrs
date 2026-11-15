@@ -16,9 +16,9 @@ fn test_transaction_basic_lifecycle() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG IF NOT EXISTS Person(name STRING, age INT)")
+        .exec_ddl("CREATE TAG IF NOT EXISTS Person(id INT, name STRING, age INT)")
         .assert_success()
-        .exec_dml("INSERT VERTEX Person(name, age) VALUES 1:('Alice', 30)")
+        .exec_dml("INSERT VERTEX Person(id, name, age) VALUES 1:(1, 'Alice', 30)")
         .assert_success()
         .query("MATCH (v:Person) WHERE id(v) == 1 RETURN v")
         .assert_result_count(1)
@@ -37,9 +37,9 @@ fn test_transaction_rollback() {
 
     let scenario = scenario
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG IF NOT EXISTS Person(name STRING)")
+        .exec_ddl("CREATE TAG IF NOT EXISTS Person(id INT, name STRING)")
         .assert_success()
-        .exec_dml("INSERT VERTEX Person(name) VALUES 1:('Before')")
+        .exec_dml("INSERT VERTEX Person(id, name) VALUES 1:(1, 'Before')")
         .assert_success();
 
     scenario
@@ -65,9 +65,9 @@ fn test_transaction_data_visibility() {
     let mut scenario = TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG IF NOT EXISTS Person(name STRING)")
+        .exec_ddl("CREATE TAG IF NOT EXISTS Person(id INT, name STRING)")
         .assert_success()
-        .exec_dml("INSERT VERTEX Person(name) VALUES 1:('First')")
+        .exec_dml("INSERT VERTEX Person(id, name) VALUES 1:(1, 'First')")
         .assert_success();
 
     scenario = scenario
@@ -75,7 +75,7 @@ fn test_transaction_data_visibility() {
         .assert_result_count(1);
 
     scenario
-        .exec_dml("INSERT VERTEX Person(name) VALUES 2:('Second')")
+        .exec_dml("INSERT VERTEX Person(id, name) VALUES 2:(2, 'Second')")
         .assert_success()
         .query("MATCH (v:Person) RETURN v")
         .assert_result_count(2);

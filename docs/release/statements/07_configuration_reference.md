@@ -672,7 +672,10 @@ worker_threads = 4
 | max_request_size | usize | 10485760 | 最大请求体大小（字节，>0） |
 | cors_enabled | bool | true | 是否挂载跨域层；关闭则不处理任何跨域头 |
 | cors_allowed_origins | Vec\<String\> | [] | 来源白名单；为空时保持开发宽松模式（任意来源）并输出警告日志 |
-| static_dir | Option\<String\> | null | 静态文件服务目录（相对配置文件目录解析） |
+| static_dir | Option\<String\> | null | 静态文件服务目录（相对配置文件目录解析）；为空时不托管，保持纯 API 行为 |
+| static_index | String | `index.html` | 无扩展名未知路径的回退页文件名（单页应用） |
+| static_fallback | bool | true | 是否把无扩展名未知路径重写到回退页；缺失指纹资产恒为 404 |
+| static_immutable_max_age_secs | u64 | 31556952 | `/_app/immutable/` 指纹资产的长缓存秒数 |
 | https_enabled | bool | false | 是否启用 HTTPS |
 | https_cert_file | Option\<String\> | null | HTTPS 证书路径（`https_enabled = true` 时必填） |
 | https_key_file | Option\<String\> | null | HTTPS 私钥路径（`https_enabled = true` 时必填） |

@@ -528,9 +528,12 @@ impl TestDb {
             isolation_level: None,
             consistency: Default::default(),
         };
-        let outcomes = self
-            .query_api
-            .execute_batch_grouped(statements, ctx, group_size);
+        let outcomes = self.query_api.execute_batch_grouped(
+            statements,
+            ctx,
+            group_size,
+            linkrs::core::types::DurabilityLevel::default(),
+        );
         let mut results = Vec::with_capacity(outcomes.len());
         for outcome in outcomes {
             let result = outcome?;

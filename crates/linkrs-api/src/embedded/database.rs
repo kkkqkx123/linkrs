@@ -13,7 +13,7 @@ use linkrs_core::Value;
 #[cfg(feature = "fulltext")]
 use linkrs_fulltext::FulltextIndexManager;
 use linkrs_metrics::StatsManager;
-use linkrs_storage::{GraphStorage, PersistenceConfig, StorageClient};
+use linkrs_storage::{GraphStorage, PersistenceConfig, StorageClient, SyncWrapper};
 #[cfg(feature = "vector")]
 use linkrs_sync::backend::VectorBackend;
 use linkrs_sync::SyncManager;
@@ -371,6 +371,11 @@ impl GraphDatabase<GraphStorage> {
         if let Some(ref sync) = sync_manager {
             txn_manager = txn_manager.with_sync_manager(sync.clone());
         }
+        // Explicit-transaction COMMIT must apply the staging buffer through
+        // the storage commit sink (mirrors production startup and the e2e
+        // harness); without it staged writes would never become visible.
+        txn_manager =
+            txn_manager.with_commit_sink(Arc::new(SyncWrapper::new(storage.read().clone())));
         let txn_manager = Arc::new(txn_manager);
 
         let query_api = if let Some(ref sync) = sync_manager {

@@ -1,12 +1,19 @@
 #![cfg(feature = "embedded")]
 
+use linkrs::api::api_core::SpaceConfig;
 use linkrs::api::embedded::{GraphDatabase, TransactionConfig};
 use std::time::Duration;
 
 #[test]
 fn test_add_property_rollback_restores_schema() {
     let db = GraphDatabase::open_in_memory().expect("Failed to open database");
-    let session = db.session().expect("Failed to create session");
+    let mut session = db.session().expect("Failed to create session");
+    session
+        .create_space("test_space", SpaceConfig::default())
+        .expect("Failed to create space");
+    session
+        .use_space("test_space")
+        .expect("Failed to use space");
 
     let txn = session
         .begin_transaction_with_config(
@@ -14,9 +21,9 @@ fn test_add_property_rollback_restores_schema() {
         )
         .expect("Failed to begin transaction");
 
-    txn.execute("CREATE TAG user(name string)")
+    txn.execute("CREATE TAG user(id string, name string)")
         .expect("Create tag should succeed");
-    txn.execute("ALTER TAG user ADD PROPERTY age int")
+    txn.execute("ALTER TAG user ADD (age int)")
         .expect("Add property should succeed");
 
     txn.rollback().expect("Rollback should succeed");
@@ -42,19 +49,34 @@ fn test_add_property_rollback_restores_schema() {
 #[test]
 fn test_delete_property_rollback_restores_property() {
     let db = GraphDatabase::open_in_memory().expect("Failed to open database");
-    let session = db.session().expect("Failed to create session");
+    let mut session = db.session().expect("Failed to create session");
+    session
+        .create_space("test_space", SpaceConfig::default())
+        .expect("Failed to create space");
+    session
+        .use_space("test_space")
+        .expect("Failed to use space");
+
+    let setup = session
+        .begin_transaction_with_config(
+            TransactionConfig::new().with_timeout(Duration::from_secs(60)),
+        )
+        .expect("Failed to begin setup transaction");
+
+    setup
+        .execute("CREATE TAG user(id string, name string, age int)")
+        .expect("Create tag should succeed");
+    setup
+        .execute("INSERT VERTEX user(id, name, age) VALUES \"1\":(\"1\", \"Alice\", 25)")
+        .expect("Insert should succeed");
+    setup.commit().expect("Setup commit should succeed");
 
     let txn = session
         .begin_transaction_with_config(
             TransactionConfig::new().with_timeout(Duration::from_secs(60)),
         )
         .expect("Failed to begin transaction");
-
-    txn.execute("CREATE TAG user(name string, age int)")
-        .expect("Create tag should succeed");
-    txn.execute("INSERT VERTEX user(name, age) VALUES \"1\":(\"Alice\", 25)")
-        .expect("Insert should succeed");
-    txn.execute("ALTER TAG user DROP PROPERTY age")
+    txn.execute("ALTER TAG user DROP (age)")
         .expect("Drop property should succeed");
 
     txn.rollback().expect("Rollback should succeed");
@@ -79,7 +101,13 @@ fn test_delete_property_rollback_restores_property() {
 #[test]
 fn test_edge_property_rollback() {
     let db = GraphDatabase::open_in_memory().expect("Failed to open database");
-    let session = db.session().expect("Failed to create session");
+    let mut session = db.session().expect("Failed to create session");
+    session
+        .create_space("test_space", SpaceConfig::default())
+        .expect("Failed to create space");
+    session
+        .use_space("test_space")
+        .expect("Failed to use space");
 
     let txn = session
         .begin_transaction_with_config(
@@ -87,18 +115,34 @@ fn test_edge_property_rollback() {
         )
         .expect("Failed to begin transaction");
 
-    txn.execute("CREATE TAG user(name string)")
+    let setup = session
+        .begin_transaction_with_config(
+            TransactionConfig::new().with_timeout(Duration::from_secs(60)),
+        )
+        .expect("Failed to begin setup transaction");
+    setup
+        .execute("CREATE TAG user(id string, name string)")
         .expect("Create user tag should succeed");
-    txn.execute("CREATE EDGE likes(weight int)")
+    setup
+        .execute("CREATE EDGE likes(weight int)")
         .expect("Create edge should succeed");
-    txn.execute("INSERT VERTEX user(name) VALUES \"alice\":(\"Alice\")")
+    setup
+        .execute("INSERT VERTEX user(id, name) VALUES \"alice\":(\"alice\", \"Alice\")")
         .expect("Insert user should succeed");
-    txn.execute("INSERT VERTEX user(name) VALUES \"bob\":(\"Bob\")")
+    setup
+        .execute("INSERT VERTEX user(id, name) VALUES \"bob\":(\"bob\", \"Bob\")")
         .expect("Insert user should succeed");
-    txn.execute("INSERT EDGE likes(weight) FROM \"alice\" TO \"bob\" VALUES 100")
+    setup
+        .execute("INSERT EDGE likes(weight) VALUES \"alice\"->\"bob\":(100)")
         .expect("Insert edge should succeed");
+    setup.commit().expect("Setup commit should succeed");
 
-    txn.execute("ALTER EDGE likes DROP PROPERTY weight")
+    let txn = session
+        .begin_transaction_with_config(
+            TransactionConfig::new().with_timeout(Duration::from_secs(60)),
+        )
+        .expect("Failed to begin transaction");
+    txn.execute("ALTER EDGE likes DROP (weight)")
         .expect("Drop property should succeed");
 
     txn.rollback().expect("Rollback should succeed");

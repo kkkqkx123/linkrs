@@ -345,6 +345,11 @@ impl Config {
                     self.server.http.bind_address = value;
                 }
             }
+            if let Ok(value) = env::var("LINKRS_HTTP_STATIC_DIR") {
+                if !value.is_empty() {
+                    self.server.http.static_dir = Some(value);
+                }
+            }
             if let Ok(value) = env::var("LINKRS_GRPC_BIND") {
                 if !value.is_empty() {
                     self.server.grpc.bind_address = value;

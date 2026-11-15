@@ -5,7 +5,7 @@ use crate::planning::plan::logical::LogicalNodeEnum;
 use crate::planning::plan::PlanNodeEnum;
 use linkrs_core::types::expr::contextual::ContextualExpression;
 
-use super::super::flatten::logical_output_var;
+use super::super::flatten::{flatten_join_chain, flatten_join_chain_logical, logical_output_var};
 use crate::optimizer::cost::CostCalculator;
 use crate::optimizer::stats::StatisticsManager;
 use crate::planning::plan::core::nodes::join::join_node::InnerJoinNode;

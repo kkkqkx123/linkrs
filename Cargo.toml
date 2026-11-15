@@ -137,8 +137,9 @@ url = { version = "2.5", features = ["serde"] }
 # (optional) HTTP server stack
 axum = { version = "0.8", features = ["macros"] }
 tower = "0.5"
-tower-http = { version = "0.6", features = ["cors", "trace", "timeout", "limit"] }
+tower-http = { version = "0.6", features = ["cors", "trace", "timeout", "limit", "fs"] }
 http = "1.1"
+percent-encoding = "2"
 
 # (optional) gRPC stack
 tonic = "0.12"

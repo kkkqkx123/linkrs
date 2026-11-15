@@ -18,10 +18,8 @@ fn create_harness_with_paths(
         EngineType, FulltextConfig, FulltextIndexManager, SyncConfig, TantivyConfig, TokenizerKind,
     };
     use linkrs::storage::GraphStorage;
-    use linkrs::sync::batch::BatchConfig;
     use linkrs::sync::fulltext_sync::FulltextSyncCoordinator;
     use linkrs::sync::manager::SyncManager;
-    use std::time::Duration;
 
     // Create storage
     let storage = GraphStorage::new_with_path(db_path.to_path_buf())?;
@@ -43,20 +41,9 @@ fn create_harness_with_paths(
 
     let fulltext_manager = Arc::new(FulltextIndexManager::new(config)?);
 
-    // Create sync coordinator
-    let batch_config = BatchConfig {
-        batch_size: 100,
-        flush_interval: Duration::from_millis(100),
-        max_buffer_size: 1000,
-        enable_persistence: false,
-        persistence_path: None,
-        failure_policy: linkrs::search::SyncFailurePolicy::FailOpen,
-    };
-
-    let sync_coordinator = Arc::new(FulltextSyncCoordinator::new(
-        fulltext_manager.clone(),
-        batch_config,
-    ));
+    // Create sync coordinator. The commit helper drives outbox delivery
+    // synchronously, so no background workers are started.
+    let sync_coordinator = Arc::new(FulltextSyncCoordinator::new(fulltext_manager.clone()));
 
     // Create sync manager
     let mut sync_manager = SyncManager::new(sync_coordinator.clone());
@@ -65,10 +52,6 @@ fn create_harness_with_paths(
 
     // Create runtime for async operations
     let rt = tokio::runtime::Runtime::new()?;
-
-    // Start target processors. The test commit helper drives one durable
-    // outbox claim synchronously so the runtime owns no long-lived worker.
-    rt.block_on(sync_coordinator.start_background_tasks());
 
     Ok(SyncTestHarness {
         storage,
@@ -100,11 +83,9 @@ fn test_2pc_full_protocol() {
         .expect("Failed to create tag");
 
     // Begin transaction
-    let txn_id = TransactionId(
-        harness
-            .begin_transaction()
-            .expect("Failed to begin transaction"),
-    );
+    harness
+        .begin_transaction()
+        .expect("Failed to begin transaction");
 
     // Execute multiple operations
     for i in 0..10 {
@@ -118,16 +99,7 @@ fn test_2pc_full_protocol() {
             .expect("Failed to insert vertex");
     }
 
-    // Phase 1: Prepare
-    let sync_coordinator = harness.sync_coordinator.clone();
-    let rt = tokio::runtime::Runtime::new().unwrap();
-    rt.block_on(async {
-        sync_coordinator
-            .prepare_transaction(txn_id)
-            .await
-            .expect("Prepare should succeed");
-    });
-
+    // Phase 1: Stage intents (done in insert_vertex_with_txn)
     // Phase 2: Commit storage (done in commit_transaction)
     // Phase 3: Commit index sync (done in commit_transaction)
     harness
@@ -201,17 +173,18 @@ fn test_2pc_prepare_failure() {
         .insert_vertex_with_txn("test_space", vertex)
         .expect("Failed to insert vertex");
 
-    // Prepare should succeed in normal case
-    let txn_id = TransactionId(harness.current_txn_id.unwrap());
-    let sync_coordinator = harness.sync_coordinator.clone();
-    let rt = tokio::runtime::Runtime::new().unwrap();
-    let prepare_result = rt.block_on(async { sync_coordinator.prepare_transaction(txn_id).await });
+    // Staging should succeed in the normal case: valid operations leave
+    // intents behind for the commit phase.
+    let txn_id = TransactionId(harness.current_txn_id.expect("active transaction"));
+    let staged = harness
+        .sync_manager
+        .pending_transaction_intents(txn_id)
+        .expect("Staging should succeed for valid operations");
+    assert!(!staged.is_empty(), "Valid operations should stage intents");
 
-    // Prepare should succeed
-    assert!(
-        prepare_result.is_ok(),
-        "Prepare should succeed for valid operations"
-    );
+    harness
+        .commit_transaction()
+        .expect("Failed to commit transaction");
 }
 
 /// TC-042: 2PC storage commit failure
@@ -364,16 +337,6 @@ fn test_concurrent_transactions_sync() {
             // Verify in same thread
             harness.wait_for_async(300);
 
-            // Force commit all
-            let rt = &harness.rt;
-            rt.block_on(async {
-                harness
-                    .sync_coordinator
-                    .commit_all()
-                    .await
-                    .expect("Commit all should succeed");
-            });
-
             // Verify vertex exists
             harness
                 .assert_vertex_exists("test_space", &Value::Int((i * 10 + 1) as i32))
@@ -438,16 +401,6 @@ fn test_concurrent_index_updates_same_space() {
 
             // Verify in same thread
             harness.wait_for_async(300);
-
-            // Force commit all
-            let rt = &harness.rt;
-            rt.block_on(async {
-                harness
-                    .sync_coordinator
-                    .commit_all()
-                    .await
-                    .expect("Commit all should succeed");
-            });
 
             // Verify vertex exists
             harness

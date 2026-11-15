@@ -149,6 +149,12 @@ impl ConditionHandler for JsonConditionHandler {
         })
     }
 
+    fn handle_not(&self, condition: Value) -> Value {
+        // A bare filter is itself a valid Qdrant condition, so negation is
+        // a single-clause filter with no key of its own.
+        json!({ "must_not": [condition] })
+    }
+
     fn build_filter(
         &self,
         must: Vec<Value>,

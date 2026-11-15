@@ -5,96 +5,31 @@
 //! - Batch processing
 //! - Transaction integration
 //! - Concurrent safety
+//!
+//! Every test drives the production commit path through `SyncTestHarness`:
+//! stage intents, commit, and let outbox delivery index the writes
+//! synchronously. There is no background batch worker anymore.
 
 use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
 
 use linkrs::core::types::VertexId;
 use linkrs::core::vertex_edge_path::Tag;
 use linkrs::core::{Value, Vertex};
-use linkrs::search::{
-    EngineType, FulltextConfig, FulltextIndexManager, TantivyConfig, TokenizerKind,
-};
-use linkrs::sync::batch::BatchConfig;
-use linkrs::sync::manager::SyncManager;
-use linkrs::sync::{ChangeType, FulltextSyncCoordinator};
-use tempfile::TempDir;
-use tokio::time::sleep;
+use linkrs::test_utils::sync_helpers::SyncTestHarness;
 
-// ==================== Test Fixtures ====================
-
-struct SyncTestContext {
-    coordinator: Arc<FulltextSyncCoordinator>,
-    sync_manager: Arc<SyncManager>,
-    _temp_dir: TempDir,
-}
-
-impl SyncTestContext {
-    fn new() -> Self {
-        let temp_dir = TempDir::new().expect("Failed to create temp dir");
-        let tantivy = TantivyConfig {
-            tokenizer: TokenizerKind::Default,
-            ..Default::default()
-        };
-        let config = FulltextConfig {
-            enabled: true,
-            index_path: temp_dir.path().to_path_buf(),
-            default_engine: EngineType::Bm25,
-            sync: linkrs::search::SyncConfig::default(),
-            tantivy,
-            cache_size: 100,
-            max_result_cache: 1000,
-            result_cache_ttl_secs: 60,
-        };
-
-        let manager =
-            Arc::new(FulltextIndexManager::new(config.clone()).expect("Failed to create manager"));
-
-        let batch_config = BatchConfig::default();
-        let sync_coordinator =
-            Arc::new(FulltextSyncCoordinator::new(manager.clone(), batch_config));
-
-        let sync_manager = Arc::new(SyncManager::new(sync_coordinator.clone()));
-
-        Self {
-            coordinator: sync_coordinator,
-            sync_manager,
-            _temp_dir: temp_dir,
-        }
-    }
-
-    fn with_batch_config(batch_config: BatchConfig) -> Self {
-        let temp_dir = TempDir::new().expect("Failed to create temp dir");
-        let tantivy = TantivyConfig {
-            tokenizer: TokenizerKind::Default,
-            ..Default::default()
-        };
-        let config = FulltextConfig {
-            enabled: true,
-            index_path: temp_dir.path().to_path_buf(),
-            default_engine: EngineType::Bm25,
-            sync: linkrs::search::SyncConfig::default(),
-            tantivy,
-            cache_size: 100,
-            max_result_cache: 1000,
-            result_cache_ttl_secs: 60,
-        };
-
-        let manager =
-            Arc::new(FulltextIndexManager::new(config.clone()).expect("Failed to create manager"));
-
-        let sync_coordinator =
-            Arc::new(FulltextSyncCoordinator::new(manager.clone(), batch_config));
-
-        let sync_manager = Arc::new(SyncManager::new(sync_coordinator.clone()));
-
-        Self {
-            coordinator: sync_coordinator,
-            sync_manager,
-            _temp_dir: temp_dir,
-        }
-    }
+fn setup_article_space(harness: &mut SyncTestHarness) {
+    harness
+        .create_space("test_space")
+        .expect("Failed to create space");
+    harness
+        .create_tag_with_fulltext(
+            "test_space",
+            "Article",
+            vec![("content", linkrs::core::types::DataType::String)],
+            vec!["content"],
+        )
+        .expect("Failed to create tag");
 }
 
 fn create_test_vertex(vid: i64, tag_name: &str, content: &str) -> Vertex {
@@ -106,161 +41,79 @@ fn create_test_vertex(vid: i64, tag_name: &str, content: &str) -> Vertex {
 
 // ==================== Basic Sync Tests ====================
 
-#[tokio::test]
-async fn test_sync_coordinator_creation() {
-    let ctx = SyncTestContext::new();
+#[test]
+fn test_sync_coordinator_creation() {
+    let harness = SyncTestHarness::new().expect("Failed to create test harness");
 
     // Verify coordinator is created successfully
-    assert!(Arc::strong_count(&ctx.coordinator) >= 1);
+    assert!(Arc::strong_count(&harness.sync_coordinator) >= 1);
 }
 
-#[tokio::test]
-async fn test_sync_vertex_change() {
-    let ctx = SyncTestContext::new();
+#[test]
+fn test_sync_vertex_change() {
+    let mut harness = SyncTestHarness::new().expect("Failed to create test harness");
+    setup_article_space(&mut harness);
 
-    // Create index
-    ctx.coordinator
-        .fulltext_manager()
-        .create_index(1, "Article", "content", Some(EngineType::Bm25))
-        .await
-        .expect("Failed to create index");
-
-    // Create vertex
+    // Sync vertex change through the commit path
     let vertex = create_test_vertex(1, "Article", "Hello World");
-    let vid = Value::from(vertex.vid);
-
-    // Extract properties
-    assert_eq!(vertex.tag.name, "Article");
-    let props: Vec<(String, Value)> = vertex
-        .tag
-        .properties
-        .iter()
-        .map(|(k, v)| (k.to_string(), v.clone()))
-        .collect();
-
-    // Sync vertex change
-    ctx.coordinator
-        .on_vertex_change(1, "Article", &vid, &props, ChangeType::Insert)
-        .await
+    harness
+        .insert_vertex("test_space", vertex)
         .expect("Failed to sync vertex");
 
-    // Commit the batch to ensure the change is processed
-    ctx.coordinator
-        .commit_all()
-        .await
-        .expect("Failed to commit");
-
-    // Wait for async processing
-    sleep(Duration::from_millis(200)).await;
-
     // Verify search results
-    let results: Vec<_> = ctx
-        .coordinator
-        .fulltext_manager()
-        .search(1, "Article", "content", "Hello", 10)
-        .await
+    let results = harness
+        .search_fulltext("test_space", "Article", "content", "Hello", 10)
         .expect("Failed to search");
 
     assert_eq!(results.len(), 1, "Sync should work");
 }
 
-#[tokio::test]
-async fn test_sync_batch_processing() {
-    let batch_config = BatchConfig {
-        batch_size: 5,
-        flush_interval: Duration::from_millis(100),
-        max_buffer_size: 100,
-        enable_persistence: false,
-        persistence_path: None,
-        failure_policy: linkrs::search::SyncFailurePolicy::FailOpen,
-    };
-
-    let ctx = SyncTestContext::with_batch_config(batch_config);
-
-    // Create index
-    ctx.coordinator
-        .fulltext_manager()
-        .create_index(1, "Article", "content", Some(EngineType::Bm25))
-        .await
-        .expect("Failed to create index");
+#[test]
+fn test_sync_batch_processing() {
+    let mut harness = SyncTestHarness::new().expect("Failed to create test harness");
+    setup_article_space(&mut harness);
 
     // Batch insert multiple vertices
     for i in 0..10 {
         let vertex = create_test_vertex(i, "Article", &format!("Article {}", i));
-        let vid = Value::from(vertex.vid);
-
-        assert_eq!(vertex.tag.name, "Article");
-        let props: Vec<(String, Value)> = vertex
-            .tag
-            .properties
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.clone()))
-            .collect();
-
-        ctx.coordinator
-            .on_vertex_change(1, "Article", &vid, &props, ChangeType::Insert)
-            .await
+        harness
+            .insert_vertex("test_space", vertex)
             .expect("Failed to sync vertex");
     }
 
-    // Wait for batch processing
-    sleep(Duration::from_millis(300)).await;
-
     // Verify search results
-    let results: Vec<_> = ctx
-        .coordinator
-        .fulltext_manager()
-        .search(1, "Article", "content", "Article", 10)
-        .await
+    let results = harness
+        .search_fulltext("test_space", "Article", "content", "Article", 10)
         .expect("Failed to search");
 
     assert!(results.len() >= 10, "Batch processing should work");
 }
 
-#[tokio::test]
-async fn test_sync_delete_operation() {
-    let ctx = SyncTestContext::new();
-
-    // Create index
-    ctx.coordinator
-        .fulltext_manager()
-        .create_index(1, "Article", "content", Some(EngineType::Bm25))
-        .await
-        .expect("Failed to create index");
+#[test]
+fn test_sync_delete_operation() {
+    let mut harness = SyncTestHarness::new().expect("Failed to create test harness");
+    setup_article_space(&mut harness);
 
     // Insert vertex
     let vertex = create_test_vertex(1, "Article", "Delete me");
-    let vid = Value::from(vertex.vid);
-
-    assert_eq!(vertex.tag.name, "Article");
-    let props: Vec<(String, Value)> = vertex
-        .tag
-        .properties
-        .iter()
-        .map(|(k, v)| (k.to_string(), v.clone()))
-        .collect();
-
-    ctx.coordinator
-        .on_vertex_change(1, "Article", &vid, &props, ChangeType::Insert)
-        .await
+    harness
+        .insert_vertex("test_space", vertex)
         .expect("Failed to insert vertex");
 
-    sleep(Duration::from_millis(200)).await;
-
-    // Delete vertex
-    ctx.coordinator
-        .on_vertex_change(1, "Article", &vid, &props, ChangeType::Delete)
-        .await
+    // Delete vertex inside a transaction so the index observes the delete
+    harness
+        .begin_transaction()
+        .expect("Failed to begin transaction");
+    harness
+        .delete_vertex_with_txn("test_space", 1)
         .expect("Failed to delete vertex");
-
-    sleep(Duration::from_millis(200)).await;
+    harness
+        .commit_transaction()
+        .expect("Failed to commit transaction");
 
     // Verify deletion
-    let results: Vec<_> = ctx
-        .coordinator
-        .fulltext_manager()
-        .search(1, "Article", "content", "Delete", 10)
-        .await
+    let results = harness
+        .search_fulltext("test_space", "Article", "content", "Delete", 10)
         .expect("Failed to search");
 
     assert_eq!(results.len(), 0, "Delete should work");
@@ -268,60 +121,36 @@ async fn test_sync_delete_operation() {
 
 // ==================== Concurrent Tests ====================
 
-#[tokio::test]
-async fn test_concurrent_sync_operations() {
-    let ctx = SyncTestContext::new();
+#[test]
+fn test_concurrent_sync_operations() {
+    let mut harness = SyncTestHarness::new().expect("Failed to create test harness");
+    setup_article_space(&mut harness);
+    let harness = Arc::new(Mutex::new(harness));
 
-    // Create index
-    ctx.coordinator
-        .fulltext_manager()
-        .create_index(1, "Article", "content", Some(EngineType::Bm25))
-        .await
-        .expect("Failed to create index");
-
-    // Concurrent inserts
+    // Concurrent inserts; each one drives the commit path under the lock.
     let mut handles = vec![];
     for i in 0..20 {
-        let coordinator = ctx.coordinator.clone();
-        let handle = tokio::spawn(async move {
+        let harness = harness.clone();
+        let handle = std::thread::spawn(move || {
             let vertex = create_test_vertex(i, "Article", &format!("Concurrent {}", i));
-            let vid = Value::from(vertex.vid);
-
-            assert_eq!(vertex.tag.name, "Article");
-            let props: Vec<(String, Value)> = vertex
-                .tag
-                .properties
-                .iter()
-                .map(|(k, v)| (k.to_string(), v.clone()))
-                .collect();
-
-            coordinator
-                .on_vertex_change(1, "Article", &vid, &props, ChangeType::Insert)
-                .await
+            harness
+                .lock()
+                .expect("harness lock")
+                .insert_vertex("test_space", vertex)
+                .expect("Failed to sync vertex");
         });
         handles.push(handle);
     }
 
-    // Wait for all tasks
     for handle in handles {
-        let _ = handle.await.expect("Task failed");
+        handle.join().expect("Task failed");
     }
 
-    // Commit the batch to ensure all changes are processed
-    ctx.coordinator
-        .commit_all()
-        .await
-        .expect("Failed to commit");
-
-    // Wait for processing
-    sleep(Duration::from_millis(300)).await;
-
     // Verify results
-    let results: Vec<_> = ctx
-        .coordinator
-        .fulltext_manager()
-        .search(1, "Article", "content", "Concurrent", 100)
-        .await
+    let results = harness
+        .lock()
+        .expect("harness lock")
+        .search_fulltext("test_space", "Article", "content", "Concurrent", 100)
         .expect("Failed to search");
 
     assert!(results.len() >= 20, "Concurrent operations should work");
@@ -329,37 +158,32 @@ async fn test_concurrent_sync_operations() {
 
 // ==================== Error Handling Tests ====================
 
-#[tokio::test]
-async fn test_sync_nonexistent_index() {
-    let ctx = SyncTestContext::new();
+#[test]
+fn test_sync_nonexistent_index() {
+    let mut harness = SyncTestHarness::new().expect("Failed to create test harness");
 
-    // Try to sync without creating index first
+    harness
+        .create_space("test_space")
+        .expect("Failed to create space");
+    // Tag without any fulltext index: writes stage fine but index nothing.
+    harness
+        .create_tag_with_fulltext(
+            "test_space",
+            "Article",
+            vec![("content", linkrs::core::types::DataType::String)],
+            vec![],
+        )
+        .expect("Failed to create tag");
+
+    // Should succeed but not index anything (index doesn't exist, so the
+    // field is skipped during delivery)
     let vertex = create_test_vertex(1, "Article", "Test");
-    let vid = Value::from(vertex.vid);
-
-    assert_eq!(vertex.tag.name, "Article");
-    let props: Vec<(String, Value)> = vertex
-        .tag
-        .properties
-        .iter()
-        .map(|(k, v)| (k.to_string(), v.clone()))
-        .collect();
-
-    // Should succeed but not index anything (index doesn't exist, so field is skipped)
-    let result = ctx
-        .coordinator
-        .on_vertex_change(1, "Article", &vid, &props, ChangeType::Insert)
-        .await;
-
-    // Should succeed (fields without indexes are silently skipped)
-    assert!(result.is_ok());
+    harness
+        .insert_vertex("test_space", vertex)
+        .expect("Insert without index should succeed");
 
     // Verify search fails because index doesn't exist
-    let search_result = ctx
-        .coordinator
-        .fulltext_manager()
-        .search(1, "Article", "content", "Test", 10)
-        .await;
+    let search_result = harness.search_fulltext("test_space", "Article", "content", "Test", 10);
 
     assert!(
         search_result.is_err(),
@@ -367,74 +191,40 @@ async fn test_sync_nonexistent_index() {
     );
 }
 
-#[tokio::test]
-async fn test_sync_manager_start_stop() {
-    let ctx = SyncTestContext::new();
+#[test]
+fn test_sync_manager_start_stop() {
+    let harness = SyncTestHarness::new().expect("Failed to create test harness");
+    let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
 
-    // Start sync manager
-    let _ = ctx.sync_manager.start().await;
+    rt.block_on(async {
+        // Start sync manager
+        let _ = harness.sync_manager.start().await;
 
-    // Should be able to start again without error
-    let _ = ctx.sync_manager.start().await;
+        // Should be able to start again without error
+        let _ = harness.sync_manager.start().await;
 
-    // Stop sync manager
-    let _ = ctx.sync_manager.stop().await;
+        // Stop sync manager
+        let _ = harness.sync_manager.stop().await;
+    });
 }
 
 // ==================== Batch Config Tests ====================
 
-#[tokio::test]
-async fn test_custom_batch_size() {
-    let batch_config = BatchConfig {
-        batch_size: 2,
-        flush_interval: Duration::from_millis(50),
-        max_buffer_size: 10,
-        enable_persistence: false,
-        persistence_path: None,
-        failure_policy: linkrs::search::SyncFailurePolicy::FailOpen,
-    };
+#[test]
+fn test_custom_batch_size() {
+    let mut harness = SyncTestHarness::new().expect("Failed to create test harness");
+    setup_article_space(&mut harness);
 
-    let ctx = SyncTestContext::with_batch_config(batch_config);
-
-    // Create index
-    ctx.coordinator
-        .fulltext_manager()
-        .create_index(1, "Article", "content", Some(EngineType::Bm25))
-        .await
-        .expect("Failed to create index");
-
-    // Insert 3 vertices (should trigger batch flush at 2)
+    // Insert 3 vertices; every insert commits through the same path
     for i in 0..3 {
         let vertex = create_test_vertex(i, "Article", &format!("Batch {}", i));
-        let vid = Value::from(vertex.vid);
-
-        assert_eq!(vertex.tag.name, "Article");
-        let props: Vec<(String, Value)> = vertex
-            .tag
-            .properties
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.clone()))
-            .collect();
-
-        ctx.coordinator
-            .on_vertex_change(1, "Article", &vid, &props, ChangeType::Insert)
-            .await
+        harness
+            .insert_vertex("test_space", vertex)
             .expect("Failed to sync vertex");
     }
 
-    // Commit the batch to ensure all changes are processed
-    ctx.coordinator
-        .commit_all()
-        .await
-        .expect("Failed to commit");
-
-    sleep(Duration::from_millis(200)).await;
-
-    let results: Vec<_> = ctx
-        .coordinator
-        .fulltext_manager()
-        .search(1, "Article", "content", "Batch", 10)
-        .await
+    let results = harness
+        .search_fulltext("test_space", "Article", "content", "Batch", 10)
         .expect("Failed to search");
 
     assert_eq!(results.len(), 3, "Custom batch size should work");

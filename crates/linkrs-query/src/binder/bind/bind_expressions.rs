@@ -230,13 +230,95 @@ impl Binder {
             body: &linkrs_core::types::expr::SubqueryBody,
             depth: usize,
         ) -> DBResult<()> {
+            // Bind the subquery's own MATCH variables in a child scope
+            // before checking its WHERE / RETURN: inner references resolve
+            // locally while outer references stay visible as correlated
+            // bindings. Mirrors the clause binder, which registers the same
+            // variables before binding the subquery body.
+            let mut inner = BinderScope::with_parent(scope.clone());
+            for name in subquery_pattern_variables(body)? {
+                inner.define_variable(local_variable(&name));
+            }
             if let Some(where_clause) = body.where_clause.as_ref() {
-                check(scope, where_clause, depth + 1)?;
+                check(&inner, where_clause, depth + 1)?;
             }
             if let Some(return_expr) = body.return_expr.as_ref() {
-                check(scope, return_expr, depth + 1)?;
+                check(&inner, return_expr, depth + 1)?;
             }
             Ok(())
+        }
+        fn subquery_pattern_variables(
+            body: &linkrs_core::types::expr::SubqueryBody,
+        ) -> DBResult<Vec<String>> {
+            use linkrs_core::types::pattern::{PathElement, Pattern};
+            fn collect(pattern: &Pattern, out: &mut Vec<String>) {
+                match pattern {
+                    Pattern::Node(node) => {
+                        if let Some(name) = node.variable.as_ref() {
+                            out.push(name.clone());
+                        }
+                    }
+                    Pattern::Edge(edge) => {
+                        if let Some(name) = edge.variable.as_ref() {
+                            out.push(name.clone());
+                        }
+                    }
+                    Pattern::Path(path) => {
+                        if let Some(name) = path.name.as_ref() {
+                            out.push(name.clone());
+                        }
+                        for element in &path.elements {
+                            collect_path_element(element, out);
+                        }
+                    }
+                    Pattern::Variable(variable) => out.push(variable.name.clone()),
+                }
+            }
+            fn collect_path_element(element: &PathElement, out: &mut Vec<String>) {
+                match element {
+                    PathElement::Node(node) => {
+                        if let Some(name) = node.variable.as_ref() {
+                            out.push(name.clone());
+                        }
+                    }
+                    PathElement::Edge(edge) => {
+                        if let Some(name) = edge.variable.as_ref() {
+                            out.push(name.clone());
+                        }
+                    }
+                    PathElement::Alternative(patterns) => {
+                        for pattern in patterns {
+                            collect(pattern, out);
+                        }
+                    }
+                    PathElement::Optional(inner) | PathElement::Repeated(inner, _) => {
+                        collect_path_element(inner, out)
+                    }
+                    // Recursive comprehensions and CREATE-only hops bind no
+                    // plain variables for the existence check.
+                    _ => {}
+                }
+            }
+            let mut parsed = body.parsed_patterns.clone();
+            if parsed.is_empty() {
+                let mut parser = crate::parser::parsing::TraversalParser::new();
+                for pattern_str in &body.patterns {
+                    parsed.push(
+                        parser
+                            .parse_pattern(&mut crate::parser::ParseContext::new(pattern_str))
+                            .map_err(|e| {
+                                super::super::error::invalid_query(format!(
+                                    "Invalid subquery pattern `{pattern_str}`: {e}"
+                                ))
+                            })?,
+                    );
+                }
+            }
+            let mut names = Vec::new();
+            for pattern in &parsed {
+                collect(pattern, &mut names);
+            }
+            Ok(names)
         }
         let Some(inner) = expr.get_expression() else {
             return Ok(());

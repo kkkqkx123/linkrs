@@ -46,11 +46,16 @@ fn test_savepoint_multiple() {
     let scenario = TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space2")
-        .exec_ddl("CREATE TAG IF NOT EXISTS Counter(value INT)")
+        .exec_ddl("CREATE TAG IF NOT EXISTS Counter(id INT, value INT)")
         .assert_success();
 
     let scenario = (1..=5).fold(scenario, |s, i| {
-        let query = format!("INSERT VERTEX Counter(value) VALUES {}:({})", i, i * 10);
+        let query = format!(
+            "INSERT VERTEX Counter(id, value) VALUES {}:({}, {})",
+            i,
+            i,
+            i * 10
+        );
         s.exec_dml(&query).assert_success()
     });
 
@@ -65,9 +70,9 @@ fn test_readonly_transaction_option() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG IF NOT EXISTS Person(name STRING)")
+        .exec_ddl("CREATE TAG IF NOT EXISTS Person(id INT, name STRING)")
         .assert_success()
-        .exec_dml("INSERT VERTEX Person(name) VALUES 1:('Alice')")
+        .exec_dml("INSERT VERTEX Person(id, name) VALUES 1:(1, 'Alice')")
         .assert_success()
         .query("MATCH (v:Person) RETURN v.name")
         .assert_result_count(1);
@@ -79,9 +84,9 @@ fn test_transaction_durability_levels() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG IF NOT EXISTS Person(name STRING)")
+        .exec_ddl("CREATE TAG IF NOT EXISTS Person(id INT, name STRING)")
         .assert_success()
-        .exec_dml("INSERT VERTEX Person(name) VALUES 1:('Immediate')")
+        .exec_dml("INSERT VERTEX Person(id, name) VALUES 1:(1, 'Immediate')")
         .assert_success()
         .assert_vertex_exists(1, "Person");
 }
@@ -190,17 +195,17 @@ fn test_transaction_complex_graph_pattern() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG IF NOT EXISTS Person(name STRING)")
+        .exec_ddl("CREATE TAG IF NOT EXISTS Person(id INT, name STRING)")
         .assert_success()
-        .exec_ddl("CREATE TAG IF NOT EXISTS Company(name STRING)")
+        .exec_ddl("CREATE TAG IF NOT EXISTS Company(id INT, name STRING)")
         .assert_success()
         .exec_ddl("CREATE EDGE IF NOT EXISTS WORKS_AT")
         .assert_success()
         .exec_ddl("CREATE EDGE IF NOT EXISTS MANAGES")
         .assert_success()
-        .exec_dml("INSERT VERTEX Person(name) VALUES 1:('Alice'), 2:('Bob'), 3:('Charlie')")
+        .exec_dml("INSERT VERTEX Person(id, name) VALUES 1:(1, 'Alice'), 2:(2, 'Bob'), 3:(3, 'Charlie')")
         .assert_success()
-        .exec_dml("INSERT VERTEX Company(name) VALUES 100:('TechCorp')")
+        .exec_dml("INSERT VERTEX Company(id, name) VALUES 100:(100, 'TechCorp')")
         .assert_success()
         .exec_dml("INSERT EDGE WORKS_AT VALUES 1->100, 2->100, 3->100")
         .assert_success()
@@ -216,13 +221,10 @@ fn test_transaction_property_filtering() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG IF NOT EXISTS Person(name STRING, age INT, active BOOL)")
+        .exec_ddl("CREATE TAG IF NOT EXISTS Person(id INT, name STRING, age INT, active BOOL)")
         .assert_success()
         .exec_dml(
-            "INSERT VERTEX Person(name, age, active) VALUES \
-            1:('Alice', 25, true), \
-            2:('Bob', 30, false), \
-            3:('Charlie', 35, true)",
+            "INSERT VERTEX Person(id, name, age, active) VALUES 1:(1, 'Alice', 25, true), 2:(2, 'Bob', 30, false), 3:(3, 'Charlie', 35, true)",
         )
         .assert_success()
         .query("MATCH (v:Person) WHERE v.active == true RETURN v.name")
@@ -237,12 +239,10 @@ fn test_transaction_string_operations() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG IF NOT EXISTS Person(name STRING, description STRING)")
+        .exec_ddl("CREATE TAG IF NOT EXISTS Person(id INT, name STRING, description STRING)")
         .assert_success()
         .exec_dml(
-            "INSERT VERTEX Person(name, description) VALUES \
-            1:('Alice', 'Software Engineer'), \
-            2:('Bob', 'Data Scientist')",
+            "INSERT VERTEX Person(id, name, description) VALUES 1:(1, 'Alice', 'Software Engineer'), 2:(2, 'Bob', 'Data Scientist')",
         )
         .assert_success()
         .query("MATCH (v:Person) WHERE v.name STARTS WITH 'A' RETURN v.name")

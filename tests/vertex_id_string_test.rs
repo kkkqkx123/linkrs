@@ -1,12 +1,19 @@
 #![cfg(feature = "embedded")]
 
+use linkrs::api::api_core::SpaceConfig;
 use linkrs::api::embedded::{GraphDatabase, TransactionConfig};
 use std::time::Duration;
 
 #[test]
 fn test_string_vertex_id_insert_and_query() {
     let db = GraphDatabase::open_in_memory().expect("Failed to open database");
-    let session = db.session().expect("Failed to create session");
+    let mut session = db.session().expect("Failed to create session");
+    session
+        .create_space("test_space", SpaceConfig::default())
+        .expect("Failed to create space");
+    session
+        .use_space("test_space")
+        .expect("Failed to use space");
 
     let config = TransactionConfig::new().with_timeout(Duration::from_secs(60));
 
@@ -14,9 +21,9 @@ fn test_string_vertex_id_insert_and_query() {
         .begin_transaction_with_config(config)
         .expect("Failed to begin transaction");
 
-    txn.execute("CREATE TAG user(name string)")
+    txn.execute("CREATE TAG user(id string, name string)")
         .expect("Create tag should succeed");
-    txn.execute("INSERT VERTEX user(name) VALUES \"alice\":(\"Alice Smith\")")
+    txn.execute("INSERT VERTEX user(id, name) VALUES \"alice\":(\"alice\", \"Alice Smith\")")
         .expect("Insert with string ID should succeed");
 
     let result = txn
@@ -30,7 +37,13 @@ fn test_string_vertex_id_insert_and_query() {
 #[test]
 fn test_string_vertex_id_delete_and_rollback() {
     let db = GraphDatabase::open_in_memory().expect("Failed to open database");
-    let session = db.session().expect("Failed to create session");
+    let mut session = db.session().expect("Failed to create session");
+    session
+        .create_space("test_space", SpaceConfig::default())
+        .expect("Failed to create space");
+    session
+        .use_space("test_space")
+        .expect("Failed to use space");
 
     let config = TransactionConfig::new().with_timeout(Duration::from_secs(60));
 
@@ -38,9 +51,9 @@ fn test_string_vertex_id_delete_and_rollback() {
         .begin_transaction_with_config(config.clone())
         .expect("Failed to begin transaction");
 
-    txn.execute("CREATE TAG user(name string)")
+    txn.execute("CREATE TAG user(id string, name string)")
         .expect("Create tag should succeed");
-    txn.execute("INSERT VERTEX user(name) VALUES \"alice\":(\"Alice Smith\")")
+    txn.execute("INSERT VERTEX user(id, name) VALUES \"alice\":(\"alice\", \"Alice Smith\")")
         .expect("Insert should succeed");
     txn.execute("DELETE VERTEX user FROM \"alice\"")
         .expect("Delete should succeed");
@@ -60,7 +73,13 @@ fn test_string_vertex_id_delete_and_rollback() {
 #[test]
 fn test_string_vertex_id_update_and_rollback() {
     let db = GraphDatabase::open_in_memory().expect("Failed to open database");
-    let session = db.session().expect("Failed to create session");
+    let mut session = db.session().expect("Failed to create session");
+    session
+        .create_space("test_space", SpaceConfig::default())
+        .expect("Failed to create space");
+    session
+        .use_space("test_space")
+        .expect("Failed to use space");
 
     let config = TransactionConfig::new().with_timeout(Duration::from_secs(60));
 
@@ -68,10 +87,12 @@ fn test_string_vertex_id_update_and_rollback() {
         .begin_transaction_with_config(config.clone())
         .expect("Failed to begin transaction");
 
-    txn.execute("CREATE TAG user(name string, age int)")
+    txn.execute("CREATE TAG user(id string, name string, age int)")
         .expect("Create tag should succeed");
-    txn.execute("INSERT VERTEX user(name, age) VALUES \"alice\":(\"Alice Smith\", 25)")
-        .expect("Insert should succeed");
+    txn.execute(
+        "INSERT VERTEX user(id, name, age) VALUES \"alice\":(\"alice\", \"Alice Smith\", 25)",
+    )
+    .expect("Insert should succeed");
     txn.execute("UPDATE VERTEX \"alice\" ON user SET age = 26")
         .expect("Update should succeed");
 
@@ -90,7 +111,13 @@ fn test_string_vertex_id_update_and_rollback() {
 #[test]
 fn test_mixed_vertex_id_types() {
     let db = GraphDatabase::open_in_memory().expect("Failed to open database");
-    let session = db.session().expect("Failed to create session");
+    let mut session = db.session().expect("Failed to create session");
+    session
+        .create_space("test_space", SpaceConfig::default())
+        .expect("Failed to create space");
+    session
+        .use_space("test_space")
+        .expect("Failed to use space");
 
     let config = TransactionConfig::new().with_timeout(Duration::from_secs(60));
 
@@ -98,12 +125,12 @@ fn test_mixed_vertex_id_types() {
         .begin_transaction_with_config(config)
         .expect("Failed to begin transaction");
 
-    txn.execute("CREATE TAG user(name string)")
+    txn.execute("CREATE TAG user(id string, name string)")
         .expect("Create tag should succeed");
 
-    txn.execute("INSERT VERTEX user(name) VALUES 1:(\"Alice\")")
+    txn.execute("INSERT VERTEX user(id, name) VALUES 1:(1, \"Alice\")")
         .expect("Insert with int ID should succeed");
-    txn.execute("INSERT VERTEX user(name) VALUES \"bob\":(\"Bob\")")
+    txn.execute("INSERT VERTEX user(id, name) VALUES \"bob\":(\"bob\", \"Bob\")")
         .expect("Insert with string ID should succeed");
 
     let result = txn

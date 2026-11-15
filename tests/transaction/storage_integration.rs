@@ -26,9 +26,9 @@ fn test_storage_vertex_insert_persistence() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG IF NOT EXISTS Person(name STRING, age INT)")
+        .exec_ddl("CREATE TAG IF NOT EXISTS Person(id INT, name STRING, age INT)")
         .assert_success()
-        .exec_dml("INSERT VERTEX Person(name, age) VALUES 1:('Alice', 30)")
+        .exec_dml("INSERT VERTEX Person(id, name, age) VALUES 1:(1, 'Alice', 30)")
         .assert_success()
         .assert_vertex_exists(1, "Person")
         .assert_vertex_props(
@@ -44,9 +44,9 @@ fn test_storage_vertex_update_persistence() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG IF NOT EXISTS Person(name STRING, age INT)")
+        .exec_ddl("CREATE TAG IF NOT EXISTS Person(id INT, name STRING, age INT)")
         .assert_success()
-        .exec_dml("INSERT VERTEX Person(name, age) VALUES 1:('Alice', 30)")
+        .exec_dml("INSERT VERTEX Person(id, name, age) VALUES 1:(1, 'Alice', 30)")
         .assert_success()
         .assert_vertex_props(
             1,
@@ -71,9 +71,9 @@ fn test_storage_vertex_delete_persistence() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG IF NOT EXISTS Person(name STRING)")
+        .exec_ddl("CREATE TAG IF NOT EXISTS Person(id INT, name STRING)")
         .assert_success()
-        .exec_dml("INSERT VERTEX Person(name) VALUES 1:('Alice'), 2:('Bob')")
+        .exec_dml("INSERT VERTEX Person(id, name) VALUES 1:(1, 'Alice'), 2:(2, 'Bob')")
         .assert_success()
         .assert_vertex_exists(1, "Person")
         .assert_vertex_exists(2, "Person")
@@ -89,11 +89,11 @@ fn test_storage_edge_insert_persistence() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG IF NOT EXISTS Person(name STRING)")
+        .exec_ddl("CREATE TAG IF NOT EXISTS Person(id INT, name STRING)")
         .assert_success()
         .exec_ddl("CREATE EDGE IF NOT EXISTS KNOWS(since INT)")
         .assert_success()
-        .exec_dml("INSERT VERTEX Person(name) VALUES 1:('Alice'), 2:('Bob')")
+        .exec_dml("INSERT VERTEX Person(id, name) VALUES 1:(1, 'Alice'), 2:(2, 'Bob')")
         .assert_success()
         .exec_dml("INSERT EDGE KNOWS(since) VALUES 1->2:(2020)")
         .assert_success()
@@ -106,11 +106,11 @@ fn test_storage_edge_delete_persistence() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG IF NOT EXISTS Person(name STRING)")
+        .exec_ddl("CREATE TAG IF NOT EXISTS Person(id INT, name STRING)")
         .assert_success()
         .exec_ddl("CREATE EDGE IF NOT EXISTS KNOWS")
         .assert_success()
-        .exec_dml("INSERT VERTEX Person(name) VALUES 1:('Alice'), 2:('Bob'), 3:('Charlie')")
+        .exec_dml("INSERT VERTEX Person(id, name) VALUES 1:(1, 'Alice'), 2:(2, 'Bob'), 3:(3, 'Charlie')")
         .assert_success()
         .exec_dml("INSERT EDGE KNOWS VALUES 1->2, 2->3, 1->3")
         .assert_success()
@@ -130,12 +130,12 @@ fn test_storage_schema_changes_persistence() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG IF NOT EXISTS Person(name STRING)")
+        .exec_ddl("CREATE TAG IF NOT EXISTS Person(id INT, name STRING)")
         .assert_success()
         .exec_ddl("ALTER TAG Person ADD (age INT, email STRING)")
         .assert_success()
         .exec_dml(
-            "INSERT VERTEX Person(name, age, email) VALUES 1:('Alice', 30, 'alice@example.com')",
+            "INSERT VERTEX Person(id, name, age, email) VALUES 1:(1, 'Alice', 30, 'alice@example.com')",
         )
         .assert_success()
         .assert_vertex_props(
@@ -155,20 +155,17 @@ fn test_storage_multiple_operations_atomicity() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG IF NOT EXISTS Person(name STRING, age INT)")
+        .exec_ddl("CREATE TAG IF NOT EXISTS Person(id INT, name STRING, age INT)")
         .assert_success()
-        .exec_ddl("CREATE TAG IF NOT EXISTS Company(name STRING)")
+        .exec_ddl("CREATE TAG IF NOT EXISTS Company(id INT, name STRING)")
         .assert_success()
         .exec_ddl("CREATE EDGE IF NOT EXISTS WORKS_AT")
         .assert_success()
         .exec_dml(
-            "INSERT VERTEX Person(name, age) VALUES \
-            1:('Alice', 30), \
-            2:('Bob', 25), \
-            3:('Charlie', 35)",
+            "INSERT VERTEX Person(id, name, age) VALUES 1:(1, 'Alice', 30),  2:(2, 'Bob', 25),  3:(3, 'Charlie', 35)",
         )
         .assert_success()
-        .exec_dml("INSERT VERTEX Company(name) VALUES 100:('TechCorp')")
+        .exec_dml("INSERT VERTEX Company(id, name) VALUES 100:(100, 'TechCorp')")
         .assert_success()
         .exec_dml(
             "INSERT EDGE WORKS_AT VALUES \
@@ -188,11 +185,11 @@ fn test_storage_cascading_delete() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG IF NOT EXISTS Person(name STRING)")
+        .exec_ddl("CREATE TAG IF NOT EXISTS Person(id INT, name STRING)")
         .assert_success()
         .exec_ddl("CREATE EDGE IF NOT EXISTS KNOWS")
         .assert_success()
-        .exec_dml("INSERT VERTEX Person(name) VALUES 1:('Alice'), 2:('Bob'), 3:('Charlie')")
+        .exec_dml("INSERT VERTEX Person(id, name) VALUES 1:(1, 'Alice'), 2:(2, 'Bob'), 3:(3, 'Charlie')")
         .assert_success()
         .exec_dml("INSERT EDGE KNOWS VALUES 1->2, 2->3, 3->1")
         .assert_success()
@@ -213,7 +210,7 @@ fn test_storage_property_types() {
         .expect("Failed to create test scenario")
         .setup_space("test_space")
         .exec_ddl(
-            "CREATE TAG IF NOT EXISTS AllTypes( \
+            "CREATE TAG IF NOT EXISTS AllTypes(id INT,  \
             int_val INT, \
             string_val STRING, \
             bool_val BOOL, \
@@ -222,8 +219,7 @@ fn test_storage_property_types() {
         )
         .assert_success()
         .exec_dml(
-            "INSERT VERTEX AllTypes(int_val, string_val, bool_val, float_val) \
-            VALUES 1:(42, 'test_string', true, 3.14)",
+            "INSERT VERTEX AllTypes(id, int_val, string_val, bool_val, float_val)  VALUES 1:(1, 42, 'test_string', true, 3.14)",
         )
         .assert_success()
         .assert_vertex_props(
@@ -267,23 +263,18 @@ fn test_storage_complex_graph_pattern() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG IF NOT EXISTS Person(name STRING)")
+        .exec_ddl("CREATE TAG IF NOT EXISTS Person(id INT, name STRING)")
         .assert_success()
-        .exec_ddl("CREATE TAG IF NOT EXISTS Company(name STRING)")
+        .exec_ddl("CREATE TAG IF NOT EXISTS Company(id INT, name STRING)")
         .assert_success()
         .exec_ddl("CREATE EDGE IF NOT EXISTS WORKS_AT")
         .assert_success()
         .exec_ddl("CREATE EDGE IF NOT EXISTS MANAGES")
         .assert_success()
-        .exec_dml("INSERT VERTEX Company(name) VALUES 100:('TechCorp')")
+        .exec_dml("INSERT VERTEX Company(id, name) VALUES 100:(100, 'TechCorp')")
         .assert_success()
         .exec_dml(
-            "INSERT VERTEX Person(name) VALUES \
-            1:('CEO'), \
-            2:('Manager1'), \
-            3:('Manager2'), \
-            4:('Employee1'), \
-            5:('Employee2')",
+            "INSERT VERTEX Person(id, name) VALUES 1:(1, 'CEO'),  2:(2, 'Manager1'),  3:(3, 'Manager2'),  4:(4, 'Employee1'),  5:(5, 'Employee2')",
         )
         .assert_success()
         .exec_dml(
@@ -309,14 +300,14 @@ fn test_storage_tag_alteration() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG IF NOT EXISTS Product(name STRING)")
+        .exec_ddl("CREATE TAG IF NOT EXISTS Product(id INT, name STRING)")
         .assert_success()
-        .exec_dml("INSERT VERTEX Product(name) VALUES 1:('ProductA'), 2:('ProductB')")
+        .exec_dml("INSERT VERTEX Product(id, name) VALUES 1:(1, 'ProductA'), 2:(2, 'ProductB')")
         .assert_success()
         .exec_ddl("ALTER TAG Product ADD (price INT, category STRING)")
         .assert_success()
         .exec_dml(
-            "INSERT VERTEX Product(name, price, category) VALUES 3:('ProductC', 100, 'Electronics')",
+            "INSERT VERTEX Product(id, name, price, category) VALUES 3:(3, 'ProductC', 100, 'Electronics')",
         )
         .assert_success()
         .assert_vertex_count("Product", 3);
@@ -328,18 +319,18 @@ fn test_storage_edge_alteration() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG IF NOT EXISTS Person(name STRING)")
+        .exec_ddl("CREATE TAG IF NOT EXISTS Person(id INT, name STRING)")
         .assert_success()
         .exec_ddl("CREATE EDGE IF NOT EXISTS KNOWS")
         .assert_success()
-        .exec_dml("INSERT VERTEX Person(name) VALUES 1:('Alice'), 2:('Bob')")
+        .exec_dml("INSERT VERTEX Person(id, name) VALUES 1:(1, 'Alice'), 2:(2, 'Bob')")
         .assert_success()
         .exec_dml("INSERT EDGE KNOWS VALUES 1->2")
         .assert_success()
         .assert_edge_exists(1, 2, "KNOWS")
         .exec_ddl("ALTER EDGE KNOWS ADD (since INT)")
         .assert_success()
-        .exec_dml("INSERT VERTEX Person(name) VALUES 3:('Charlie')")
+        .exec_dml("INSERT VERTEX Person(id, name) VALUES 3:(3, 'Charlie')")
         .assert_success()
         .exec_dml("INSERT EDGE KNOWS(since) VALUES 2->3:(2023)")
         .assert_success()
@@ -352,13 +343,10 @@ fn test_storage_query_after_dml() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG IF NOT EXISTS Person(name STRING, age INT)")
+        .exec_ddl("CREATE TAG IF NOT EXISTS Person(id INT, name STRING, age INT)")
         .assert_success()
         .exec_dml(
-            "INSERT VERTEX Person(name, age) VALUES \
-            1:('Alice', 30), \
-            2:('Bob', 25), \
-            3:('Charlie', 35)",
+            "INSERT VERTEX Person(id, name, age) VALUES 1:(1, 'Alice', 30),  2:(2, 'Bob', 25),  3:(3, 'Charlie', 35)",
         )
         .assert_success()
         .query("MATCH (v:Person) WHERE v.age >= 30 RETURN v.name")
@@ -373,9 +361,9 @@ fn test_storage_update_and_query() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG IF NOT EXISTS Counter(value INT)")
+        .exec_ddl("CREATE TAG IF NOT EXISTS Counter(id INT, value INT)")
         .assert_success()
-        .exec_dml("INSERT VERTEX Counter(value) VALUES 1:(0)")
+        .exec_dml("INSERT VERTEX Counter(id, value) VALUES 1:(1, 0)")
         .assert_success()
         .exec_dml("UPDATE 1 ON Counter SET value = 10")
         .assert_success()

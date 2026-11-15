@@ -7,7 +7,6 @@ use linkrs::core::Value;
 use linkrs::search::SyncFailurePolicy;
 use linkrs::sync::batch::BatchConfig;
 use linkrs::sync::fulltext_sync::FulltextSyncCoordinator;
-use linkrs::sync::types::{ChangeType, IndexData, IndexType};
 use linkrs::test_utils::sync_helpers::{create_test_vertex, SyncTestHarness};
 use std::sync::Arc;
 
@@ -29,16 +28,6 @@ fn test_failed_sync_to_dead_letter_queue() {
             vec!["name"],
         )
         .expect("Failed to create tag");
-
-    // Force commit all before inserting
-    let rt = &harness.rt;
-    rt.block_on(async {
-        harness
-            .sync_coordinator
-            .commit_all()
-            .await
-            .expect("Commit all should succeed");
-    });
 
     // Begin transaction
     harness
@@ -226,16 +215,6 @@ fn test_batch_size_trigger() {
     // Wait for batch processing
     harness.wait_for_async(500);
 
-    // Force commit all to flush any pending batches
-    let rt = &harness.rt;
-    rt.block_on(async {
-        harness
-            .sync_coordinator
-            .commit_all()
-            .await
-            .expect("Commit all should succeed");
-    });
-
     // Verify batch processing worked - search for specific entries
     let mut found_count = 0;
     for i in 0..150 {
@@ -287,16 +266,6 @@ fn test_batch_timeout_trigger() {
 
     // Wait for timeout trigger (default 100ms)
     harness.wait_for_async(300);
-
-    // Force commit all to flush any pending batches
-    let rt = &harness.rt;
-    rt.block_on(async {
-        harness
-            .sync_coordinator
-            .commit_all()
-            .await
-            .expect("Commit all should succeed");
-    });
 
     // Verify timeout trigger worked - search for specific entries
     let mut found_count = 0;
@@ -359,16 +328,6 @@ fn test_batch_aggregation_optimization() {
 
     harness.wait_for_async(300);
 
-    // Force commit all to flush any pending batches
-    let rt = &harness.rt;
-    rt.block_on(async {
-        harness
-            .sync_coordinator
-            .commit_all()
-            .await
-            .expect("Commit all should succeed");
-    });
-
     // Verify all vertices are indexed
     let mut found_count = 0;
     for i in 0..5 {
@@ -389,8 +348,8 @@ fn test_batch_aggregation_optimization() {
 
 /// TC-093: FailurePolicy configuration (FailClosed vs FailOpen)
 ///
-/// Verifies that SyncFailurePolicy is correctly passed through
-/// BatchConfig and that the coordinator component respects the policy.
+/// Verifies the BatchConfig failure policy plumbing and that a coordinator
+/// built over the same manager stays functional.
 #[test]
 fn test_failure_policy_configuration() {
     // Verify FailOpen is the default
@@ -432,12 +391,10 @@ fn test_failure_policy_configuration() {
             .expect("Failed to create fulltext manager"),
     );
 
-    // Create coordinator with FailClosed policy
-    let fail_closed_config =
-        BatchConfig::default().with_failure_policy(SyncFailurePolicy::FailClosed);
-    let _coordinator = FulltextSyncCoordinator::new(fulltext_manager.clone(), fail_closed_config);
+    // A coordinator over the same manager stays functional.
+    let coordinator = FulltextSyncCoordinator::new(fulltext_manager);
+    let _ = coordinator.fulltext_manager();
 
-    // Verify the coordinator is functional (happy path)
     // Note: Full failure-policy behavior (FailClosed halting on first error)
     // requires engine error injection which is not available in integration tests
     let stats = linkrs::sync::manager::SyncManager::new_without_fulltext().outbox_stats();

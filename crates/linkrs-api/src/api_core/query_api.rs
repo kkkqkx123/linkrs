@@ -122,6 +122,19 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
         let start_time = Instant::now();
         let operation_finalizer = operation_storage.clone();
 
+        // A request without an explicit transaction runs on the caller-bound
+        // storage handle. When that handle is an auto-commit binding, the
+        // storage protocol stages writes and requires the finalize step to
+        // install them; the request flag alone must not skip it, otherwise
+        // bare writes are staged and silently dropped.
+        let bound_auto_commit = ctx.transaction_id.is_none()
+            && operation_storage.as_ref().is_some_and(|storage| {
+                storage
+                    .operation_context()
+                    .is_some_and(|context| context.auto_commit)
+            });
+        let auto_commit = ctx.auto_commit || bound_auto_commit;
+
         // Constructing a QueryRequestContext
         let mut request_context = linkrs_query::QueryRequestContext::new(query.to_string());
         request_context.query_id = ctx.query_id;
@@ -130,7 +143,7 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
                 .as_ref()
                 .and_then(|context| context.transaction_id)
         });
-        request_context.auto_commit = ctx.auto_commit;
+        request_context.auto_commit = auto_commit;
         request_context.parameters = ctx.parameters.clone().unwrap_or_default();
         request_context.session_variables = ctx.session_variables.clone().unwrap_or_default();
         request_context.parsed_statement = ctx.parsed_statement.clone();
@@ -161,14 +174,14 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
         ) {
             Ok(result) => result,
             Err(error) => {
-                if ctx.auto_commit {
+                if auto_commit {
                     Self::finalize_caller_storage(operation_finalizer.as_ref(), false)?;
                 }
                 return Err(CoreError::from(error));
             }
         };
 
-        if ctx.auto_commit {
+        if auto_commit {
             Self::finalize_caller_storage(operation_finalizer.as_ref(), true)?;
         }
 
@@ -240,7 +253,16 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
         operation_context: Option<StorageOperationContext>,
         operation_storage: Option<S>,
     ) -> CoreResult<StreamingQueryResult> {
-        let operation_owned = operation_storage.is_some() && ctx.auto_commit;
+        // Same degenerate case as the materialized path: a bound auto-commit
+        // handle without an explicit transaction still needs its finalizer.
+        let operation_owned = operation_storage.is_some()
+            && (ctx.auto_commit
+                || ctx.transaction_id.is_none()
+                    && operation_storage.as_ref().is_some_and(|storage| {
+                        storage
+                            .operation_context()
+                            .is_some_and(|context| context.auto_commit)
+                    }));
         let mut request_context = linkrs_query::QueryRequestContext::new(query.to_string());
         request_context.query_id = ctx.query_id;
         request_context.transaction_id = ctx.transaction_id.or_else(|| {

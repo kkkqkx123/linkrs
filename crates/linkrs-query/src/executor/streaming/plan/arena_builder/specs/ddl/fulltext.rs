@@ -1,8 +1,6 @@
 use crate::executor::base::ExecutionContext;
 use crate::executor::build_error::PlanBuildError;
-use crate::executor::streaming::operators::spec::{
-    FulltextManageCommand, FulltextSpec
-};
+use crate::executor::streaming::operators::spec::{FulltextManageCommand, FulltextSpec};
 
 use linkrs_core::types::expr::Expression;
 
@@ -175,5 +173,3 @@ pub(crate) fn validate_fulltext_query_fields(
         }
     }
 }
-
-#[cfg(test)]

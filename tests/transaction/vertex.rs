@@ -17,13 +17,10 @@ fn test_transaction_multiple_vertices() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG IF NOT EXISTS Person(name STRING, age INT)")
+        .exec_ddl("CREATE TAG IF NOT EXISTS Person(id INT, name STRING, age INT)")
         .assert_success()
         .exec_dml(
-            "INSERT VERTEX Person(name, age) VALUES \
-            1:('Alice', 30), \
-            2:('Bob', 25), \
-            3:('Charlie', 35)",
+            "INSERT VERTEX Person(id, name, age) VALUES 1:(1, 'Alice', 30),  2:(2, 'Bob', 25),  3:(3, 'Charlie', 35)",
         )
         .assert_success()
         .query("MATCH (v:Person) RETURN v")
@@ -39,9 +36,9 @@ fn test_transaction_vertex_update() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG IF NOT EXISTS Person(name STRING, age INT)")
+        .exec_ddl("CREATE TAG IF NOT EXISTS Person(id INT, name STRING, age INT)")
         .assert_success()
-        .exec_dml("INSERT VERTEX Person(name, age) VALUES 1:('Alice', 30)")
+        .exec_dml("INSERT VERTEX Person(id, name, age) VALUES 1:(1, 'Alice', 30)")
         .assert_success()
         .assert_vertex_props(
             1,
@@ -66,9 +63,9 @@ fn test_transaction_vertex_delete() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG IF NOT EXISTS Person(name STRING)")
+        .exec_ddl("CREATE TAG IF NOT EXISTS Person(id INT, name STRING)")
         .assert_success()
-        .exec_dml("INSERT VERTEX Person(name) VALUES 1:('Alice'), 2:('Bob')")
+        .exec_dml("INSERT VERTEX Person(id, name) VALUES 1:(1, 'Alice'), 2:(2, 'Bob')")
         .assert_success()
         .assert_vertex_exists(1, "Person")
         .assert_vertex_exists(2, "Person")
@@ -110,7 +107,7 @@ fn test_transaction_property_types() {
         .expect("Failed to create test scenario")
         .setup_space("test_space")
         .exec_ddl(
-            "CREATE TAG IF NOT EXISTS TestTypes( \
+            "CREATE TAG IF NOT EXISTS TestTypes(id INT,  \
             int_val INT, \
             string_val STRING, \
             bool_val BOOL, \
@@ -119,8 +116,7 @@ fn test_transaction_property_types() {
         )
         .assert_success()
         .exec_dml(
-            "INSERT VERTEX TestTypes(int_val, string_val, bool_val, float_val) \
-            VALUES 1:(42, 'test', true, 2.71)",
+            "INSERT VERTEX TestTypes(id, int_val, string_val, bool_val, float_val)  VALUES 1:(1, 42, 'test', true, 2.71)",
         )
         .assert_success()
         .assert_vertex_props(

@@ -1,7 +1,8 @@
 use crate::executor::base::ExecutionContext;
 use crate::executor::build_error::PlanBuildError;
 use crate::executor::streaming::operators::spec::{
-    DdlSpec, EdgeManageCommand, IndexManageCommand, PropertyRename, SpaceManageCommand, TagManageCommand
+    DdlSpec, EdgeManageCommand, IndexManageCommand, PropertyRename, SpaceManageCommand,
+    TagManageCommand,
 };
 
 fn space_manage_to_command(

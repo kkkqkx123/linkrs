@@ -306,8 +306,17 @@ cors_enabled = true
 # and is rejected when bind_address is not loopback; production must list
 # exact origins such as "https://console.example.com".
 cors_allowed_origins = []
-# Directory serving the built web console (default: not served)
+# Directory serving the built web console (default: not served).
+# Uncomment to serve the frontend static bundle on the same port as the API;
+# the server refuses to start when the directory is missing. Relative paths
+# resolve against this file's directory, `~` expands to the user home directory.
 # static_dir = "~/.linkrs/web"
+# Fallback page for extension-less unknown paths (single-page application).
+# static_index = "index.html"
+# Rewrite extension-less unknown paths to the fallback page (default true).
+# static_fallback = true
+# Cache lifetime in seconds for fingerprinted assets under /_app/immutable/.
+# static_immutable_max_age_secs = 31556952
 # This build does not terminate TLS itself: terminate HTTPS at a reverse
 # proxy and keep this disabled.
 # https_enabled = false

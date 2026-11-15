@@ -23,7 +23,9 @@ deploy/
 └── scripts/
     ├── install-service.sh      # 一键安装服务（含用户/目录/配置/单元）
     ├── uninstall-service.sh    # 卸载服务
-    └── service-status.sh       # 查看服务状态
+    ├── service-status.sh       # 查看服务状态
+    ├── build-frontend.sh       # 构建前端静态包到 frontend/build/
+    └── package-single.sh        # 组装单机包到 dist/linkrs-single/
 ```
 
 ## systemd 服务单元（systemd/linkrs.service）
@@ -134,6 +136,34 @@ sudo systemctl restart linkrs     # 配置变更后重启（SIGHUP 热重载暂�
 # 卸载
 sudo ./deploy/scripts/uninstall-service.sh
 ```
+
+## 单机包（单个二进制加静态目录）
+
+面向开发联调与轻量单机场景：单个 `linkrs-server` 加一个 `web/` 静态目录，
+页面与接口同端口对外，无需反向代理。设计方案见
+`docs/plan/single-host-static-hosting-2026-11-15.md`。
+
+```shell
+# 仅构建前端静态包（API_BASE_URL 烘焙进产物，需与监听地址一致）
+./deploy/scripts/build-frontend.sh
+
+# 组装单机包：dist/linkrs-single/{linkrs-server,web/,config.single.toml,run-single.sh}
+./deploy/scripts/package-single.sh
+
+# 启动单机包（数据落在包内 data/，配置为包内 config.single.toml）
+./dist/linkrs-single/run-single.sh
+# 打开 http://127.0.0.1:9758/，接口健康检查 http://127.0.0.1:9758/v1/health
+```
+
+自定义端口需要同步前端构建地址与包内配置：
+
+```shell
+./deploy/scripts/package-single.sh --port=9768 --api-base-url=http://127.0.0.1:9768
+```
+
+单机包依赖后端静态托管（`[http].static_dir` 分组）：启用后页面与接口同端口对外，
+目录缺失或回退页缺失时服务端拒绝启动。需要反向代理分开部署时，
+仍按原方式单独提供 `frontend/build/` 即可。
 
 ## Windows（原生服务）
 

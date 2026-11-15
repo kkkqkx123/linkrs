@@ -255,6 +255,19 @@ impl ConditionHandler for ProtoConditionHandler {
         }
     }
 
+    fn handle_not(&self, condition: proto::Condition) -> proto::Condition {
+        // Mirrors the JSON translation: a bare filter is itself a valid
+        // Qdrant condition, so negation is a single-clause filter.
+        proto::Condition {
+            condition_one_of: Some(proto::condition::ConditionOneOf::Filter(proto::Filter {
+                should: Vec::new(),
+                must: Vec::new(),
+                must_not: vec![condition],
+                min_should: None,
+            })),
+        }
+    }
+
     fn build_filter(
         &self,
         must: Vec<proto::Condition>,

@@ -1101,12 +1101,21 @@ fn test_drop_multi_name_rejected_explicitly() {
     let mut session = test_db.db.session().expect("create session");
     setup_phase4_graph(&mut session);
 
+    // Multi-name DROP executes item by item and the whole statement fails
+    // loudly on the first error, so nothing is silently dropped.
     let err = session
         .execute("DROP TAG person, company")
         .expect_err("multi-drop must not silently drop one table");
     assert!(
-        err.to_string().contains("multiple names"),
+        err.to_string().contains("still has data"),
         "unexpected error: {err}"
+    );
+    let tags = session.execute("SHOW TAGS").expect("SHOW TAGS succeeds");
+    assert!(
+        tags.rows()
+            .iter()
+            .any(|row| row.get("name") == Some(&Value::string("company"))),
+        "company tag must survive the failed multi-drop"
     );
 }
 
@@ -1313,7 +1322,7 @@ fn test_recursive_comprehension_rejected_explicitly() {
         .execute("MATCH (a:person)-[e*(v, r | WHERE v.age > 20)]->(b:person) RETURN b")
         .expect_err("recursive comprehension must not silently degrade");
     assert!(
-        err.to_string().contains("rejected"),
+        err.to_string().contains("not supported"),
         "unexpected error: {err}"
     );
 }

@@ -201,13 +201,13 @@ async fn test_graph_service_permission_enforcement() {
     let space_id = 1;
 
     graph_service
-        .execute(root_sid, "CREATE TAG Person(name STRING, age INT)")
+        .execute(root_sid, "CREATE TAG Person(id INT, name STRING, age INT)")
         .await
         .expect("Root: CREATE TAG should succeed");
     graph_service
         .execute(
             root_sid,
-            "INSERT VERTEX Person(name, age) VALUES 1:('Alice', 30), 2:('Bob', 25)",
+            "INSERT VERTEX Person(id, name, age) VALUES 1:(1, 'Alice', 30), 2:(2, 'Bob', 25)",
         )
         .await
         .expect("Root: INSERT should succeed");
@@ -251,7 +251,7 @@ async fn test_graph_service_permission_enforcement() {
     let result = graph_service
         .execute(
             user_sid,
-            "INSERT VERTEX Person(name, age) VALUES 3:('Charlie', 35)",
+            "INSERT VERTEX Person(id, name, age) VALUES 3:(3, 'Charlie', 35)",
         )
         .await;
     assert!(

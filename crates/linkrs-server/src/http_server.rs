@@ -62,7 +62,8 @@ pub async fn start_http_server<
         }
     };
 
-    let app = crate::http::router::create_router(state, web_router);
+    let app = crate::http::router::create_router(state, web_router)
+        .map_err(linkrs_core::DBError::validation)?;
 
     let addr = format!("{}:{}", config.http_bind_address(), config.http_port());
     let listener = TcpListener::bind(&addr).await?;
@@ -139,7 +140,8 @@ pub async fn start_http_and_grpc_servers<
         ));
     }
 
-    let http_app = crate::http::router::create_router(http_state.clone(), web_router);
+    let http_app = crate::http::router::create_router(http_state.clone(), web_router)
+        .map_err(linkrs_core::DBError::validation)?;
 
     // Clone state for gRPC server
     let grpc_state = http_state.clone();

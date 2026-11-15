@@ -121,6 +121,7 @@ pub trait ConditionHandler {
     fn handle_values_count(&self, field: &str, count: &ValuesCountCondition) -> Self::Condition;
     fn handle_contains(&self, field: &str, value: &str) -> Self::Condition;
     fn handle_nested(&self, field: &str, filter: Self::Filter) -> Self::Condition;
+    fn handle_not(&self, condition: Self::Condition) -> Self::Condition;
     fn build_filter(
         &self,
         must: Vec<Self::Condition>,
@@ -190,6 +191,14 @@ fn handle_condition<H: ConditionHandler>(c: &FilterCondition, handler: &H) -> Re
         ConditionType::GeoBoundingBox(bbox) => Ok(handler.handle_geo_bounding_box(&c.field, bbox)),
         ConditionType::ValuesCount(count) => Ok(handler.handle_values_count(&c.field, count)),
         ConditionType::Contains { value } => Ok(handler.handle_contains(&c.field, value)),
+        ConditionType::StartsWith { .. } => Err(VectorClientError::FilterError(format!(
+            "Prefix (starts_with) matching on field '{}' is not supported by this vector backend",
+            c.field
+        ))),
+        ConditionType::Not { condition } => {
+            let inner = handle_condition(condition, handler)?;
+            Ok(handler.handle_not(inner))
+        }
     }
 }
 
@@ -383,6 +392,13 @@ mod tests {
             }
         }
 
+        fn handle_not(&self, condition: TestCondition) -> TestCondition {
+            TestCondition {
+                field: condition.field,
+                _cond_type: "not".into(),
+            }
+        }
+
         fn build_filter(
             &self,
             must: Vec<TestCondition>,
@@ -501,6 +517,34 @@ mod tests {
             },
         };
         let filter = VectorFilter::new().must(nested);
+        let result = process_filter(&filter, &TestHandler);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_handle_not_negates_inner_condition() {
+        let not = FilterCondition::new(
+            "color",
+            ConditionType::Not {
+                condition: Box::new(FilterCondition::match_value("color", "red")),
+            },
+        );
+        let filter = VectorFilter::new().must(not);
+        let result = process_filter(&filter, &TestHandler).unwrap().unwrap();
+        assert_eq!(result.must.len(), 1);
+        assert_eq!(result.must[0].field, "color");
+        assert_eq!(result.must[0]._cond_type, "not");
+    }
+
+    #[test]
+    fn test_handle_starts_with_returns_error() {
+        let prefix = FilterCondition::new(
+            "title",
+            ConditionType::StartsWith {
+                prefix: "ru".to_string(),
+            },
+        );
+        let filter = VectorFilter::new().must(prefix);
         let result = process_filter(&filter, &TestHandler);
         assert!(result.is_err());
     }

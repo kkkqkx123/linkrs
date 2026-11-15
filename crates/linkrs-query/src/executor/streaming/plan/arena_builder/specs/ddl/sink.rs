@@ -1,8 +1,6 @@
 use crate::executor::base::ExecutionContext;
 use crate::executor::build_error::PlanBuildError;
-use crate::executor::streaming::operators::spec::{
-    SinkSpec
-};
+use crate::executor::streaming::operators::spec::SinkSpec;
 
 use linkrs_core::types::expr::Expression;
 

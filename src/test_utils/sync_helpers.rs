@@ -14,7 +14,6 @@ use crate::search::{
 };
 use crate::storage::GraphStorage;
 use crate::storage::{StorageCommitOps, StorageReader, StorageSchemaOps, StorageWriter};
-use crate::sync::batch::BatchConfig;
 use crate::sync::manager::SyncManager;
 use crate::sync::{ChangeType, FulltextSyncCoordinator};
 use std::collections::HashMap;
@@ -61,31 +60,17 @@ impl SyncTestHarness {
         let fulltext_manager = Arc::new(FulltextIndexManager::new(config)?);
 
         // Create sync coordinator
-        let batch_config = BatchConfig {
-            batch_size: 100,
-            flush_interval: Duration::from_millis(100),
-            max_buffer_size: 1000,
-            enable_persistence: false,
-            persistence_path: None,
-            failure_policy: crate::search::SyncFailurePolicy::FailOpen,
-        };
-
-        let sync_coordinator = Arc::new(FulltextSyncCoordinator::new(
-            fulltext_manager.clone(),
-            batch_config,
-        ));
+        let sync_coordinator = Arc::new(FulltextSyncCoordinator::new(fulltext_manager.clone()));
 
         // Create sync manager
         let mut sync_manager = SyncManager::new(sync_coordinator.clone());
         sync_manager.configure_outbox(temp_dir.path().join("outbox"))?;
         let sync_manager = Arc::new(sync_manager);
 
-        // Create runtime for async operations
+        // Create runtime for async operations. The test commit helper drives
+        // one durable outbox claim synchronously so the runtime owns no
+        // long-lived worker.
         let rt = tokio::runtime::Runtime::new()?;
-
-        // Start target processors. The test commit helper drives one durable
-        // outbox claim synchronously so the runtime owns no long-lived worker.
-        rt.block_on(sync_coordinator.start_background_tasks());
 
         Ok(Self {
             storage,
@@ -244,29 +229,32 @@ impl SyncTestHarness {
         self.storage.insert_vertex(space_name, vertex.clone())?;
 
         let space_id = self.storage.get_space_id(space_name)?;
-        self.rt.block_on(async {
-            let tag_name = vertex.tag.name.clone();
-            let properties: Vec<(String, Value)> = vertex
-                .tag
-                .properties
-                .iter()
-                .map(|(k, v)| (k.to_string(), v.clone()))
-                .collect();
-            if !properties.is_empty() {
-                self.sync_manager
-                    .sync_coordinator()
-                    .expect("fulltext sync coordinator is configured")
-                    .on_vertex_change(
-                        space_id,
-                        &tag_name,
-                        &Value::from(vertex.vid),
-                        &properties,
-                        ChangeType::Insert,
-                    )
-                    .await?;
-            }
-            Ok::<_, Box<dyn std::error::Error>>(())
-        })?;
+        let tag_name = vertex.tag.name.clone();
+        let properties: Vec<(Arc<str>, Value)> = vertex
+            .tag
+            .properties
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        if !properties.is_empty() {
+            // The sync layer only stages intents inside a transaction; drive
+            // a synthetic one through the commit path so the indexes observe
+            // the write exactly like the transactional helpers.
+            self.begin_transaction()?;
+            let txn_id = self
+                .current_txn_id
+                .map(TransactionId)
+                .ok_or("No active transaction")?;
+            self.sync_manager.on_vertex_change_with_txn(
+                txn_id,
+                space_id,
+                &tag_name,
+                &Value::from(vertex.vid),
+                &properties,
+                ChangeType::Insert,
+            )?;
+            self.commit_transaction()?;
+        }
 
         Ok(())
     }
@@ -411,18 +399,25 @@ impl SyncTestHarness {
         &self,
         space_name: &str,
         tag_name: &str,
-        _field_name: &str,
+        field_name: &str,
         query_vector: Vec<f32>,
         limit: usize,
     ) -> Result<Vec<crate::sync::vector_sync::SearchResult>, Box<dyn std::error::Error>> {
         if let Some(vector_coord) = self.sync_manager.vector_coordinator() {
-            let _space_id = self.storage.get_space_id(space_name)?;
+            let space_id = self.storage.get_space_id(space_name)?;
             let rt = tokio::runtime::Runtime::new()?;
             let results = rt.block_on(async {
-                // Create search query
+                // Reads resolve the collection through the index manager so
+                // granularity and publish remaps match the write path.
+                let location = crate::sync::vector_sync::VectorIndexLocation::new(
+                    space_id, tag_name, field_name,
+                );
+                let collection = vector_coord.index_manager().collection_name_for(&location);
                 let query = crate::sync::vector_sync::SearchQuery::new(query_vector, limit);
-
-                vector_coord.search(tag_name, query).await
+                vector_coord
+                    .index_manager()
+                    .search(&collection, query)
+                    .await
             })?;
             Ok(results)
         } else {

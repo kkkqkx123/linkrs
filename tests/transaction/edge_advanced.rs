@@ -20,7 +20,7 @@ fn test_multiple_edge_types_same_vertices() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG IF NOT EXISTS Person(name STRING)")
+        .exec_ddl("CREATE TAG IF NOT EXISTS Person(id INT, name STRING)")
         .assert_success()
         .exec_ddl("CREATE EDGE IF NOT EXISTS KNOWS(since INT)")
         .assert_success()
@@ -28,7 +28,7 @@ fn test_multiple_edge_types_same_vertices() {
         .assert_success()
         .exec_ddl("CREATE EDGE IF NOT EXISTS FRIENDS_WITH")
         .assert_success()
-        .exec_dml("INSERT VERTEX Person(name) VALUES 1:('Alice'), 2:('Bob')")
+        .exec_dml("INSERT VERTEX Person(id, name) VALUES 1:(1, 'Alice'), 2:(2, 'Bob')")
         .assert_success()
         // Create multiple edge types between same vertices
         .exec_dml("INSERT EDGE KNOWS(since) VALUES 1->2:(2019)")
@@ -51,11 +51,11 @@ fn test_multiple_same_type_edges() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG IF NOT EXISTS Person(name STRING)")
+        .exec_ddl("CREATE TAG IF NOT EXISTS Person(id INT, name STRING)")
         .assert_success()
         .exec_ddl("CREATE EDGE IF NOT EXISTS MESSAGED(content STRING, ts INT)")
         .assert_success()
-        .exec_dml("INSERT VERTEX Person(name) VALUES 1:('Alice'), 2:('Bob')")
+        .exec_dml("INSERT VERTEX Person(id, name) VALUES 1:(1, 'Alice'), 2:(2, 'Bob')")
         .assert_success()
         // Edges between distinct vertex pairs of the same type coexist.
         .exec_dml(
@@ -80,7 +80,7 @@ fn test_edge_complex_properties() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG IF NOT EXISTS Person(name STRING)")
+        .exec_ddl("CREATE TAG IF NOT EXISTS Person(id INT, name STRING)")
         .assert_success()
         .exec_ddl(
             "CREATE EDGE IF NOT EXISTS RELATIONSHIP( \
@@ -90,7 +90,7 @@ fn test_edge_complex_properties() {
             strength FLOAT)",
         )
         .assert_success()
-        .exec_dml("INSERT VERTEX Person(name) VALUES 1:('Alice'), 2:('Bob')")
+        .exec_dml("INSERT VERTEX Person(id, name) VALUES 1:(1, 'Alice'), 2:(2, 'Bob')")
         .assert_success()
         .exec_dml(
             "INSERT EDGE RELATIONSHIP(type, since, active, strength) \
@@ -106,11 +106,11 @@ fn test_self_referencing_edge_with_props() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG IF NOT EXISTS Person(name STRING)")
+        .exec_ddl("CREATE TAG IF NOT EXISTS Person(id INT, name STRING)")
         .assert_success()
         .exec_ddl("CREATE EDGE IF NOT EXISTS KNOWS_SELF(confidence FLOAT)")
         .assert_success()
-        .exec_dml("INSERT VERTEX Person(name) VALUES 1:('Alice')")
+        .exec_dml("INSERT VERTEX Person(id, name) VALUES 1:(1, 'Alice')")
         .assert_success()
         .exec_dml("INSERT EDGE KNOWS_SELF(confidence) VALUES 1->1:(1.0)")
         .assert_success()
@@ -123,17 +123,14 @@ fn test_edge_direction_in_queries() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG IF NOT EXISTS Person(name STRING)")
+        .exec_ddl("CREATE TAG IF NOT EXISTS Person(id INT, name STRING)")
         .assert_success()
         .exec_ddl("CREATE EDGE IF NOT EXISTS FOLLOWS")
         .assert_success()
         .exec_ddl("CREATE EDGE IF NOT EXISTS BLOCKS")
         .assert_success()
         .exec_dml(
-            "INSERT VERTEX Person(name) VALUES \
-            1:('Alice'), \
-            2:('Bob'), \
-            3:('Charlie')",
+            "INSERT VERTEX Person(id, name) VALUES 1:(1, 'Alice'),  2:(2, 'Bob'),  3:(3, 'Charlie')",
         )
         .assert_success()
         // Alice follows Bob, Bob follows Charlie
@@ -156,17 +153,14 @@ fn test_edge_deletion_cascade() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG IF NOT EXISTS Person(name STRING)")
+        .exec_ddl("CREATE TAG IF NOT EXISTS Person(id INT, name STRING)")
         .assert_success()
         .exec_ddl("CREATE EDGE IF NOT EXISTS KNOWS")
         .assert_success()
         .exec_ddl("CREATE EDGE IF NOT EXISTS WORKS_WITH")
         .assert_success()
         .exec_dml(
-            "INSERT VERTEX Person(name) VALUES \
-            1:('Alice'), \
-            2:('Bob'), \
-            3:('Charlie')",
+            "INSERT VERTEX Person(id, name) VALUES 1:(1, 'Alice'),  2:(2, 'Bob'),  3:(3, 'Charlie')",
         )
         .assert_success()
         // Create edges of different types
@@ -192,14 +186,13 @@ fn test_edge_batch_insert() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG IF NOT EXISTS Person(name STRING)")
+        .exec_ddl("CREATE TAG IF NOT EXISTS Person(id INT, name STRING)")
         .assert_success()
         .exec_ddl("CREATE EDGE IF NOT EXISTS CONNECTS(weight INT)")
         .assert_success()
         // Create a small network of people
         .exec_dml(
-            "INSERT VERTEX Person(name) VALUES \
-            1:('A'), 2:('B'), 3:('C'), 4:('D'), 5:('E')",
+            "INSERT VERTEX Person(id, name) VALUES 1:(1, 'A'), 2:(2, 'B'), 3:(3, 'C'), 4:(4, 'D'), 5:(5, 'E')",
         )
         .assert_success()
         // Batch insert edges to form a complete graph
@@ -221,11 +214,11 @@ fn test_edge_optional_properties() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG IF NOT EXISTS Person(name STRING)")
+        .exec_ddl("CREATE TAG IF NOT EXISTS Person(id INT, name STRING)")
         .assert_success()
         .exec_ddl("CREATE EDGE IF NOT EXISTS RELATES(description STRING)")
         .assert_success()
-        .exec_dml("INSERT VERTEX Person(name) VALUES 1:('Alice'), 2:('Bob')")
+        .exec_dml("INSERT VERTEX Person(id, name) VALUES 1:(1, 'Alice'), 2:(2, 'Bob')")
         .assert_success()
         // Edge with property
         .exec_dml("INSERT EDGE RELATES(description) VALUES 1->2:('friend')")
@@ -243,15 +236,12 @@ fn test_edge_existence_after_vertex_ops() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG IF NOT EXISTS Person(name STRING)")
+        .exec_ddl("CREATE TAG IF NOT EXISTS Person(id INT, name STRING)")
         .assert_success()
         .exec_ddl("CREATE EDGE IF NOT EXISTS KNOWS")
         .assert_success()
         .exec_dml(
-            "INSERT VERTEX Person(name) VALUES \
-            1:('Alice'), \
-            2:('Bob'), \
-            3:('Charlie')",
+            "INSERT VERTEX Person(id, name) VALUES 1:(1, 'Alice'),  2:(2, 'Bob'),  3:(3, 'Charlie')",
         )
         .assert_success()
         .exec_dml("INSERT EDGE KNOWS VALUES 1->2, 2->3, 3->1")
@@ -274,16 +264,12 @@ fn test_edge_query_by_vertices() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG IF NOT EXISTS Person(name STRING)")
+        .exec_ddl("CREATE TAG IF NOT EXISTS Person(id INT, name STRING)")
         .assert_success()
         .exec_ddl("CREATE EDGE IF NOT EXISTS RATED(score INT)")
         .assert_success()
         .exec_dml(
-            "INSERT VERTEX Person(name) VALUES \
-            1:('User1'), \
-            2:('Item1'), \
-            3:('Item2'), \
-            4:('Item3')",
+            "INSERT VERTEX Person(id, name) VALUES 1:(1, 'User1'),  2:(2, 'Item1'),  3:(3, 'Item2'),  4:(4, 'Item3')",
         )
         .assert_success()
         // Create rating edges with different scores
@@ -309,9 +295,9 @@ fn test_edge_type_alteration() {
         // Create edge without properties
         .exec_ddl("CREATE EDGE IF NOT EXISTS CONNECTS")
         .assert_success()
-        .exec_ddl("CREATE TAG IF NOT EXISTS Person(name STRING)")
+        .exec_ddl("CREATE TAG IF NOT EXISTS Person(id INT, name STRING)")
         .assert_success()
-        .exec_dml("INSERT VERTEX Person(name) VALUES 1:('Alice'), 2:('Bob')")
+        .exec_dml("INSERT VERTEX Person(id, name) VALUES 1:(1, 'Alice'), 2:(2, 'Bob')")
         .assert_success()
         .exec_dml("INSERT EDGE CONNECTS VALUES 1->2")
         .assert_success()
@@ -319,7 +305,7 @@ fn test_edge_type_alteration() {
         .exec_ddl("ALTER EDGE CONNECTS ADD (weight INT)")
         .assert_success()
         // Add new edge with property
-        .exec_dml("INSERT VERTEX Person(name) VALUES 3:('Charlie')")
+        .exec_dml("INSERT VERTEX Person(id, name) VALUES 3:(3, 'Charlie')")
         .assert_success()
         .exec_dml("INSERT EDGE CONNECTS(weight) VALUES 2->3:(10)")
         .assert_success()
@@ -334,15 +320,12 @@ fn test_bidirectional_edge_pattern() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG IF NOT EXISTS Person(name STRING)")
+        .exec_ddl("CREATE TAG IF NOT EXISTS Person(id INT, name STRING)")
         .assert_success()
         .exec_ddl("CREATE EDGE IF NOT EXISTS FRIENDS_WITH(since INT)")
         .assert_success()
         .exec_dml(
-            "INSERT VERTEX Person(name) VALUES \
-            1:('Alice'), \
-            2:('Bob'), \
-            3:('Charlie')",
+            "INSERT VERTEX Person(id, name) VALUES 1:(1, 'Alice'),  2:(2, 'Bob'),  3:(3, 'Charlie')",
         )
         .assert_success()
         // Create bidirectional friendships
@@ -367,7 +350,7 @@ fn test_edge_in_traversal_patterns() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG IF NOT EXISTS Person(name STRING)")
+        .exec_ddl("CREATE TAG IF NOT EXISTS Person(id INT, name STRING)")
         .assert_success()
         .exec_ddl("CREATE EDGE IF NOT EXISTS KNOWS")
         .assert_success()
@@ -375,17 +358,13 @@ fn test_edge_in_traversal_patterns() {
         .assert_success()
         // Create people
         .exec_dml(
-            "INSERT VERTEX Person(name) VALUES \
-            1:('Alice'), \
-            2:('Bob'), \
-            3:('Charlie'), \
-            4:('David')",
+            "INSERT VERTEX Person(id, name) VALUES 1:(1, 'Alice'),  2:(2, 'Bob'),  3:(3, 'Charlie'),  4:(4, 'David')",
         )
         .assert_success()
         // Create company
-        .exec_ddl("CREATE TAG IF NOT EXISTS Company(name STRING)")
+        .exec_ddl("CREATE TAG IF NOT EXISTS Company(id INT, name STRING)")
         .assert_success()
-        .exec_dml("INSERT VERTEX Company(name) VALUES 100:('TechCorp')")
+        .exec_dml("INSERT VERTEX Company(id, name) VALUES 100:(100, 'TechCorp')")
         .assert_success()
         // Create relationships
         .exec_dml(
@@ -417,11 +396,11 @@ fn test_edge_delete_and_reinsert() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG IF NOT EXISTS Person(name STRING)")
+        .exec_ddl("CREATE TAG IF NOT EXISTS Person(id INT, name STRING)")
         .assert_success()
         .exec_ddl("CREATE EDGE IF NOT EXISTS KNOWS(since INT)")
         .assert_success()
-        .exec_dml("INSERT VERTEX Person(name) VALUES 1:('Alice'), 2:('Bob')")
+        .exec_dml("INSERT VERTEX Person(id, name) VALUES 1:(1, 'Alice'), 2:(2, 'Bob')")
         .assert_success()
         // Insert edge
         .exec_dml("INSERT EDGE KNOWS(since) VALUES 1->2:(2020)")
@@ -443,11 +422,11 @@ fn test_edge_timestamp_properties() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG IF NOT EXISTS Person(name STRING)")
+        .exec_ddl("CREATE TAG IF NOT EXISTS Person(id INT, name STRING)")
         .assert_success()
         .exec_ddl("CREATE EDGE IF NOT EXISTS MESSAGED(content STRING, sent_at INT)")
         .assert_success()
-        .exec_dml("INSERT VERTEX Person(name) VALUES 1:('Alice'), 2:('Bob')")
+        .exec_dml("INSERT VERTEX Person(id, name) VALUES 1:(1, 'Alice'), 2:(2, 'Bob')")
         .assert_success()
         // Insert edge with timestamp as INT
         .exec_dml(

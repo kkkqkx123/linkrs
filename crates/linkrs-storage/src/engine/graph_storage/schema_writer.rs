@@ -84,7 +84,16 @@ fn append_schema_redo<T: serde::Serialize>(
             } else {
                 Ok(())
             };
-            match durability.and_then(|()| ctx.commit_write_timestamp_ordered(timestamp)) {
+            // Visibility follows the same split: an explicit transaction
+            // publishes at its own commit point. Settling the timestamp
+            // inline here would retire the transaction's still-pending start
+            // slot and break the later commit.
+            let publish = if entry.transaction_id.is_some() {
+                Ok(timestamp)
+            } else {
+                ctx.commit_write_timestamp_ordered(timestamp)
+            };
+            match durability.and_then(|()| publish) {
                 Ok(_) => Ok(entry),
                 Err(error) => {
                     ctx.abort_write_timestamp(timestamp);

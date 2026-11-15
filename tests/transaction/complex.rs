@@ -20,20 +20,17 @@ fn test_transaction_complex_operations() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG IF NOT EXISTS Person(name STRING, age INT)")
+        .exec_ddl("CREATE TAG IF NOT EXISTS Person(id INT, name STRING, age INT)")
         .assert_success()
-        .exec_ddl("CREATE TAG IF NOT EXISTS Company(name STRING)")
+        .exec_ddl("CREATE TAG IF NOT EXISTS Company(id INT, name STRING)")
         .assert_success()
         .exec_ddl("CREATE EDGE IF NOT EXISTS WORKS_AT")
         .assert_success()
         .exec_dml(
-            "INSERT VERTEX Person(name, age) VALUES \
-            1:('Alice', 30), \
-            2:('Bob', 25), \
-            3:('Charlie', 35)",
+            "INSERT VERTEX Person(id, name, age) VALUES 1:(1, 'Alice', 30),  2:(2, 'Bob', 25),  3:(3, 'Charlie', 35)",
         )
         .assert_success()
-        .exec_dml("INSERT VERTEX Company(name) VALUES 100:('TechCorp')")
+        .exec_dml("INSERT VERTEX Company(id, name) VALUES 100:(100, 'TechCorp')")
         .assert_success()
         .exec_dml(
             "INSERT EDGE WORKS_AT VALUES \
@@ -52,13 +49,10 @@ fn test_transaction_conditional_operations() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG IF NOT EXISTS Person(name STRING, age INT)")
+        .exec_ddl("CREATE TAG IF NOT EXISTS Person(id INT, name STRING, age INT)")
         .assert_success()
         .exec_dml(
-            "INSERT VERTEX Person(name, age) VALUES \
-            1:('Alice', 30), \
-            2:('Bob', 25), \
-            3:('Charlie', 35)",
+            "INSERT VERTEX Person(id, name, age) VALUES 1:(1, 'Alice', 30),  2:(2, 'Bob', 25),  3:(3, 'Charlie', 35)",
         )
         .assert_success()
         .query("MATCH (v:Person) WHERE v.age > 28 RETURN v.name")
@@ -71,9 +65,9 @@ fn test_transaction_tag_modification() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG IF NOT EXISTS Person(name STRING, age INT)")
+        .exec_ddl("CREATE TAG IF NOT EXISTS Person(id INT, name STRING, age INT)")
         .assert_success()
-        .exec_dml("INSERT VERTEX Person(name, age) VALUES 1:('Alice', 30)")
+        .exec_dml("INSERT VERTEX Person(id, name, age) VALUES 1:(1, 'Alice', 30)")
         .assert_success()
         .assert_vertex_props(
             1,
@@ -88,11 +82,11 @@ fn test_transaction_cascading_operations() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG IF NOT EXISTS Person(name STRING)")
+        .exec_ddl("CREATE TAG IF NOT EXISTS Person(id INT, name STRING)")
         .assert_success()
         .exec_ddl("CREATE EDGE IF NOT EXISTS KNOWS")
         .assert_success()
-        .exec_dml("INSERT VERTEX Person(name) VALUES 1:('Alice'), 2:('Bob'), 3:('Charlie')")
+        .exec_dml("INSERT VERTEX Person(id, name) VALUES 1:(1, 'Alice'), 2:(2, 'Bob'), 3:(3, 'Charlie')")
         .assert_success()
         .exec_dml("INSERT EDGE KNOWS VALUES 1->2")
         .assert_success()
@@ -110,12 +104,12 @@ fn test_transaction_statistics_consistency() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG IF NOT EXISTS Person(name STRING)")
+        .exec_ddl("CREATE TAG IF NOT EXISTS Person(id INT, name STRING)")
         .assert_success()
-        .exec_dml("INSERT VERTEX Person(name) VALUES 1:('Alice'), 2:('Bob'), 3:('Charlie')")
+        .exec_dml("INSERT VERTEX Person(id, name) VALUES 1:(1, 'Alice'), 2:(2, 'Bob'), 3:(3, 'Charlie')")
         .assert_success()
         .assert_vertex_count("Person", 3)
-        .exec_dml("INSERT VERTEX Person(name) VALUES 4:('David')")
+        .exec_dml("INSERT VERTEX Person(id, name) VALUES 4:(4, 'David')")
         .assert_success()
         .assert_vertex_count("Person", 4);
 }
@@ -126,14 +120,14 @@ fn test_transaction_multiple_schema_changes() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG IF NOT EXISTS Person(name STRING)")
+        .exec_ddl("CREATE TAG IF NOT EXISTS Person(id INT, name STRING)")
         .assert_success()
         .exec_ddl("ALTER TAG Person ADD (age INT)")
         .assert_success()
         .exec_ddl("ALTER TAG Person ADD (email STRING)")
         .assert_success()
         .exec_dml(
-            "INSERT VERTEX Person(name, age, email) VALUES 1:('Alice', 30, 'alice@example.com')",
+            "INSERT VERTEX Person(id, name, age, email) VALUES 1:(1, 'Alice', 30, 'alice@example.com')",
         )
         .assert_success()
         .assert_vertex_props(
@@ -153,16 +147,12 @@ fn test_transaction_nested_operations() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG IF NOT EXISTS Category(name STRING)")
+        .exec_ddl("CREATE TAG IF NOT EXISTS Category(id INT, name STRING)")
         .assert_success()
         .exec_ddl("CREATE EDGE IF NOT EXISTS SUBCATEGORY_OF")
         .assert_success()
         .exec_dml(
-            "INSERT VERTEX Category(name) VALUES \
-            1:('Electronics'), \
-            2:('Computers'), \
-            3:('Laptops'), \
-            4:('Desktops')",
+            "INSERT VERTEX Category(id, name) VALUES 1:(1, 'Electronics'),  2:(2, 'Computers'),  3:(3, 'Laptops'),  4:(4, 'Desktops')",
         )
         .assert_success()
         .exec_dml(
@@ -182,13 +172,10 @@ fn test_transaction_aggregation() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG IF NOT EXISTS Product(name STRING, price INT, quantity INT)")
+        .exec_ddl("CREATE TAG IF NOT EXISTS Product(id INT, name STRING, price INT, quantity INT)")
         .assert_success()
         .exec_dml(
-            "INSERT VERTEX Product(name, price, quantity) VALUES \
-            1:('ProductA', 100, 10), \
-            2:('ProductB', 200, 5), \
-            3:('ProductC', 150, 8)",
+            "INSERT VERTEX Product(id, name, price, quantity) VALUES 1:(1, 'ProductA', 100, 10),  2:(2, 'ProductB', 200, 5),  3:(3, 'ProductC', 150, 8)",
         )
         .assert_success()
         .query("MATCH (p:Product) RETURN p.price")
