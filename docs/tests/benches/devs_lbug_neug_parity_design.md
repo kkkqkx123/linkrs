@@ -209,4 +209,4 @@ neug runner 落点为 `graphdb-ben` 新脚本（与 `lbug-ben` 并列，不混�
   linkrs `q*.benchmark` 单一来源，`Comment_`→`Comment` 标签回写
 - [x] LSQB-sf0.1 三方 COUNT 对齐，出首份对比 markdown
   → `docs/archive/perf/parity/2026-11-12-lsqb-sf0.1.md`，九条 COUNT 三方整数一致；
-  结果 JSON 归档 `docs/archive/perf/parity/results/2026-11-12/`
+  结果 JSON 归档 `perf-data/parity/results/2026-11-12/`（本地，不检入）

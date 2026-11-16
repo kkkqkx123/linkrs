@@ -142,7 +142,7 @@ MATCH (n:Person) RETURN count(n.id)
    `/data/kkkqkx/graphdb-ben/data/social-network-sf0.1-projected-fk`）：q1–q9 全部为 `MATCH … RETURN count(*)`，正确性就是一个整数。**第一步只证 COPY + MATCH 闭环，不谈快慢。**
    ✅ 已通过（devs，2026-11-11）：COPY 1,027,372 行与源 CSV 逐表一致；q1–q9 计数全部对齐，
    warmup=1、run=3 中位 1.0–1300 ms；结果与 COPY 日志归档在
-   `docs/archive/perf/parity/lsqb-sf0.1-smoke/`。
+   `perf-data/parity/lsqb-sf0.1-smoke/`（本地，不检入）。
 2. `lsqb-sf1`（本地已有 projected-fk）放大验证。
 3. LDBC sf10/sf100 算子组（54 queries，需下载数据）。
 4. ClickBench（105 列宽表，INT128 探针，quoted-newline 预处理）、算法图（PageRank/WCC/加权最短路，k-core/SCC/Louvain skip）。
@@ -159,7 +159,7 @@ MATCH (n:Person) RETURN count(n.id)
 - skip 查询列在表底，不进几何平均。
 - 文首固定环境块：CPU、affinity、内存、磁盘、双方 commit、线程。
 - COPY 单独一张表：每表秒数 + 库体积。
-- 结果检入 `docs/archive/perf/parity/`，不接 Ladybug 的 JWT 上报服务。
+- 对比报告（markdown）检入 `docs/archive/perf/parity/`；原始结果 JSON 存仓库根 `perf-data/`（gitignore，不检入），不接 Ladybug 的 JWT 上报服务。
 
 ## 9. 风险
 

@@ -157,4 +157,4 @@ cargo build --release -p linkrs-api --features embedded --example explain_probe
 - `crates/linkrs-query/src/executor/streaming/operators/source_operator/storage_scan.rs`（topology-only 快路径）
 - `crates/linkrs-query/src/optimizer/heuristic/scan_edge_identity.rs`（ScanEdges 注解规则，当前计划形态不触发）
 - `crates/linkrs-api/examples/explain_probe.rs`（取证工具）
-- 三方基线数据：`docs/archive/perf/parity/results/2026-11-12/`
+- 三方基线数据：`perf-data/parity/results/2026-11-12/`（本地，不检入）

@@ -21,3 +21,5 @@ benches/results/
 docs/archive/perf/raw-*/
 # Grammar highlight fixture outputs
 crates/linkrs-grammar/outputs/
+# Raw performance test data (parity/benchmark outputs; reports stay in docs)
+perf-data/
