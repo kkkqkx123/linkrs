@@ -42,7 +42,8 @@ impl ArenaPlanAssembler {
         let op_id = op_alloc.allocate();
         let fid = frag_alloc.allocate();
         let output_layout = super::super::metadata::source_output_layout(&spec);
-        let estimated_cardinality = super::super::metadata::estimate_source_cardinality(&spec);
+        let estimated_cardinality =
+            super::super::metadata::estimate_source_cardinality(&spec, None);
         let explain_name = super::super::metadata::source_explain_name(&spec);
         operators.push(PhysicalOperatorSpec {
             operator_id: op_id,

@@ -273,6 +273,16 @@ pub trait StorageReader: Send + Sync + std::fmt::Debug {
     fn scan_all_edges(&self, space: &str) -> Result<Vec<Edge>, StorageError>;
     fn count_vertices_by_tag(&self, space: &str, tag: &str) -> Result<u64, StorageError>;
     fn count_edges_by_type(&self, space: &str, edge_type: &str) -> Result<u64, StorageError>;
+    /// Physical edge total for one edge type, summed over the stored legs.
+    ///
+    /// Sizing only (cardinality estimates, partition width): it ignores
+    /// visibility, so snapshot reads must keep using `count_edges_by_type`
+    /// or `count_visible_edges`. The default body falls back to the visible
+    /// counter so adapters and test doubles inherit correct behavior
+    /// unchanged, at the cost of a full-leg walk.
+    fn approximate_edge_count(&self, space: &str, edge_type: &str) -> Result<u64, StorageError> {
+        self.count_edges_by_type(space, edge_type)
+    }
     /// Snapshot-exact visible-vertex count for pure `COUNT` queries: equals
     /// a full tag scan under the same read timestamp. `None` sums every
     /// tag of the space; missing tags contribute zero.

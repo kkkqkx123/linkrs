@@ -106,6 +106,14 @@ pub(super) fn handle(
                             .fetch_add(chunk.logical_len(), Ordering::Relaxed);
                     }
                 }
+                // A constant-true predicate selects every visible row
+                // without evaluation: the literal references no columns
+                // and carries no subquery expressions, so no per-row work
+                // and no side effects are skipped. Chunks pass through
+                // untouched, keeping any existing selection vector.
+                if matches!(predicate, Expression::Literal(Value::Bool(true))) {
+                    return Ok(Some(chunk));
+                }
                 let results =
                     UnaryOperator::evaluate_filter_predicate(&mut chunk, predicate, state)?;
                 // Build a selection vector restricted to the

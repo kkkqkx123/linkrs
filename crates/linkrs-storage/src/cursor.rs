@@ -184,6 +184,13 @@ pub struct ScanOptions {
     /// `edge_src_id_range`, which stays a row-level external-id filter.
     /// `None` (default) walks the whole source space.
     pub edge_src_slice: Option<ShardSlice>,
+    /// Maintenance scans observe expired rows: when set, the cursor skips
+    /// every TTL expiry filter and yields physically present rows
+    /// regardless of their TTL column. Query scans keep the default
+    /// (`false`), where expired rows are absent. Only `PURGE EXPIRED` and
+    /// repair tooling set this; miscounting expired rows as live would
+    /// silently corrupt query results.
+    pub include_expired: bool,
 }
 
 /// One slice of every shard's local-id space, selected by partition index.

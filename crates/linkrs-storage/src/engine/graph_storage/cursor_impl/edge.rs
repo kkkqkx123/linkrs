@@ -203,7 +203,7 @@ impl GraphEdgeCursor {
             .read_timestamp
             .unwrap_or_else(|| ctx.get_read_timestamp());
         let allowlist = options.edge_table_allowlist.as_deref();
-        let targets = if let Some(ref et) = options.edge_type {
+        let mut targets = if let Some(ref et) = options.edge_type {
             vec![build_target(&ctx, space, et, allowlist)?]
         } else {
             let edge_types = ctx.schema_manager().list_edge_types(space)?;
@@ -212,6 +212,15 @@ impl GraphEdgeCursor {
                 .map(|et| build_target(&ctx, space, &et.edge_type_name, allowlist))
                 .collect::<StorageResult<Vec<_>>>()?
         };
+        // Maintenance scans observe expired rows: clearing the per-target
+        // TTL config disables every expiry filter below (decode, drop and
+        // helper-column fetch), so the cursor yields physically present
+        // rows. Query scans keep TTL filtering.
+        if options.include_expired {
+            for target in &mut targets {
+                target.ttl = None;
+            }
+        }
 
         let predicate = options.predicate.clone().unwrap_or_default();
         let mut predicate_columns: Vec<Arc<str>> = Vec::new();

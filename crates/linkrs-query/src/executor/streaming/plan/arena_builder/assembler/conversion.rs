@@ -61,7 +61,7 @@ impl ArenaPlanAssembler {
                     output_layout,
                     properties: PhysicalProperties::single_streaming(),
                     state_ownership: StateOwnership::TreeLocal,
-                    estimated_cardinality: estimate_source_cardinality(&spec),
+                    estimated_cardinality: estimate_source_cardinality(&spec, Some(exec_ctx)),
                     choice_reason: None,
                     has_folded_expressions: false,
                     explain_name: source_explain_name(&spec),

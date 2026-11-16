@@ -14,6 +14,7 @@ use super::super::types::{
     OutputContract, PartitionInput, PartitionSide, PhysicalOperatorId, PhysicalOperatorSpec,
     StateOwnership,
 };
+use crate::executor::base::ExecutionContext;
 use crate::executor::build_error::PlanBuildError;
 
 pub(super) fn output_contract(
@@ -281,8 +282,16 @@ pub(super) fn populate_estimated_rows(
                 continue;
             };
             if operator.estimated_cardinality.is_none() {
-                operator.estimated_cardinality =
-                    Some(previous_rows * fallback_selectivity_factor(&operator.spec));
+                operator.estimated_cardinality = Some(match &operator.spec {
+                    // A global aggregation emits exactly one row by
+                    // construction: the single group row, or the default
+                    // aggregate row on empty input. Never scale by input.
+                    OperatorKindSpec::Blocking(BlockingSpec::Aggregate {
+                        group_by_expressions,
+                        ..
+                    }) if group_by_expressions.is_empty() => 1.0,
+                    _ => previous_rows * fallback_selectivity_factor(&operator.spec),
+                });
             }
             previous_rows = operator.estimated_cardinality.unwrap_or(previous_rows);
         }
@@ -426,14 +435,52 @@ pub(super) fn input_layout(inputs: &[SlotLayout]) -> SlotLayout {
         .unwrap_or_else(|| SlotLayout::new(Vec::new()))
 }
 
-pub(super) fn estimate_source_cardinality(spec: &SourceSpec) -> Option<f64> {
+pub(super) fn estimate_source_cardinality(
+    spec: &SourceSpec,
+    exec_ctx: Option<&ExecutionContext>,
+) -> Option<f64> {
     match spec {
         SourceSpec::ScanVertices { rows, .. } | SourceSpec::ScanEdges { rows, .. } => {
             Some(rows.len() as f64)
         }
         SourceSpec::StandaloneValues { values, .. } => Some(values.len() as f64),
-        SourceSpec::StorageScanVertices { limit, .. }
-        | SourceSpec::StorageScanEdges { limit, .. } => limit.map(|value| value as f64),
+        SourceSpec::StorageScanVertices {
+            limit,
+            tag,
+            predicate,
+            partition_range,
+            shard_slice,
+            space_name,
+            ..
+        } => {
+            // Partitioned copies enumerate only their slice, and pushed
+            // predicates filter rows storage counts cannot see: both keep
+            // the old limit-or-nothing heuristic instead of overstating.
+            let full = if predicate.is_empty()
+                && partition_range.is_none()
+                && shard_slice.is_none()
+            {
+                exec_ctx.and_then(|ctx| storage_vertex_estimate(ctx, space_name, tag.as_deref()))
+            } else {
+                None
+            };
+            cap_scan_estimate(full, *limit)
+        }
+        SourceSpec::StorageScanEdges {
+            limit,
+            edge_type,
+            predicate,
+            shard_slice,
+            space_name,
+            ..
+        } => {
+            let full = if predicate.is_empty() && shard_slice.is_none() {
+                exec_ctx.and_then(|ctx| storage_edge_estimate(ctx, space_name, edge_type.as_deref()))
+            } else {
+                None
+            };
+            cap_scan_estimate(full, *limit)
+        }
         SourceSpec::GetVertices { vertex_ids, .. } => {
             vertex_ids.as_ref().map(|ids| ids.len() as f64)
         }
@@ -446,6 +493,69 @@ pub(super) fn estimate_source_cardinality(spec: &SourceSpec) -> Option<f64> {
         | SourceSpec::GetNeighbors { .. }
         | SourceSpec::IndexScan { .. }
         | SourceSpec::GetProp { .. } => None,
+    }
+}
+
+/// Cap a full-table storage estimate by the scan limit. `None` storage
+/// results keep the previous limit-or-nothing behavior unchanged.
+fn cap_scan_estimate(full: Option<f64>, limit: Option<usize>) -> Option<f64> {
+    match (full, limit) {
+        (Some(n), Some(upper)) => Some(n.min(upper as f64)),
+        (Some(n), None) => Some(n),
+        (None, Some(upper)) => Some(upper as f64),
+        (None, None) => None,
+    }
+}
+
+/// Best-effort snapshot row estimate for an unfiltered whole-table vertex
+/// scan. Uses the cheap hole-statistics counter, never a row walk; any
+/// failure (no storage handle, unknown tag) returns `None` so callers keep
+/// the old heuristic. Sizing only, never a correctness input.
+fn storage_vertex_estimate(
+    exec_ctx: &ExecutionContext,
+    space: &str,
+    tag: Option<&str>,
+) -> Option<f64> {
+    let storage = exec_ctx.storage.as_ref()?;
+    let reader = storage.read();
+    if let Some(tag) = tag {
+        reader.count_vertices_by_tag(space, tag).ok().map(|n| n as f64)
+    } else {
+        let tags = reader.list_tags(space).ok()?;
+        let mut total = 0f64;
+        for info in &tags {
+            total += reader.count_vertices_by_tag(space, &info.tag_name).ok()? as f64;
+        }
+        Some(total)
+    }
+}
+
+/// Best-effort physical edge total for an unfiltered whole-type edge scan.
+/// Uses the timestamp-blind physical counter, never a visibility walk; any
+/// failure returns `None` so callers keep the old heuristic. Sizing only:
+/// tables with uncommitted writes or tombstones may overstate the visible
+/// rows, which is conservative for buffer and partition sizing.
+fn storage_edge_estimate(
+    exec_ctx: &ExecutionContext,
+    space: &str,
+    edge_type: Option<&str>,
+) -> Option<f64> {
+    let storage = exec_ctx.storage.as_ref()?;
+    let reader = storage.read();
+    if let Some(edge_type) = edge_type {
+        reader
+            .approximate_edge_count(space, edge_type)
+            .ok()
+            .map(|n| n as f64)
+    } else {
+        let types = reader.list_edge_types(space).ok()?;
+        let mut total = 0f64;
+        for info in &types {
+            total += reader
+                .approximate_edge_count(space, &info.edge_type_name)
+                .ok()? as f64;
+        }
+        Some(total)
     }
 }
 
@@ -1071,5 +1181,77 @@ mod tests {
         let spec = expand_all_spec(&["a", "r", "b"], Some(vec![]), Some(vec![]));
         let layout = infer_output_layout(&spec, &[input]);
         assert_eq!(layout.names(), vec!["a", "r", "b"]);
+    }
+
+    fn storage_scan_vertices_spec(limit: Option<usize>) -> SourceSpec {
+        SourceSpec::StorageScanVertices {
+            space_name: "space".to_string(),
+            limit,
+            col_names: vec!["v".to_string()],
+            projected_properties: Vec::new(),
+            identity_only: true,
+            skip_rows: false,
+            predicate: Vec::new(),
+            tag: Some("person".to_string()),
+            partition_range: None,
+            shard_slice: None,
+        }
+    }
+
+    #[test]
+    fn storage_scan_estimate_without_storage_keeps_limit_heuristic() {
+        // No execution context (hand-built plans, tests without storage):
+        // the previous limit-or-nothing behavior is unchanged.
+        assert_eq!(
+            estimate_source_cardinality(&storage_scan_vertices_spec(Some(10)), None),
+            Some(10.0)
+        );
+        assert_eq!(
+            estimate_source_cardinality(&storage_scan_vertices_spec(None), None),
+            None
+        );
+    }
+
+    #[test]
+    fn global_aggregate_estimates_single_row() {
+        use crate::executor::base::ExecutionContext;
+        use crate::executor::streaming::plan::arena_builder::PhysicalPlanBuilder;
+        use crate::executor::streaming::plan::context::PhysicalPlanBuildContext;
+        use crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
+        use crate::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode;
+        use crate::planning::plan::core::nodes::ScanVerticesNode;
+        use linkrs_core::types::expr::expression_context::ExpressionAnalysisContext;
+        use linkrs_core::types::operators::AggregateFunction;
+
+        let mut scan = ScanVerticesNode::new(1, "space");
+        scan.set_tag("person");
+        scan.set_col_names(vec!["v".to_string()]);
+        let mut agg = AggregateNode::new(
+            PlanNodeEnum::ScanVertices(scan),
+            vec![],
+            vec![AggregateFunction::Count],
+        )
+        .expect("aggregate plan should build");
+        agg.set_col_names(vec!["count(*)".to_string()]);
+        let node = PlanNodeEnum::Aggregate(agg);
+
+        let mut ctx = PhysicalPlanBuildContext::new();
+        let exec_ctx =
+            ExecutionContext::new(Arc::new(ExpressionAnalysisContext::new()));
+        let plan =
+            PhysicalPlanBuilder::build(&node, &mut ctx, &exec_ctx).expect("build");
+        let aggregate = plan
+            .operators
+            .iter()
+            .find(|op| {
+                matches!(
+                    op.spec,
+                    OperatorKindSpec::Blocking(BlockingSpec::Aggregate { .. })
+                )
+            })
+            .expect("global aggregate operator");
+        // A global aggregation emits exactly one row (the single group
+        // row, or the default row on empty input), never input * 0.1.
+        assert_eq!(aggregate.estimated_cardinality, Some(1.0));
     }
 }

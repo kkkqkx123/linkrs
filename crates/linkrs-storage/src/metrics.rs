@@ -207,6 +207,10 @@ impl<S: StorageClient> StorageReader for MetricsStorage<S> {
         self.timed_read(|| self.inner.count_edges_by_type(space, edge_type))
     }
 
+    fn approximate_edge_count(&self, space: &str, edge_type: &str) -> Result<u64, StorageError> {
+        self.timed_read(|| self.inner.approximate_edge_count(space, edge_type))
+    }
+
     fn count_visible_vertices(&self, space: &str, tag: Option<&str>) -> Result<u64, StorageError> {
         self.timed_read(|| self.inner.count_visible_vertices(space, tag))
     }

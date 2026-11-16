@@ -113,6 +113,9 @@ impl GraphStorage {
             space,
             &crate::cursor::ScanOptions {
                 edge_type: Some(edge_type.to_string()),
+                // Purge must observe expired rows: the query cursor
+                // hides them, which would report zero removals.
+                include_expired: true,
                 ..Default::default()
             },
         )?;

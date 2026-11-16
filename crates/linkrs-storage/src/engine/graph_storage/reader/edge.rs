@@ -851,6 +851,61 @@ pub(crate) fn count_edges_by_type(
     Ok(hot_count)
 }
 
+/// Physical edge total for one edge type, summed over the stored legs.
+///
+/// Sizing only (cardinality estimates, partition width): it ignores the
+/// read timestamp and pending writes, so snapshot reads must use
+/// [`EdgeStore::visible_edge_count`] or [`count_visible_edges`] instead.
+/// Unknown endpoints or a missing type resolve like the visible counters
+/// (empty endpoint table reads as zero), and a missing edge table reads
+/// as zero. Lock discipline mirrors `count_edges_by_type`: one table lock
+/// at a time, no snapshot capture.
+pub(crate) fn approximate_edge_count(
+    ctx: &GraphStorageContext,
+    space: &str,
+    edge_type: &str,
+) -> StorageResult<u64> {
+    let edge_info = ctx
+        .schema_manager()
+        .get_edge_type(space, edge_type)?
+        .ok_or_else(|| {
+            StorageError::not_found(format!(
+                "Edge type {} not found in space {}",
+                edge_type, space
+            ))
+        })?;
+
+    let edge_label_id = edge_info.edge_type_id;
+
+    let src_label_id: LabelId = match endpoint_label_id(ctx, space, &edge_info.src_tag_name)? {
+        Some(id) => id,
+        None => return Ok(0),
+    };
+    let dst_label_id: LabelId = match endpoint_label_id(ctx, space, &edge_info.dst_tag_name)? {
+        Some(id) => id,
+        None => return Ok(0),
+    };
+
+    if src_label_id == 0 || dst_label_id == 0 {
+        let arcs = ctx.data_store().matching_edge_partition_arcs(edge_label_id);
+        let mut total = 0u64;
+        for arc in &arcs {
+            let table = ctx.data_store().read_edge_table(arc);
+            if table.label() != edge_label_id {
+                continue;
+            }
+            total += table.edge_count();
+        }
+        return Ok(total);
+    }
+    let key =
+        crate::engine::data_store::EdgeTableKey::new(src_label_id, dst_label_id, edge_label_id);
+    Ok(ctx
+        .data_store()
+        .with_single_edge_table(&key, |t| Ok(t.edge_count()))
+        .unwrap_or(0))
+}
+
 /// Exact visible-edge count for pure `COUNT` queries.
 ///
 /// Matches the seed-driven degree sum the count-only expand computes:
@@ -961,23 +1016,79 @@ pub(crate) fn count_visible_edges(
             } else {
                 &table.in_csr
             };
-            let mut count = 0u64;
-            for (row_vid, nbr) in leg.iter_all() {
-                if !table.is_visible_with_gate(nbr.edge_id, ts, &gate) {
-                    continue;
-                }
-                if !quiescent_full {
-                    let row = row_vid.as_int64().unwrap_or(-1);
-                    if row < 0 || live_ids.binary_search(&(row as u32)).is_err() {
-                        continue;
-                    }
-                }
-                count += 1;
-            }
-            Ok(count)
+            Ok(count_leg_visible(
+                table,
+                leg,
+                ts,
+                &gate,
+                quiescent_full,
+                &live_ids,
+            ))
         })
         .unwrap_or(0);
     Ok(count)
+}
+
+/// Snapshot-exact visible count over one CSR leg, shared by the serial and
+/// sharded walks below. The predicate matches the seed-driven degree sum:
+/// per-edge visibility under the query snapshot plus, outside quiescent
+/// hole-free endpoint tables, a seed-side liveness probe. Sharding only
+/// partitions the disjoint group set, so every sharding sums to the same
+/// total as the serial walk.
+fn count_leg_visible(
+    table: &crate::edge::edge_table::EdgeStore,
+    leg: &crate::edge::node_group::CsrShardSet,
+    ts: Timestamp,
+    gate: &crate::mvcc_visibility::PendingGate<'_>,
+    quiescent_full: bool,
+    live_ids: &[u32],
+) -> u64 {
+    let groups = leg.group_ids();
+    // One group (the common small-table case) has no fan-out to split;
+    // tiny legs skip thread dispatch the same way.
+    if groups.len() < 2 || table.edge_count() < 8192 {
+        return count_leg_groups(table, leg, &groups, ts, gate, quiescent_full, live_ids);
+    }
+    use rayon::prelude::*;
+    let width = rayon::current_num_threads().max(1).min(groups.len());
+    let chunk = groups.len().div_ceil(width);
+    groups
+        .chunks(chunk)
+        .par_bridge()
+        .map(|gids| count_leg_groups(table, leg, gids, ts, gate, quiescent_full, live_ids))
+        .sum()
+}
+
+/// Count the visible entries of the given groups with the shared leg
+/// predicate. Groups are disjoint row sets, so callers sum chunk counts.
+fn count_leg_groups(
+    table: &crate::edge::edge_table::EdgeStore,
+    leg: &crate::edge::node_group::CsrShardSet,
+    gids: &[usize],
+    ts: Timestamp,
+    gate: &crate::mvcc_visibility::PendingGate<'_>,
+    quiescent_full: bool,
+    live_ids: &[u32],
+) -> u64 {
+    let mut count = 0u64;
+    for gid in gids {
+        let Some(iter) = leg.iter_group(*gid) else {
+            continue;
+        };
+        for (row_vid, nbr) in iter {
+            if !table.is_visible_with_gate(nbr.edge_id, ts, gate) {
+                continue;
+            }
+            if !quiescent_full {
+                let row = row_vid.as_int64().unwrap_or(-1);
+                if row < 0 || live_ids.binary_search(&(row as u32)).is_err() {
+                    continue;
+                }
+            }
+            count += 1;
+        }
+    }
+    count
 }
 
 /// Full edge materialization across all types, one type scan at a time.

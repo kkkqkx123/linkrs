@@ -74,6 +74,28 @@ impl<'a> Iterator for ShardCsrIterator<'a> {
 }
 
 impl CsrShardSet {
+    /// Ordered ids of the materialized groups; empty when no groups exist.
+    ///
+    /// Callers split parallel walks on this partition, whose disjoint
+    /// union is exactly the `iter_all` row set.
+    pub fn group_ids(&self) -> Vec<usize> {
+        self.shards.keys().copied().collect()
+    }
+
+    /// Iterate the physically present entries of one group, translating
+    /// local rows back to global vertex ids like `iter_all` does.
+    /// Missing groups yield `None` and read as empty. Visibility is
+    /// decided above this layer by the version authority.
+    pub fn iter_group(&self, gid: usize) -> Option<impl Iterator<Item = (VertexId, Nbr)> + '_> {
+        let shard = self.shards.get(&gid)?;
+        let base = group_base(gid, self.group_bits);
+        Some(shard.variant.iter_all().filter_map(move |(local, nbr)| {
+            local
+                .as_internal_u32()
+                .map(|local| (VertexId::from_u32(local.saturating_add(base)), nbr))
+        }))
+    }
+
     /// Iterate edges of a vertex without allocating, for every strategy.
     /// Test-only row-stamp filtered iterator; production scans go through the version authority.
     pub fn iter_edges_of(&self, src_vid: u32, ts: Timestamp) -> Option<CsrRowIter<'_>> {
