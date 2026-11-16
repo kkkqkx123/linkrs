@@ -303,6 +303,15 @@ impl GraphStorageContext {
         PendingGate::new(&self.persistent.version_manager, own_write)
     }
 
+    /// Whether any write transaction is currently pending globally.
+    ///
+    /// Conservative fence for metadata quiescence: when no write is in
+    /// flight, no foreign uncommitted row can hide in this table, so the
+    /// edge high-water plus tombstone check is sufficient.
+    pub(crate) fn has_pending_writes(&self) -> bool {
+        self.persistent.version_manager.pending_count() != 0
+    }
+
     /// The read snapshot bound to this context's pending gate. Every vertex
     /// enumeration and record read takes one, so a read path cannot omit the
     /// pending recheck.

@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use crate::edge::CsrBase;
 use crate::edge::EdgeRecord;
 use crate::engine::graph_storage::context::GraphStorageContext;
 use crate::engine::graph_storage::ops::{
@@ -976,6 +977,7 @@ pub(crate) fn count_visible_edges(
     let ts = ctx.get_read_timestamp();
     let gate = ctx.pending_gate();
     let guard = ctx.visibility_guard(ts);
+    let no_pending = !ctx.has_pending_writes();
     let endpoint_label = if check_out {
         src_label_id
     } else {
@@ -1016,6 +1018,18 @@ pub(crate) fn count_visible_edges(
             } else {
                 &table.in_csr
             };
+            let edge_quiescent = no_pending
+                && table.mvcc.total_tombstone_count() == 0
+                && table.mvcc.max_create_ts() <= ts;
+            if edge_quiescent {
+                log::debug!(
+                    "edge metadata count quiescent fast path: {edge_type} {direction:?}"
+                );
+                if quiescent_full {
+                    return Ok(leg.edge_count());
+                }
+                return Ok(count_leg_seed_only(leg, &live_ids));
+            }
             Ok(count_leg_visible(
                 table,
                 leg,
@@ -1084,6 +1098,53 @@ fn count_leg_groups(
                 if row < 0 || live_ids.binary_search(&(row as u32)).is_err() {
                     continue;
                 }
+            }
+            count += 1;
+        }
+    }
+    count
+}
+
+/// Seed-filtered leg count for the edge-quiescent fast path.
+///
+/// Edge visibility is already fenced by the table quiescence check
+/// (no creation past the snapshot, no tombstones, no pending writes),
+/// so every physical entry is visible and only the seed-side liveness
+/// probe remains. Callers with a quiescent hole-free endpoint table skip
+/// this walk entirely via the physical leg length.
+fn count_leg_seed_only(
+    leg: &crate::edge::node_group::CsrShardSet,
+    live_ids: &[u32],
+) -> u64 {
+    let groups = leg.group_ids();
+    if groups.len() < 2 || leg.edge_count() < 8192 {
+        return count_leg_seed_groups(leg, &groups, live_ids);
+    }
+    use rayon::prelude::*;
+    let width = rayon::current_num_threads().max(1).min(groups.len());
+    let chunk = groups.len().div_ceil(width);
+    groups
+        .chunks(chunk)
+        .par_bridge()
+        .map(|gids| count_leg_seed_groups(leg, gids, live_ids))
+        .sum()
+}
+
+/// Count physical entries of the given groups whose seed row is live.
+fn count_leg_seed_groups(
+    leg: &crate::edge::node_group::CsrShardSet,
+    gids: &[usize],
+    live_ids: &[u32],
+) -> u64 {
+    let mut count = 0u64;
+    for gid in gids {
+        let Some(iter) = leg.iter_group(*gid) else {
+            continue;
+        };
+        for (row_vid, _nbr) in iter {
+            let row = row_vid.as_int64().unwrap_or(-1);
+            if row < 0 || live_ids.binary_search(&(row as u32)).is_err() {
+                continue;
             }
             count += 1;
         }

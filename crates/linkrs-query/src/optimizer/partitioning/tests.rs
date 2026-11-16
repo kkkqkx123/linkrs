@@ -251,6 +251,145 @@ fn make_stats() -> StatisticsManager {
 }
 
 #[test]
+fn pure_global_count_over_scan_partitions() {
+    use crate::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode;
+    use linkrs_core::types::operators::AggregateFunction;
+    let scan = tagged_scan();
+    let agg = AggregateNode::new(scan, Vec::new(), vec![AggregateFunction::Count])
+        .expect("global count plan should build");
+    let plan = PlanNodeEnum::Aggregate(agg);
+    let stats = make_stats();
+    let decision = make_planner().decide(&plan, &view_of(&stats));
+    assert!(
+        decision.partition_spec.is_some(),
+        "pure global count over a large scan is the release shape, got: {}",
+        decision.reason
+    );
+}
+
+#[test]
+fn pure_global_count_falls_back_when_disabled() {
+    use crate::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode;
+    use linkrs_core::types::operators::AggregateFunction;
+    let scan = tagged_scan();
+    let agg = AggregateNode::new(scan, Vec::new(), vec![AggregateFunction::Count])
+        .expect("global count plan should build");
+    let plan = PlanNodeEnum::Aggregate(agg);
+    let stats = make_stats();
+    let planner = PartitioningPlanner::new(PartitioningConfig::default());
+    let decision = planner.decide(&plan, &view_of(&stats));
+    assert!(decision.partition_spec.is_none());
+    assert!(decision.reason.contains("disabled"));
+}
+
+fn planner_with_min_rows(min_rows: u64) -> PartitioningPlanner {
+    PartitioningPlanner::new(PartitioningConfig {
+        enabled: true,
+        min_rows_per_partition: min_rows,
+        max_partitions: 4,
+        vertex_id_range: Some(0i64..10_000),
+        max_workers: 4,
+        max_buffered_chunks: 10,
+        fixed_overhead_rows: 0,
+        per_partition_rows: 0,
+        exchange_row_per_mille: 0,
+    })
+}
+
+fn stats_with_vertex_count(rows: u64) -> StatisticsManager {
+    let stats = StatisticsManager::new();
+    let mut tag = TagStatistics::new("person".to_string());
+    tag.vertex_count = rows;
+    stats.update_tag_stats(TEST_SPACE, tag);
+    stats
+}
+
+#[test]
+fn row_gate_engages_exactly_at_twice_min_rows() {
+    // The admission gate falls back only while `rows < 2 * min_rows`, so a
+    // population exactly at twice the minimum still partitions: the
+    // boundary is inclusive and must stay that way.
+    let stats = stats_with_vertex_count(2_000);
+    let decision = planner_with_min_rows(1_000).decide(&tagged_scan(), &view_of(&stats));
+    let spec = decision.partition_spec.as_ref().expect(
+        "2000 rows at min_rows 1000 must partition, got: ",
+    );
+    assert_eq!(spec.partition_count(), 2);
+}
+
+#[test]
+fn row_gate_falls_back_one_row_below_twice_min_rows() {
+    // One row under the same gate must stay serial with an observable
+    // reason: the planner decision flips on a single row at the boundary.
+    let stats = stats_with_vertex_count(1_999);
+    let decision = planner_with_min_rows(1_000).decide(&tagged_scan(), &view_of(&stats));
+    assert!(
+        decision.partition_spec.is_none(),
+        "1999 rows at min_rows 1000 must stay serial, got: {}",
+        decision.reason
+    );
+    assert!(
+        decision.reason.contains("below the partition threshold"),
+        "fallback must name the row-gate cause, got: {}",
+        decision.reason
+    );
+}
+
+#[test]
+fn changing_only_the_threshold_flips_the_decision() {
+    // Identical statistics and plan: only `min_rows_per_partition` moves.
+    // A production-like threshold keeps the same 10000-row table serial
+    // while the test threshold partitions it.
+    let stats = make_stats();
+    let engage = planner_with_min_rows(1_000).decide(&tagged_scan(), &view_of(&stats));
+    assert!(
+        engage.partition_spec.is_some(),
+        "min_rows 1000 must partition 10000 rows, got: {}",
+        engage.reason
+    );
+    let fallback = planner_with_min_rows(6_000).decide(&tagged_scan(), &view_of(&stats));
+    assert!(
+        fallback.partition_spec.is_none(),
+        "min_rows 6000 (gate 12000) must keep 10000 rows serial, got: {}",
+        fallback.reason
+    );
+    assert!(
+        fallback.reason.contains("below the partition threshold"),
+        "fallback must name the row-gate cause, got: {}",
+        fallback.reason
+    );
+}
+
+#[test]
+fn pure_global_count_respects_the_row_gate_boundary() {
+    // The release shape (global count over a scan) obeys the same gate:
+    // just under twice the minimum it stays serial, exactly at it the
+    // partitioned aggregate split applies.
+    use crate::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode;
+    use linkrs_core::types::operators::AggregateFunction;
+    let plan_of = |scan| {
+        let agg = AggregateNode::new(scan, Vec::new(), vec![AggregateFunction::Count])
+            .expect("global count plan should build");
+        PlanNodeEnum::Aggregate(agg)
+    };
+    let below = stats_with_vertex_count(1_999);
+    let serial = planner_with_min_rows(1_000).decide(&plan_of(tagged_scan()), &view_of(&below));
+    assert!(
+        serial.partition_spec.is_none(),
+        "release shape just under the gate must stay serial, got: {}",
+        serial.reason
+    );
+    let above = stats_with_vertex_count(2_000);
+    let parallel =
+        planner_with_min_rows(1_000).decide(&plan_of(tagged_scan()), &view_of(&above));
+    assert!(
+        parallel.partition_spec.is_some(),
+        "release shape at the gate must partition, got: {}",
+        parallel.reason
+    );
+}
+
+#[test]
 fn falls_back_on_missing_statistics() {
     let stats = StatisticsManager::new(); // no stats populated
     let plan = tagged_scan();

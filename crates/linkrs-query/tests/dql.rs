@@ -17,6 +17,10 @@ mod aggregation;
 mod common;
 #[path = "dql/constant_folding.rs"]
 mod constant_folding;
+#[path = "dql/count_threshold.rs"]
+mod count_threshold;
+#[path = "dql/count_ttl_mid.rs"]
+mod count_ttl_mid;
 #[path = "dql/edge_semantics.rs"]
 mod edge_semantics;
 #[path = "dql/edge_ttl_fast_path.rs"]

@@ -30,6 +30,13 @@ pub struct AuthorityMap {
     /// never scans the authority to decide whether a reclaim pass is
     /// worthwhile. Load rebuilds it through `insert`, one entry at a time.
     tombstones: usize,
+    /// High-water creation stamp over all inserted edges.
+    ///
+    /// Monotonic upper bound used as the quiescence fence for metadata
+    /// counts: when it does not exceed the read timestamp, no creation is
+    /// newer than the snapshot. Reclaim and rollback keep it monotonic
+    /// (false negatives fall back to the exact walk, never miscount).
+    max_create: Timestamp,
 }
 
 impl AuthorityMap {
@@ -42,6 +49,7 @@ impl AuthorityMap {
             segments: Vec::new(),
             live: 0,
             tombstones: 0,
+            max_create: 0,
         }
     }
 
@@ -73,6 +81,9 @@ impl AuthorityMap {
             self.live += 1;
         }
         segment[off] = Some(ts);
+        if ts.create_ts > self.max_create {
+            self.max_create = ts.create_ts;
+        }
         // Overwrites keep the count exact: only a fresh tombstone state
         // transition moves it.
         let is_tombstoned = ts.delete_ts != Timestamp::MAX;
@@ -160,11 +171,17 @@ impl AuthorityMap {
         self.segments.clear();
         self.live = 0;
         self.tombstones = 0;
+        self.max_create = 0;
     }
 
     /// Cached tombstone count, maintained by every mutation above.
     pub fn tombstone_count(&self) -> usize {
         self.tombstones
+    }
+
+    /// High-water creation stamp for the quiescence fence.
+    pub fn max_create_ts(&self) -> Timestamp {
+        self.max_create
     }
 
     pub fn values(&self) -> impl Iterator<Item = &EdgeTimestamps> {
@@ -427,6 +444,11 @@ impl MVCCManager {
     /// write-path reclaim gate stays constant-time on delete-heavy tables.
     pub fn total_tombstone_count(&self) -> usize {
         self.edge_timestamps.tombstone_count()
+    }
+
+    /// High-water creation stamp for the quiescence fence.
+    pub fn max_create_ts(&self) -> Timestamp {
+        self.edge_timestamps.max_create_ts()
     }
 
     /// Record a deletion against the authority record.
@@ -968,5 +990,22 @@ mod tests {
         mvcc.edge_timestamps.remove(&EdgeId(2));
         assert_eq!(mvcc.total_tombstone_count(), 0);
         assert_eq!(mvcc.total_tombstone_count(), full_scan(&mvcc));
+    }
+
+    #[test]
+    fn max_create_tracks_high_water_monotonically() {
+        let mut mvcc = MVCCManager::new();
+        assert_eq!(mvcc.max_create_ts(), 0);
+        mvcc.record_creation(EdgeId(0), 100)
+            .expect("creation records");
+        mvcc.record_creation(EdgeId(1), 150)
+            .expect("creation records");
+        assert_eq!(mvcc.max_create_ts(), 150);
+        mvcc.record_deletion(EdgeId(0), 200);
+        assert_eq!(mvcc.max_create_ts(), 150);
+        mvcc.remove_edge_timestamps(EdgeId(1));
+        assert_eq!(mvcc.max_create_ts(), 150);
+        mvcc.edge_timestamps.clear();
+        assert_eq!(mvcc.max_create_ts(), 0);
     }
 }
