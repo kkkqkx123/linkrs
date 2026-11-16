@@ -87,6 +87,8 @@ impl<S: StorageClient + 'static> StorageReader for SyncWrapper<S> {
         fn scan_edges_by_type_paginated(&self, space: &str, edge_type: &str, offset: usize, limit: usize) -> Result<Vec<Edge>, StorageError>;
         fn count_vertices_by_tag(&self, space: &str, tag: &str) -> Result<u64, StorageError>;
         fn count_edges_by_type(&self, space: &str, edge_type: &str) -> Result<u64, StorageError>;
+        fn count_visible_vertices(&self, space: &str, tag: Option<&str>) -> Result<u64, StorageError>;
+        fn count_visible_edges(&self, space: &str, edge_type: &str, direction: linkrs_core::EdgeDirection) -> Result<u64, StorageError>;
         fn enable_edge_property_index(&self, space: &str, edge_type: &str, pool_capacity: u64) -> Result<bool, StorageError>;
         fn has_edge_property_index(&self, space: &str, edge_type: &str) -> Result<bool, StorageError>;
         fn disable_edge_property_index(&self, space: &str, edge_type: &str) -> Result<(), StorageError>;

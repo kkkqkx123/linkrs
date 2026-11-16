@@ -21,10 +21,12 @@ use super::ExpandCtx;
 /// Non-empty destination demands decode only the demanded properties while
 /// keeping the full batch's timestamp, input order and visibility: one entry
 /// per id, `None` for missing vertices (dangling edges still drop the row).
-/// Anything else keeps the full batch so boxed entity slots observe unchanged
-/// records. Columnar paths never carry a hop filter when this runs, so the
-/// projection only ever trims downstream-demanded properties the demand audit
-/// already proved complete.
+/// An empty demand needs existence only, so it reads with an empty
+/// projection and skips property decoding instead of falling back to the
+/// full batch. A whole-entity demand keeps the full batch so boxed entity
+/// slots observe unchanged records. Columnar paths never carry a hop filter
+/// when this runs, so the projection only ever trims downstream-demanded
+/// properties the demand audit already proved complete.
 pub(super) fn read_destinations(
     reader: &dyn QueryStorage,
     space_name: &str,
@@ -48,6 +50,7 @@ pub(super) fn read_destinations(
                 &projection,
             )?);
         }
+        return Ok(reader.get_vertices_projected_batch(space_name, dst_tag, ids, &[])?);
     }
     Ok(reader.get_vertices_batch(space_name, dst_tag, ids)?)
 }

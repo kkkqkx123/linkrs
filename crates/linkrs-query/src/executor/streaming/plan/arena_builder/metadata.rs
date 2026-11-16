@@ -328,6 +328,7 @@ fn choice_reason_for_spec(spec: &OperatorKindSpec) -> Option<String> {
             SourceSpec::StorageScanVertices { .. } | SourceSpec::StorageScanEdges { .. } => {
                 "storage_full_scan".to_string()
             }
+            SourceSpec::MetadataCount { .. } => "metadata_count".to_string(),
             SourceSpec::ScanVertices { .. } | SourceSpec::ScanEdges { .. } => {
                 "materialized_scan".to_string()
             }
@@ -437,6 +438,8 @@ pub(super) fn estimate_source_cardinality(spec: &SourceSpec) -> Option<f64> {
             vertex_ids.as_ref().map(|ids| ids.len() as f64)
         }
         SourceSpec::Argument { .. } | SourceSpec::Start => Some(1.0),
+        // The metadata count source emits exactly one row by construction.
+        SourceSpec::MetadataCount { .. } => Some(1.0),
         // CTE working tables are populated at execution time.
         SourceSpec::CteScan { .. } => None,
         SourceSpec::GetEdges { .. }
@@ -725,6 +728,9 @@ pub(super) fn source_output_layout(spec: &SourceSpec) -> SlotLayout {
     match spec {
         SourceSpec::Start => SlotLayout::new(vec![]),
         SourceSpec::Argument { col_names } => SlotLayout::from_names(col_names),
+        // Same single count column the count-only expand emits, so the
+        // shared `COUNT` to `SUM` rewrite applies unchanged.
+        SourceSpec::MetadataCount { .. } => SlotLayout::from_names(&["_expand_count".to_string()]),
         SourceSpec::ScanVertices { col_names, .. } => SlotLayout::from_names(col_names),
         SourceSpec::CteScan { col_names, .. } => SlotLayout::from_names(col_names),
         SourceSpec::StandaloneValues { col_names, .. } => SlotLayout::from_names(col_names),
@@ -809,6 +815,7 @@ pub(super) fn source_explain_name(spec: &SourceSpec) -> &'static str {
         SourceSpec::GetNeighbors { .. } => "GetNeighbors",
         SourceSpec::IndexScan { .. } => "IndexScan",
         SourceSpec::GetProp { .. } => "GetProp",
+        SourceSpec::MetadataCount { .. } => "MetadataCount",
     }
 }
 

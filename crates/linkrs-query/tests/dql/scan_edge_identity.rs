@@ -204,8 +204,8 @@ fn anonymous_edge_count_exact_on_tagged_schema() {
 
     let scenario = scenario.query("EXPLAIN FORMAT = DOT MATCH ()-[e:knows]->() RETURN count(e)");
     assert!(
-        plan_of(&scenario).contains("mode: identity"),
-        "seed scan keeps identity through the forwarding project"
+        plan_of(&scenario).contains("metadata_count"),
+        "pure edge count folds into the metadata path"
     );
     let scenario = scenario.assert_success();
 

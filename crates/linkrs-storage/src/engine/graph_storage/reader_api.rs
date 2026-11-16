@@ -197,6 +197,19 @@ impl StorageReader for GraphStorage {
         reader::count_edges_by_type(&self.ctx, space, edge_type)
     }
 
+    fn count_visible_vertices(&self, space: &str, tag: Option<&str>) -> Result<u64, StorageError> {
+        reader::count_visible_vertices(&self.ctx, space, tag)
+    }
+
+    fn count_visible_edges(
+        &self,
+        space: &str,
+        edge_type: &str,
+        direction: EdgeDirection,
+    ) -> Result<u64, StorageError> {
+        reader::count_visible_edges(&self.ctx, space, edge_type, direction)
+    }
+
     fn lookup_index(
         &self,
         space: &str,

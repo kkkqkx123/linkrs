@@ -384,6 +384,20 @@ pub fn physical_plan_to_plan_description(plan: &PhysicalPlan) -> PlanDescription
                     }
                     col_names.clone()
                 }
+                crate::executor::streaming::operators::spec::SourceSpec::MetadataCount {
+                    tag,
+                    edge_type,
+                    ..
+                } => {
+                    pairs.push(crate::planning::plan::explain::Pair::new(
+                        "mode",
+                        "metadata_count",
+                    ));
+                    if let Some(name) = tag.as_deref().or(edge_type.as_deref()) {
+                        pairs.push(crate::planning::plan::explain::Pair::new("target", name));
+                    }
+                    vec!["_expand_count".to_string()]
+                }
                 _ => vec![],
             };
             if !col_names.is_empty() {

@@ -520,6 +520,21 @@ mod tests {
         fn count_edges_by_type(&self, _space: &str, _edge_type: &str) -> Result<u64, StorageError> {
             Ok(self.count_edges)
         }
+        fn count_visible_vertices(
+            &self,
+            _space: &str,
+            _tag: Option<&str>,
+        ) -> Result<u64, StorageError> {
+            Ok(self.count_vertices)
+        }
+        fn count_visible_edges(
+            &self,
+            _space: &str,
+            _edge_type: &str,
+            _direction: EdgeDirection,
+        ) -> Result<u64, StorageError> {
+            Ok(self.count_edges)
+        }
         fn lookup_index(
             &self,
             _space: &str,

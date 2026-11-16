@@ -177,6 +177,15 @@ pub enum SourceOperatorKind {
         edge_type_names: std::collections::HashMap<u32, String>,
     },
     Argument,
+    /// Metadata count for pure `COUNT` queries — emits one row with the
+    /// exact visible count (see the `MetadataCount` spec variant).
+    MetadataCount {
+        storage: Option<Arc<RwLock<dyn crate::storage::QueryStorage>>>,
+        space_name: String,
+        tag: Option<String>,
+        edge_type: Option<String>,
+        direction: linkrs_core::EdgeDirection,
+    },
     /// Property retrieval as a zero-input source (prefer the unary GetV).
     GetProp {
         storage: Option<Arc<RwLock<dyn crate::storage::QueryStorage>>>,
@@ -369,6 +378,18 @@ impl SourceOperator {
                 cursor: None,
                 edge_type_names: std::collections::HashMap::new(),
             },
+            super::spec::SourceSpec::MetadataCount {
+                space_name,
+                tag,
+                edge_type,
+                direction,
+            } => SourceOperatorKind::MetadataCount {
+                storage: storage.clone(),
+                space_name: space_name.clone(),
+                tag: tag.clone(),
+                edge_type: edge_type.clone(),
+                direction: *direction,
+            },
             super::spec::SourceSpec::Argument { .. } => SourceOperatorKind::Argument,
             super::spec::SourceSpec::GetProp {
                 space_name,
@@ -483,6 +504,11 @@ impl SourceOperator {
             SourceOperatorKind::GetNeighbors { .. } => neighbors::open(self)?,
             SourceOperatorKind::IndexScan { .. } => index_scan::open(self)?,
             SourceOperatorKind::CteScan { .. } => Self::open_cte_scan(self)?,
+            SourceOperatorKind::MetadataCount { .. } => {
+                state = Some(GlobalState::Source(SourceState::MetadataCount {
+                    emitted: false,
+                }));
+            }
             SourceOperatorKind::Argument => {
                 state = Some(GlobalState::Source(SourceState::Argument));
             }
@@ -522,6 +548,7 @@ impl SourceOperator {
             SourceOperatorKind::GetNeighbors { .. } => neighbors::next(self),
             SourceOperatorKind::IndexScan { .. } => index_scan::next(self),
             SourceOperatorKind::CteScan { .. } => Self::next_cte_scan(self),
+            SourceOperatorKind::MetadataCount { .. } => Self::next_metadata_count(self),
             SourceOperatorKind::GetProp { .. } => Err(QueryError::execution(
                 "GetProp is not available as a source operator; \
                   use the unary GetProp operator"
@@ -627,6 +654,17 @@ impl SourceOperator {
                     }
                 }
             }
+            SourceOperatorKind::MetadataCount { .. } => {
+                if let Some(rt) = &self.runtime {
+                    let key = self.state_key();
+                    let mut arena = rt.state_arena_for(self.config.partition_id).lock();
+                    if let Some(GlobalState::Source(SourceState::MetadataCount { emitted })) =
+                        arena.global.get_mut(&key)
+                    {
+                        *emitted = false;
+                    }
+                }
+            }
         }
         Ok(false)
     }
@@ -686,6 +724,68 @@ impl SourceOperator {
         let rows = buffer[*current_index..end].to_vec();
         *current_index = end;
         Ok(Some(DataChunk::new_with_layout(rows, layout)))
+    }
+
+    /// Serve the single metadata-count row: read the exact visible count
+    /// under the query snapshot on first call, then report exhaustion.
+    /// Counts fit the aggregate `SUM` rewrite the arena builder applies,
+    /// so the emitted row carries the same big-integer count the
+    /// count-only expand emits per chunk.
+    fn next_metadata_count(op: &mut SourceOperator) -> Result<Option<DataChunk>, QueryError> {
+        use crate::executor::streaming::operators::state::SourceState;
+        use crate::executor::streaming::state::GlobalState;
+        let (storage, space_name, tag, edge_type, direction) = match &op.kind {
+            SourceOperatorKind::MetadataCount {
+                storage,
+                space_name,
+                tag,
+                edge_type,
+                direction,
+            } => (
+                storage.clone(),
+                space_name.clone(),
+                tag.clone(),
+                edge_type.clone(),
+                *direction,
+            ),
+            _ => {
+                return Err(QueryError::execution(
+                    "next_metadata_count called for a non-metadata source".to_string(),
+                ));
+            }
+        };
+        let mut arena = op.state_arena();
+        let emitted = match arena.global.get_mut(&op.state_key()) {
+            Some(GlobalState::Source(SourceState::MetadataCount { ref mut emitted })) => emitted,
+            _ => return Ok(None),
+        };
+        if *emitted {
+            return Ok(None);
+        }
+        *emitted = true;
+        drop(arena);
+        let storage = storage
+            .ok_or_else(|| QueryError::execution("MetadataCount requires storage".to_string()))?;
+        let reader = storage.read();
+        let count = if let Some(edge) = edge_type.as_deref() {
+            reader
+                .count_visible_edges(&space_name, edge, direction)
+                .map_err(|error| {
+                    util::storage_error("MetadataCount", "count edges", &space_name, error)
+                })?
+        } else {
+            reader
+                .count_visible_vertices(&space_name, tag.as_deref())
+                .map_err(|error| {
+                    util::storage_error("MetadataCount", "count vertices", &space_name, error)
+                })?
+        };
+        let wide = count.min(i64::MAX as u64) as i64;
+        let chunk = DataChunk::new_with_layout(
+            vec![vec![Value::BigInt(wide)]],
+            Arc::clone(&op.output_layout),
+        );
+        Ok(Some(chunk))
     }
 }
 

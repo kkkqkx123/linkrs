@@ -38,6 +38,9 @@ pub fn operator_cardinality_shape_key(
             SourceSpec::IndexScan { index_name, .. } => key("IndexScan", Some(index_name)),
             SourceSpec::GetProp { .. } => None,
             SourceSpec::CteScan { .. } => None,
+            SourceSpec::MetadataCount { tag, edge_type, .. } => {
+                key("MetadataCount", tag.as_deref().or(edge_type.as_deref()))
+            }
         },
         OperatorKindSpec::Unary(UnarySpec::Filter { .. }) => None,
         OperatorKindSpec::Unary(UnarySpec::AppendVertices { entity_var, .. }) => {

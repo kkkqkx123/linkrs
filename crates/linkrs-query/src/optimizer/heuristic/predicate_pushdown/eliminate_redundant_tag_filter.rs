@@ -59,7 +59,10 @@ impl Default for EliminateRedundantTagFilterRule {
 }
 
 /// Match `contains(labels(var), 'tag')`.
-fn tag_membership(expr: &Expression) -> Option<(String, String)> {
+///
+/// Shared with the metadata-count detector, which treats the same
+/// scan-implied conjuncts as pass-through evidence instead of erasing them.
+pub(crate) fn tag_membership(expr: &Expression) -> Option<(String, String)> {
     let Expression::Function { name, args } = expr else {
         return None;
     };

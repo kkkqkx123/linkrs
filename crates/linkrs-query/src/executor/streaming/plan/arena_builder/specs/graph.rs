@@ -106,6 +106,391 @@ pub(in crate::executor::streaming::plan::arena_builder) fn is_count_only_aggrega
             .all(|f| matches!(f, linkrs_core::types::operators::AggregateFunction::Count))
 }
 
+/// Collapsed metadata-count request proven equal to the seed-driven sum.
+///
+/// The arena builder skips the whole input chain and emits one count row
+/// from storage instead; the aggregate above is rewritten to sum it like
+/// the count-only expand tail.
+pub(in crate::executor::streaming::plan::arena_builder) enum MetadataCount {
+    Vertices {
+        space: String,
+        tag: Option<String>,
+    },
+    Edges {
+        space: String,
+        edge_type: String,
+        direction: linkrs_core::EdgeDirection,
+    },
+}
+
+/// Detect a pure-count aggregate whose input chain folds into one metadata
+/// count. Walks through value-only `Project` pass-throughs (bare variable
+/// or literal columns, no subqueries) down to a pure scan or a pure
+/// chain-tail expand over a pure scan. Any `Filter`, grouping, distinct,
+/// aggregate filter, limit, recursion, subquery or write-shaped node
+/// refuses the fold and keeps the normal plan.
+///
+/// Storage gates run against the bound handle: write transactions refuse
+/// (their staged rows are invisible to metadata counts), unknown
+/// tags/types refuse, and any TTL on the counted path refuses (expiry is
+/// decided at decode time). All checks re-verify at execution through the
+/// same snapshot, so a concurrent schema change fails loudly instead of
+/// miscounting.
+pub(in crate::executor::streaming::plan::arena_builder) fn metadata_count_below(
+    agg: &crate::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode,
+    exec_ctx: &ExecutionContext,
+) -> Option<MetadataCount> {
+    if !is_plain_global_count(agg) {
+        return None;
+    }
+    let storage = exec_ctx.storage.as_ref()?;
+    let reader = storage.read();
+    // Staged-write gate: explicit write transactions (and autocommit group
+    // mode, which shares staging across statements) may hold uncommitted
+    // rows that table walks cannot see while scans merge them in, so they
+    // keep the normal plan. Plain autocommit statements cannot stage
+    // anything the scan would see: the statement itself is a pure read,
+    // and earlier statements are already committed.
+    match reader.operation_context() {
+        None => {}
+        Some(context) => {
+            if !context.read_only
+                && !(context.auto_commit && context.auto_commit_group_start.is_none())
+            {
+                return None;
+            }
+        }
+    }
+    let space = exec_ctx.space_name.clone().unwrap_or_default();
+    let mut current = agg.input();
+    let mut filters = Vec::new();
+    loop {
+        match current {
+            PlanNodeEnum::Project(project) => {
+                if !project.subqueries().is_empty() || !project_columns_value_only(project) {
+                    return None;
+                }
+                current = project.input();
+            }
+            PlanNodeEnum::Filter(filter) => {
+                if !filter.subqueries().is_empty() {
+                    return None;
+                }
+                filters.push(filter);
+                current = filter.input();
+            }
+            PlanNodeEnum::ScanVertices(scan) => {
+                return metadata_vertex_count(scan, agg, &*reader, &space, &filters);
+            }
+            PlanNodeEnum::ExpandAll(expand) => {
+                return metadata_edge_count(expand, agg, &*reader, &space, &filters);
+            }
+            _ => return None,
+        }
+    }
+}
+
+/// Strict global-count shape: no grouping of any kind, no distinct, no
+/// aggregate filters, every function a `COUNT`. Per-argument nullability is
+/// checked against the chain terminal by the caller.
+fn is_plain_global_count(
+    agg: &crate::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode,
+) -> bool {
+    if !agg.group_keys().is_empty()
+        || !agg.grouping_sets().is_empty()
+        || agg.group_key_exprs().is_some_and(|exprs| !exprs.is_empty())
+    {
+        return false;
+    }
+    let funcs = agg.aggregation_functions();
+    if funcs.is_empty()
+        || funcs.len() != agg.aggregation_args().len()
+        || agg.aggregation_distinct().iter().any(|d| *d)
+        || agg.aggregation_filters().iter().any(|f| f.is_some())
+    {
+        return false;
+    }
+    funcs.iter().all(|func| {
+        matches!(
+            func,
+            linkrs_core::types::operators::AggregateFunction::Count
+        )
+    })
+}
+
+/// Projects on a metadata chain compute nothing: every column is a bare
+/// variable or a literal, so skipping the project drops no values, no
+/// errors and no rows. Anything else keeps the normal plan.
+fn project_columns_value_only(
+    project: &crate::planning::plan::core::nodes::operation::project_node::ProjectNode,
+) -> bool {
+    !project.columns().is_empty()
+        && project.columns().iter().all(|col| {
+            col.expression
+                .expression()
+                .map(|meta| {
+                    matches!(
+                        meta.inner(),
+                        Expression::Variable(_) | Expression::Literal(_)
+                    )
+                })
+                .unwrap_or(false)
+        })
+}
+
+/// Whether a `COUNT` argument counts every logical row without evaluation:
+/// empty args, the star literal, or a bare variable proven non-null by the
+/// chain terminal. Anything else (nullable expressions, constants that
+/// could be null) keeps the normal plan.
+fn is_row_count_arg(arg: &[Expression], non_null_vars: &[&str]) -> bool {
+    if arg.is_empty()
+        || crate::executor::streaming::operators::blocking::helpers::count_star_arg(arg)
+    {
+        return true;
+    }
+    matches!(arg, [Expression::Variable(var)] if non_null_vars.contains(&var.as_str()))
+}
+
+/// Filters on a metadata chain must all be scan-implied tag checks: every
+/// conjunct is `contains(labels(var), 'Tag')` naming the scan's own tag
+/// and variable. Such filters drop nothing, so skipping them with the
+/// chain preserves the row count. Untagged scans admit no filter at all.
+fn filters_redundant_for_scan(
+    filters: &[&crate::planning::plan::core::nodes::operation::filter_node::FilterNode],
+    scan: &crate::planning::plan::core::nodes::access::graph_scan_node::ScanVerticesNode,
+) -> bool {
+    filters.iter().all(|filter| {
+        let Some(meta) = filter.condition().expression() else {
+            return false;
+        };
+        // A constant-true residual (left by tag-conjunct elimination) drops
+        // nothing, exactly like a scan-implied tag check.
+        if matches!(
+            meta.inner(),
+            Expression::Literal(linkrs_core::Value::Bool(true))
+        ) {
+            return true;
+        }
+        // Untagged scans admit no tag-anchored check: any label conjunct
+        // there restricts the rows and stays on the normal plan.
+        let Some(tag) = scan.tag() else {
+            return false;
+        };
+        let conjuncts = crate::planning::scan_predicate::split_conjuncts(meta.inner());
+        !conjuncts.is_empty()
+            && conjuncts.iter().all(|conjunct| {
+                match crate::optimizer::heuristic::predicate_pushdown::eliminate_redundant_tag_filter::tag_membership(
+                    conjunct,
+                ) {
+                    Some((var, conj_tag)) => {
+                        conj_tag == *tag
+                            && (scan.output_var() == Some(var.as_str())
+                                || scan.col_names().iter().any(|name| name == &var))
+                    }
+                    None => false,
+                }
+            })
+    })
+}
+
+/// Vertex terminal: pure tag scan (or untagged whole-space scan) feeding a
+/// global count of the scan variable. The scan variable is non-null on
+/// every scanned row, so counting it equals the row count.
+fn metadata_vertex_count(
+    scan: &crate::planning::plan::core::nodes::access::graph_scan_node::ScanVerticesNode,
+    agg: &crate::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode,
+    reader: &dyn crate::storage::QueryStorage,
+    space: &str,
+    filters: &[&crate::planning::plan::core::nodes::operation::filter_node::FilterNode],
+) -> Option<MetadataCount> {
+    if scan.filter().is_some() || scan.limit().is_some() {
+        return None;
+    }
+    if !filters_redundant_for_scan(filters, scan) {
+        return None;
+    }
+    if let Some(tag) = scan.tag() {
+        if crate::cte::is_cte_tag(tag) {
+            return None;
+        }
+        let info = reader.get_tag(space, tag).ok()??;
+        if linkrs_core::types::ttl::has_valid_ttl(info.ttl_duration, info.ttl_col.as_deref()) {
+            return None;
+        }
+    } else {
+        let tags = reader.list_tags(space).ok()?;
+        if tags.iter().any(|info| {
+            linkrs_core::types::ttl::has_valid_ttl(info.ttl_duration, info.ttl_col.as_deref())
+        }) {
+            return None;
+        }
+    }
+    let scan_vars: Vec<&str> = scan.col_names().iter().map(String::as_str).collect();
+    let ok = agg
+        .aggregation_args()
+        .iter()
+        .all(|arg| is_row_count_arg(arg, &scan_vars));
+    if !ok {
+        return None;
+    }
+    Some(MetadataCount::Vertices {
+        space: space.to_string(),
+        tag: scan.tag().cloned(),
+    })
+}
+
+/// Edge terminal: chain-tail count-only expand fed directly by a pure
+/// source scan. Inherits the optimizer's single-step, filter-free,
+/// demand-free shape proof through `count_only`, then adds the metadata
+/// gates: one typed edge type, directed walk, no path semantics, no
+/// sampling, schema endpoint tags matching the pattern (or untagged
+/// wildcards), and no TTL on the edge type or the counted endpoint tag.
+/// The counted variable may be the edge or the destination: each is
+/// non-null on every expanded row of the inner match.
+fn metadata_edge_count(
+    expand: &crate::planning::plan::core::nodes::traversal::traversal_node::ExpandAllNode,
+    agg: &crate::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode,
+    reader: &dyn crate::storage::QueryStorage,
+    space: &str,
+    filters: &[&crate::planning::plan::core::nodes::operation::filter_node::FilterNode],
+) -> Option<MetadataCount> {
+    use crate::planning::plan::core::nodes::base::plan_node_traits::MultipleInputNode;
+    // The optimizer's count-only proof covers the aggregate-to-expand
+    // segment (pure project pass-throughs only), so no filter may sit
+    // above the expand here; seed-side filters below it are validated
+    // against the source scan instead.
+    if !filters.is_empty() {
+        return None;
+    }
+    if !expand.count_only()
+        || expand.any_edge_type()
+        || expand.edge_types().len() != 1
+        || expand.path_semantic().is_some()
+        || expand.sample()
+        || expand.join_input()
+        || !expand.src_vids().is_empty()
+        || expand.filter().is_some()
+    {
+        return None;
+    }
+    if expand.step_limit().unwrap_or(1) != 1 || expand.step_limits().is_some() {
+        return None;
+    }
+    let Ok(direction) = linkrs_core::EdgeDirection::parse(expand.direction()) else {
+        return None;
+    };
+    if !matches!(
+        direction,
+        linkrs_core::EdgeDirection::Out | linkrs_core::EdgeDirection::In
+    ) {
+        return None;
+    }
+    let inputs = expand.inputs();
+    if inputs.len() != 1 {
+        return None;
+    }
+    let mut seed = &inputs[0];
+    let mut seed_filters = Vec::new();
+    let scan = loop {
+        match seed {
+            PlanNodeEnum::ScanVertices(scan) => break scan,
+            PlanNodeEnum::Filter(filter) => {
+                if !filter.subqueries().is_empty() {
+                    return None;
+                }
+                seed_filters.push(filter);
+                seed = filter.input();
+            }
+            _ => return None,
+        }
+    };
+    if scan.filter().is_some() || scan.limit().is_some() {
+        return None;
+    }
+    if !filters_redundant_for_scan(&seed_filters, scan) {
+        return None;
+    }
+    if let Some(tag) = scan.tag() {
+        if crate::cte::is_cte_tag(tag) {
+            return None;
+        }
+    }
+    let edge_type = &expand.edge_types()[0];
+    let info = reader.get_edge_type(space, edge_type).ok()??;
+    if info.src_tag_name.is_empty() || info.dst_tag_name.is_empty() {
+        return None;
+    }
+    if linkrs_core::types::ttl::has_valid_ttl(info.ttl_duration, info.ttl_col.as_deref()) {
+        return None;
+    }
+    let schema_src = info.src_tag_name.as_str();
+    let schema_dst = info.dst_tag_name.as_str();
+    let seed_matches = match direction {
+        linkrs_core::EdgeDirection::Out => scan.tag().is_none_or(|tag| tag == schema_src),
+        linkrs_core::EdgeDirection::In => scan.tag().is_none_or(|tag| tag == schema_dst),
+        linkrs_core::EdgeDirection::Both => false,
+    };
+    if !seed_matches {
+        return None;
+    }
+    let endpoint_tag = if matches!(direction, linkrs_core::EdgeDirection::Out) {
+        schema_src
+    } else {
+        schema_dst
+    };
+    if let Some(tag_info) = reader.get_tag(space, endpoint_tag).ok()? {
+        if linkrs_core::types::ttl::has_valid_ttl(
+            tag_info.ttl_duration,
+            tag_info.ttl_col.as_deref(),
+        ) {
+            return None;
+        }
+    }
+    let (Some(edge_var), Some(dst_var)) = (expand.col_names().get(1), expand.col_names().get(2))
+    else {
+        return None;
+    };
+    // Seed-variable counts never enter the count-only tail (the optimizer
+    // only proves edge/destination counts), so only those two plus the star
+    // and empty forms are row-counting here.
+    let non_null = [edge_var.as_str(), dst_var.as_str()];
+    let ok = agg
+        .aggregation_args()
+        .iter()
+        .all(|arg| is_row_count_arg(arg, &non_null));
+    if !ok {
+        return None;
+    }
+    Some(MetadataCount::Edges {
+        space: space.to_string(),
+        edge_type: edge_type.clone(),
+        direction,
+    })
+}
+
+/// Aggregate spec for a collapsed metadata chain: every `COUNT` sums the
+/// single count row the metadata source emits, exactly like the count-only
+/// expand tail rewrite. Grouping is empty by construction.
+pub(in crate::executor::streaming::plan::arena_builder) fn build_metadata_count_aggregate_spec(
+    node: &crate::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode,
+) -> Result<BlockingSpec, PlanBuildError> {
+    let aggregate_functions: Vec<(AggregateFunction, Vec<Expression>)> = node
+        .aggregation_functions()
+        .iter()
+        .map(|_| {
+            (
+                AggregateFunction::Sum,
+                vec![Expression::Variable(COUNT_ONLY_COLUMN.to_string())],
+            )
+        })
+        .collect();
+    Ok(BlockingSpec::Aggregate {
+        group_by_expressions: Vec::new(),
+        aggregate_functions,
+        output_col_names: node.col_names().to_vec(),
+    })
+}
+
 pub(in crate::executor::streaming::plan::arena_builder) fn build_project_spec(
     node: &crate::planning::plan::core::nodes::operation::project_node::ProjectNode,
     subquery_runners: Vec<SubqueryRunnerSpec>,
@@ -138,11 +523,15 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_project_spec(
 }
 
 /// True when every column of `project` is a bare reference to the count-only
-/// expand's destination variable (the aggregate argument being forwarded).
+/// expand's counted variable (either the edge or the destination slot, both
+/// equal the expanded row count for a closed-loop tail).
 fn project_forwards_expand_dst(
     project: &crate::planning::plan::core::nodes::operation::project_node::ProjectNode,
     expand: &crate::planning::plan::core::nodes::traversal::traversal_node::ExpandAllNode,
 ) -> bool {
+    let Some(edge_var) = expand.col_names().get(1) else {
+        return false;
+    };
     let Some(dst_var) = expand.col_names().get(2) else {
         return false;
     };
@@ -152,7 +541,13 @@ fn project_forwards_expand_dst(
                 .expression()
                 .and_then(|meta| {
                     if let Expression::Variable(var) = meta.inner() {
-                        Some(var.as_str() == dst_var)
+                        Some(var.as_str() == edge_var || var.as_str() == dst_var)
+                    } else if let Expression::Literal(value) = meta.inner() {
+                        Some(
+                        crate::executor::streaming::operators::blocking::helpers::is_star_literal(
+                            value,
+                        ),
+                    )
                     } else {
                         None
                     }

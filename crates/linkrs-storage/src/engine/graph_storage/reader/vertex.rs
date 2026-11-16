@@ -185,6 +185,65 @@ pub(crate) fn count_vertices_by_tag(
     Ok(count)
 }
 
+/// Exact visible-vertex count for pure `COUNT` queries.
+///
+/// Snapshot-exact counterpart of [`count_vertices_by_tag`]: when the table
+/// is quiescent (no creation stamp past the read timestamp) the hole
+/// statistics equal a full tag scan, so the count is O(shards). Otherwise
+/// it enumerates the same guard-filtered live ids the scan cursor walks.
+/// The hole count is always read before the quiescence fence: a commit
+/// landing between the two trips the fence into the exact walk, while a
+/// later commit cannot affect the read. A `None` tag sums every tag of the
+/// space. Missing tags contribute zero, mirroring the cursor skipping
+/// unknown tables. TTL is refused loudly: expired vertices are filtered
+/// at decode time, which this decode-free count cannot observe. Callers
+/// gate out write transactions beforehand, so no staged rows can hide
+/// from this table walk.
+pub(crate) fn count_visible_vertices(
+    ctx: &GraphStorageContext,
+    space: &str,
+    tag: Option<&str>,
+) -> StorageResult<u64> {
+    let tag_names: Vec<String> = match tag {
+        Some(name) => vec![name.to_string()],
+        None => ctx
+            .schema_manager()
+            .list_tags(space)?
+            .into_iter()
+            .map(|info| info.tag_name)
+            .collect(),
+    };
+    let mut label_ids = Vec::with_capacity(tag_names.len());
+    for name in &tag_names {
+        let Some(info) = ctx.schema_manager().get_tag(space, name)? else {
+            continue;
+        };
+        if linkrs_core::types::ttl::has_valid_ttl(info.ttl_duration, info.ttl_col.as_deref()) {
+            return Err(StorageError::not_supported(format!(
+                "Metadata vertex count cannot serve tag with TTL configured: {name}"
+            )));
+        }
+        label_ids.push(info.tag_id);
+    }
+    let ts = ctx.get_read_timestamp();
+    let guard = ctx.visibility_guard(ts);
+    let total = ctx.data_store().with_vertex_tables(|vertex_tables| {
+        label_ids
+            .iter()
+            .filter_map(|id| vertex_tables.get(id))
+            .map(|table| {
+                let (live, _) = table.approximate_id_hole_stats(ts);
+                if table.max_start_ts() <= ts {
+                    live as u64
+                } else {
+                    table.live_ids(&guard).len() as u64
+                }
+            })
+            .sum()
+    });
+    Ok(total)
+}
+
 pub(crate) fn get_vertices_batch(
     ctx: &GraphStorageContext,
     space: &str,

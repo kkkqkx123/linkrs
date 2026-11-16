@@ -5,7 +5,7 @@ use std::sync::Arc;
 use crate::executor::streaming::slot::SlotLayout;
 use crate::storage::{ScanPredicate, ShardSlice};
 use linkrs_core::types::expr::ContextualExpression;
-use linkrs_core::Value;
+use linkrs_core::{EdgeDirection, Value};
 
 /// A predicate that has been validated and bound to an index schema.
 ///
@@ -130,6 +130,22 @@ pub enum SourceSpec {
         projected_properties: Vec<String>,
         /// Entity variable name for the fetched vertex (e.g. the tag name).
         col_names: Vec<String>,
+    },
+    /// Metadata count for pure `COUNT` queries: emits a single row with
+    /// the exact visible count under the query snapshot instead of
+    /// scanning any rows. Built only when the arena builder proves the
+    /// collapsed chain equals the seed-driven sum (single tag or whole
+    /// space for vertices; single directed edge type for edges).
+    MetadataCount {
+        space_name: String,
+        /// Vertex tag to count; `None` sums every tag of the space.
+        /// Always `None` for edge counts.
+        tag: Option<String>,
+        /// Edge type to count; `None` for vertex counts.
+        edge_type: Option<String>,
+        /// Query direction for edge counts (`Out` or `In`); the stored leg
+        /// always follows it. Ignored for vertex counts.
+        direction: EdgeDirection,
     },
     GetEdges {
         space_name: String,

@@ -21,7 +21,9 @@ use crate::executor::streaming::spill::{
 use super::super::aggregate::{
     value_to_partial_accumulator, AggregateState, ACCUMULATOR_OVERHEAD_BYTES,
 };
-use super::super::helpers::{count_identity_arg, emit_batch_slice, BlockingContext};
+use super::super::helpers::{
+    count_identity_arg, count_star_arg, emit_batch_slice, BlockingContext,
+};
 use super::shared::eval_group_key;
 
 type BatchEvalResult = Option<(Vec<Vec<Value>>, Vec<Vec<Value>>)>;
@@ -147,6 +149,12 @@ pub(crate) fn next_aggregate(
         }
 
         // Accumulation phase
+        // Global count shortcut: with no GROUP BY and every function a bare
+        // `Count` over provably non-null inputs, the result is the visible
+        // row count. Accumulate chunk lengths directly instead of hashing one
+        // group key and cloning one unit value per row.
+        let mut fast_counts: Vec<u64> = vec![0; aggregate_functions.len()];
+        let mut fast_active = false;
         let mut accumulating = true;
         while accumulating {
             match input.advance()? {
@@ -165,6 +173,31 @@ pub(crate) fn next_aggregate(
                         .iter()
                         .map(|(func, func_args)| count_identity_arg(func, func_args, &chunk))
                         .collect();
+                    if !has_group_keys
+                        && !aggregate_functions.is_empty()
+                        && aggregate_functions
+                            .iter()
+                            .enumerate()
+                            .all(|(i, (func, args))| {
+                                matches!(func, AggregateFunction::Count)
+                                    && (count_units[i] || args.is_empty() || count_star_arg(args))
+                            })
+                        && (chunk.selection.is_none() || !chunk.rows.is_empty())
+                    {
+                        let n = if chunk.rows.is_empty() {
+                            chunk.typed_len().unwrap_or(0) as u64
+                        } else {
+                            chunk.visible_count() as u64
+                        };
+                        for c in fast_counts.iter_mut() {
+                            *c += n;
+                        }
+                        fast_active = true;
+                        if state.col_names.is_empty() {
+                            state.col_names = chunk.col_names();
+                        }
+                        continue;
+                    }
                     if state.col_names.is_empty() {
                         state.col_names = chunk.col_names();
                     }
@@ -185,7 +218,7 @@ pub(crate) fn next_aggregate(
                             .enumerate()
                             .all(|(i, (func, args))| {
                                 matches!(func, AggregateFunction::Count)
-                                    && (count_units[i] || args.is_empty())
+                                    && (count_units[i] || args.is_empty() || count_star_arg(args))
                             }) {
                         chunk.typed_len()
                     } else {
@@ -393,19 +426,46 @@ pub(crate) fn next_aggregate(
         }
 
         // In-memory output: finalize accumulated groups into the result batch.
-        let group_map = std::mem::take(&mut state.group_map);
+        // Fast-path counts merge into the single global group when a mixed
+        // chunk forced the row loop; the pure fast path emits directly.
+        let mut group_map = std::mem::take(&mut state.group_map);
         state.result_batch.clear();
         state.emitted_offset = 0;
-        for (group_key, accs) in group_map {
-            let mut result_row = if has_group_keys {
-                group_key
+        if fast_active && !has_group_keys && state.partition_spiller.is_none() {
+            if group_map.is_empty() {
+                let row = fast_counts
+                    .iter()
+                    .map(|c| Value::BigInt(*c as i64))
+                    .collect::<Vec<_>>();
+                state.result_batch.append_row(row);
             } else {
-                Vec::new()
-            };
-            for acc in accs {
-                result_row.push(acc.finalize());
+                for accs in group_map.values_mut() {
+                    for (acc, extra) in accs.iter_mut().zip(fast_counts.iter()) {
+                        if let AggregateAccumulator::Count(c) = acc {
+                            *c += *extra;
+                        }
+                    }
+                }
+                for (_group_key, accs) in group_map {
+                    let mut result_row = Vec::new();
+                    for acc in accs {
+                        result_row.push(acc.finalize());
+                    }
+                    state.result_batch.append_row(result_row);
+                }
             }
-            state.result_batch.append_row(result_row);
+        } else {
+            for (group_key, accs) in group_map {
+                let mut result_row = if has_group_keys {
+                    group_key
+                } else {
+                    Vec::new()
+                };
+                for acc in accs {
+                    result_row.push(acc.finalize());
+                }
+                state.result_batch.append_row(result_row);
+            }
         }
         // Global aggregation (no GROUP BY keys) over empty input still emits
         // a single row with default aggregate values (e.g. count = 0).

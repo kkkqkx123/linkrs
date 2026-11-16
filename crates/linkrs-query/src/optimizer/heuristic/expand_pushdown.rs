@@ -247,11 +247,14 @@ pub(crate) fn known_reference_ancestor(anc: &PlanNodeEnum) -> bool {
 }
 
 /// Decide `count_only` for the chain-tail expand: the direct downstream
-/// (through pure `Project` pass-throughs of the destination variable) is a
+/// (through pure `Project` pass-throughs of the counted variable) is a
 /// count-only aggregate, the hop supports the raw-id fast path, and neither
 /// the edge nor the destination demand carries properties. Attribute counts
 /// such as `count(var.prop)` stay on the normal expand path so the aggregate
-/// observes nullability instead of edge degrees.
+/// observes nullability instead of edge degrees. Either the edge variable or
+/// the destination variable may be counted: each expanded row carries exactly
+/// one non-null edge and one destination, so counting either equals the row
+/// count when dangling destinations are excluded by the closed-loop schema.
 fn expand_count_only(
     expand: &ExpandAllNode,
     ancestors: &[&PlanNodeEnum],
@@ -264,17 +267,20 @@ fn expand_count_only(
     if !demand_is_empty(edge_props) || !demand_is_empty(dst_props) {
         return false;
     }
+    let Some(edge_var) = expand.col_names().get(1) else {
+        return false;
+    };
     let Some(dst_var) = expand.col_names().get(2) else {
         return false;
     };
     // Walk up from the expand (closest ancestor first).  Only pure Project
-    // pass-throughs of the destination variable may separate it from the
+    // pass-throughs of the counted variable may separate it from the
     // count-only aggregate; a Filter or any other operator is conservative
     // grounds to skip the optimization.
     for anc in ancestors.iter().rev() {
         match anc {
             PlanNodeEnum::Project(project) => {
-                if !project_passes_dst(project, dst_var) {
+                if !project_passes_count_var(project, edge_var, dst_var) {
                     return false;
                 }
             }
@@ -294,11 +300,13 @@ fn fast_path_compatible(expand: &ExpandAllNode) -> bool {
         && expand.src_vids().is_empty()
 }
 
-/// True when every column of `project` is a bare reference to `dst_var` (i.e.
-/// the project only forwards the aggregate argument of a count-only
-/// aggregate).
-fn project_passes_dst(
+/// True when every column of `project` is a bare reference to the counted
+/// variable (either the edge or the destination slot) or the star literal,
+/// i.e. the project only forwards the aggregate argument of a count-only
+/// aggregate. The star counts every row exactly like the counted variable.
+fn project_passes_count_var(
     project: &crate::planning::plan::core::nodes::operation::project_node::ProjectNode,
+    edge_var: &str,
     dst_var: &str,
 ) -> bool {
     !project.columns().is_empty()
@@ -307,7 +315,13 @@ fn project_passes_dst(
                 .expression()
                 .and_then(|meta| {
                     if let Expression::Variable(var) = meta.inner() {
-                        Some(var.as_str() == dst_var)
+                        Some(var.as_str() == edge_var || var.as_str() == dst_var)
+                    } else if let Expression::Literal(value) = meta.inner() {
+                        Some(
+                        crate::executor::streaming::operators::blocking::helpers::is_star_literal(
+                            value,
+                        ),
+                    )
                     } else {
                         None
                     }

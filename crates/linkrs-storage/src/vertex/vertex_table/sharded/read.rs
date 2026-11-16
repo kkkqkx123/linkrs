@@ -202,6 +202,19 @@ impl ShardedVertexTable {
         Self::merge_sorted_records(per_shard)
     }
 
+    /// Maximum creation stamp across all shards, ignoring invalidated slots.
+    ///
+    /// Quiescence fence for metadata counts: when the result does not exceed
+    /// the read timestamp, no row started after the snapshot, so the hole
+    /// statistics are snapshot-exact and no live-id walk is needed.
+    pub(crate) fn max_start_ts(&self) -> Timestamp {
+        self.shards
+            .iter()
+            .map(|shard| shard.read().timestamps.read().max_start_ts())
+            .max()
+            .unwrap_or(0)
+    }
+
     /// Candidate id enumeration for paginated scans: rows the guard considers
     /// visible at its snapshot, in global id order.
     ///

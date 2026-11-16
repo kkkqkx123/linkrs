@@ -6,12 +6,27 @@ use crate::executor::streaming::slot::SlotLayout;
 use linkrs_core::columnar::MaterializedBatch;
 use linkrs_core::types::expr::Expression;
 use linkrs_core::types::operators::AggregateFunction;
+use linkrs_core::Value;
 use std::sync::Arc;
 
 pub(crate) struct BlockingContext<'a> {
     pub runtime: &'a Option<Arc<ExecutionRuntime>>,
     pub output_layout: &'a Arc<SlotLayout>,
     pub config: &'a OperatorConfig,
+}
+
+/// Whether a `Count` argument always counts every visible row without
+/// per-row evaluation: the parser marks `COUNT(*)` with a single star
+/// string literal whose value is never null, so it observes the same
+/// row count as an argument-free count.
+/// Whether a literal value is the parser's `COUNT(*)` star marker: a plain
+/// string value that is never null, so counting it equals counting rows.
+pub(crate) fn is_star_literal(value: &Value) -> bool {
+    matches!(value, Value::String(star) if star.as_str() == "*")
+}
+
+pub(crate) fn count_star_arg(args: &[Expression]) -> bool {
+    matches!(args, [Expression::Literal(value)] if is_star_literal(value))
 }
 
 /// Whether a `Count` over a bare variable can skip argument evaluation for

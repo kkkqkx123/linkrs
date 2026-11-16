@@ -89,8 +89,8 @@ fn narrow_count_matches_edges_with_columnar_marker() {
     let scenario = scenario.query("EXPLAIN FORMAT = DOT MATCH ()-[r:Link]->() RETURN count(r)");
     let plan = plan_of(&scenario);
     assert!(
-        plan.contains("columnar"),
-        "narrow materialized expand must use the columnar path, got:\n{plan}"
+        plan.contains("metadata_count"),
+        "edge count must use the metadata path, got:\n{plan}"
     );
     let scenario = scenario.assert_success();
 

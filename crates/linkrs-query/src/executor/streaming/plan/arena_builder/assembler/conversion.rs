@@ -1,6 +1,6 @@
 //! Recursive assembly of operators and fragment DAG edges.
 
-use super::super::super::super::operators::spec::BlockingSpec;
+use super::super::super::super::operators::spec::{BlockingSpec, SourceSpec};
 use super::super::super::super::subquery::SubqueryRunnerSpec;
 use super::super::super::properties::{PhysicalProperties, SPILL_DEFAULT_THRESHOLD};
 use super::super::super::types::{
@@ -241,6 +241,51 @@ impl ArenaPlanAssembler {
                 Ok((fid, op_id))
             }
             PlanNodeEnum::Aggregate(agg_node) => {
+                // Collapsed metadata count: skip the whole pure-count input
+                // chain and emit one count row from storage, then sum it
+                // exactly like a count-only expand tail.
+                if let Some(request) = metadata_count_below(agg_node, exec_ctx) {
+                    let source_spec = match request {
+                        MetadataCount::Vertices { space, tag } => SourceSpec::MetadataCount {
+                            space_name: space,
+                            tag,
+                            edge_type: None,
+                            direction: linkrs_core::EdgeDirection::Out,
+                        },
+                        MetadataCount::Edges {
+                            space,
+                            edge_type,
+                            direction,
+                        } => SourceSpec::MetadataCount {
+                            space_name: space,
+                            tag: None,
+                            edge_type: Some(edge_type),
+                            direction,
+                        },
+                    };
+                    let (child_fid, _) = Self::push_source_op(
+                        operators,
+                        fragments,
+                        op_alloc,
+                        frag_alloc,
+                        node.id(),
+                        source_spec,
+                    );
+                    let spec = build_metadata_count_aggregate_spec(agg_node)?;
+                    let (fid, op_id) = Self::push_blocking_op(
+                        &mut FragmentCtx {
+                            operators,
+                            fragments,
+                            op_alloc,
+                        },
+                        child_fid,
+                        node.id(),
+                        spec,
+                        PhysicalProperties::single_blocking_with_budget(),
+                    )?;
+                    operators[op_id.0].has_folded_expressions = agg_node.has_folded_expressions();
+                    return Ok((fid, op_id));
+                }
                 let (child_fid, _) = Self::convert_node(
                     agg_node.input(),
                     operators,

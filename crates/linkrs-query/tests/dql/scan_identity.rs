@@ -154,19 +154,15 @@ fn skip_rows_flat_projection_annotated_with_exact_results() {
 }
 
 #[test]
-fn skip_rows_bare_variable_count_annotated_with_exact_value() {
-    // The rowless scan folds count units per typed position; the total is
-    // exact and the plan shows both annotations.
+fn metadata_bare_variable_count_annotated_with_exact_value() {
+    // The pure count folds into the metadata path; the total stays exact
+    // and the plan shows the metadata marker instead of scan annotations.
     let scenario = setup();
     let scenario = scenario.query("EXPLAIN FORMAT = DOT MATCH (a:person) RETURN count(a)");
     let plan = plan_of(&scenario);
     assert!(
-        plan.contains("mode: identity"),
-        "bare-variable count keeps identity, got:\n{plan}"
-    );
-    assert!(
-        plan.contains("skipped"),
-        "count-only aggregate must let the scan skip rows, got:\n{plan}"
+        plan.contains("metadata_count"),
+        "bare-variable count folds into metadata, got:\n{plan}"
     );
     let scenario = scenario.assert_success();
 

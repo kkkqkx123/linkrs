@@ -273,6 +273,20 @@ pub trait StorageReader: Send + Sync + std::fmt::Debug {
     fn scan_all_edges(&self, space: &str) -> Result<Vec<Edge>, StorageError>;
     fn count_vertices_by_tag(&self, space: &str, tag: &str) -> Result<u64, StorageError>;
     fn count_edges_by_type(&self, space: &str, edge_type: &str) -> Result<u64, StorageError>;
+    /// Snapshot-exact visible-vertex count for pure `COUNT` queries: equals
+    /// a full tag scan under the same read timestamp. `None` sums every
+    /// tag of the space; missing tags contribute zero.
+    fn count_visible_vertices(&self, space: &str, tag: Option<&str>) -> Result<u64, StorageError>;
+    /// Snapshot-exact visible-edge count for pure `COUNT` queries: equals
+    /// the seed-driven degree sum over fully scanned endpoints, excluding
+    /// dangling seed-side endpoints and ignoring far-side existence.
+    /// Only `Out` and `In` are served; `Both` is refused loudly.
+    fn count_visible_edges(
+        &self,
+        space: &str,
+        edge_type: &str,
+        direction: EdgeDirection,
+    ) -> Result<u64, StorageError>;
 
     /// Scan edges of a specific type with pagination support.
     /// Returns at most `limit` edges starting from `offset`.

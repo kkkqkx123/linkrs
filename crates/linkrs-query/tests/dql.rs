@@ -35,6 +35,8 @@ mod go;
 mod lookup;
 #[path = "dql/match_query.rs"]
 mod match_query;
+#[path = "dql/metadata_count.rs"]
+mod metadata_count;
 #[path = "dql/optimizer.rs"]
 mod optimizer;
 #[path = "dql/scan_edge_identity.rs"]

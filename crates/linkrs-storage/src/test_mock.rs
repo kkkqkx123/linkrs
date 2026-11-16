@@ -237,6 +237,20 @@ impl StorageReader for MockStorage {
         count_edges_by_type(_space: &str, _edge_type: &str) -> Result<u64, StorageError>,
         Ok(0)
     );
+    mock_stub!(
+        &self,
+        count_visible_vertices(_space: &str, _tag: Option<&str>) -> Result<u64, StorageError>,
+        Ok(0)
+    );
+    mock_stub!(
+        &self,
+        count_visible_edges(
+            _space: &str,
+            _edge_type: &str,
+            _direction: EdgeDirection
+        ) -> Result<u64, StorageError>,
+        Ok(0)
+    );
     fn enable_edge_property_index(
         &self,
         space: &str,

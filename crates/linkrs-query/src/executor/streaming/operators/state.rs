@@ -66,6 +66,9 @@ pub enum SourceState {
     Start {
         emitted: bool,
     },
+    MetadataCount {
+        emitted: bool,
+    },
 }
 
 impl SourceState {
@@ -113,6 +116,7 @@ impl SourceState {
                 current_index: 0,
                 col_names: col_names.clone(),
             },
+            SourceSpec::MetadataCount { .. } => SourceState::MetadataCount { emitted: false },
             SourceSpec::GetProp {
                 entity_slot,
                 prop_names,

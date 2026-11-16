@@ -33,6 +33,7 @@ pub fn operator_name(exec: &StreamingExecutor) -> &'static str {
             SourceOperatorKind::GetProp { .. } => "GetProp",
             SourceOperatorKind::Start => "Start",
             SourceOperatorKind::CteScan { .. } => "CteScan",
+            SourceOperatorKind::MetadataCount { .. } => "MetadataCount",
         },
         Unary(_, _, op) => match &op.kind {
             UnaryOperatorKind::Filter { .. } => "Filter",

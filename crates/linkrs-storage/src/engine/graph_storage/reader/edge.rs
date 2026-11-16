@@ -423,6 +423,39 @@ pub(crate) fn out_degree_batch(
     for src_id in src_ids {
         record_vertex_read(ctx, *src_id);
     }
+    // Single-partition single-direction batches visit each edge exactly
+    // once, so per-seed dedup sets only add allocation overhead. Count the
+    // gated adjacency callbacks directly; multi-partition or both-direction
+    // batches keep the dedup path since self-loops and cross-partition
+    // duplicates genuinely repeat there.
+    if resolved.len() == 1 && !matches!(direction, EdgeDirection::Both) {
+        let (edge_label_id, src_label_id, dst_label_id) = resolved[0];
+        let mut counts = vec![0usize; src_ids.len()];
+        if matches!(direction, EdgeDirection::Out) {
+            ctx.visit_out_nbrs_batched(
+                edge_label_id,
+                src_label_id,
+                dst_label_id,
+                src_ids,
+                ts,
+                |index, _, _, _| {
+                    counts[index] += 1;
+                },
+            );
+        } else {
+            ctx.visit_in_nbrs_batched(
+                edge_label_id,
+                src_label_id,
+                dst_label_id,
+                src_ids,
+                ts,
+                |index, _, _, _| {
+                    counts[index] += 1;
+                },
+            );
+        }
+        return Ok(counts);
+    }
     let mut seen: Vec<HashSet<(u32, u32, i64)>> =
         (0..src_ids.len()).map(|_| HashSet::new()).collect();
     for (edge_label_id, src_label_id, dst_label_id) in &resolved {
@@ -816,6 +849,135 @@ pub(crate) fn count_edges_by_type(
     };
 
     Ok(hot_count)
+}
+
+/// Exact visible-edge count for pure `COUNT` queries.
+///
+/// Matches the seed-driven degree sum the count-only expand computes:
+/// every visible edge whose seed-side endpoint is a visible vertex. The
+/// seed side is the source table for `Out` and the destination table for
+/// `In`. Dangling seed-side endpoints are excluded exactly like the degree
+/// sum skips unresolvable seeds, while the far side is never checked,
+/// mirroring the degree sum ignoring far-side existence. A quiescent
+/// hole-free endpoint table skips the per-edge liveness probe; otherwise
+/// each edge is checked against the scan's own live-id set. TTL anywhere
+/// on the path is refused loudly, and typeless endpoint tags are refused:
+/// both hide rows this decode-free walk cannot observe.
+pub(crate) fn count_visible_edges(
+    ctx: &GraphStorageContext,
+    space: &str,
+    edge_type: &str,
+    direction: EdgeDirection,
+) -> StorageResult<u64> {
+    let edge_info = ctx
+        .schema_manager()
+        .get_edge_type(space, edge_type)?
+        .ok_or_else(|| {
+            StorageError::not_found(format!("Edge type {edge_type} not found in space {space}"))
+        })?;
+    if linkrs_core::types::ttl::has_valid_ttl(edge_info.ttl_duration, edge_info.ttl_col.as_deref())
+    {
+        return Err(StorageError::not_supported(format!(
+            "Metadata edge count cannot serve edge type with TTL configured: {edge_type}"
+        )));
+    }
+    if edge_info.src_tag_name.is_empty() || edge_info.dst_tag_name.is_empty() {
+        return Err(StorageError::not_supported(format!(
+            "Metadata edge count requires typed endpoints: {edge_type}"
+        )));
+    }
+    let check_out = match direction {
+        EdgeDirection::Out => true,
+        EdgeDirection::In => false,
+        EdgeDirection::Both => {
+            return Err(StorageError::not_supported(format!(
+                "Metadata edge count refuses undirected walks: {edge_type}"
+            )));
+        }
+    };
+    let endpoint_tag = if check_out {
+        &edge_info.src_tag_name
+    } else {
+        &edge_info.dst_tag_name
+    };
+    if let Some(tag_info) = ctx.schema_manager().get_tag(space, endpoint_tag)? {
+        if linkrs_core::types::ttl::has_valid_ttl(
+            tag_info.ttl_duration,
+            tag_info.ttl_col.as_deref(),
+        ) {
+            return Err(StorageError::not_supported(format!(
+                "Metadata edge count cannot serve endpoint tag with TTL configured: {endpoint_tag}"
+            )));
+        }
+    }
+    let src_label_id: LabelId = match endpoint_label_id(ctx, space, &edge_info.src_tag_name)? {
+        Some(id) => id,
+        None => return Ok(0),
+    };
+    let dst_label_id: LabelId = match endpoint_label_id(ctx, space, &edge_info.dst_tag_name)? {
+        Some(id) => id,
+        None => return Ok(0),
+    };
+    let ts = ctx.get_read_timestamp();
+    let gate = ctx.pending_gate();
+    let guard = ctx.visibility_guard(ts);
+    let endpoint_label = if check_out {
+        src_label_id
+    } else {
+        dst_label_id
+    };
+    let (quiescent_full, live_ids) = ctx.data_store().with_vertex_tables(|vertex_tables| {
+        let Some(table) = vertex_tables.get(&endpoint_label) else {
+            // A missing endpoint table forces the exact walk, which then
+            // finds no live endpoint and counts zero, matching the
+            // seed-driven sum over an empty scan.
+            return (false, Vec::new());
+        };
+        // Hole count first, quiescence fence second (same commit-ordering
+        // argument as the vertex count). A quiescent hole-free table needs
+        // no per-edge liveness probe: every non-empty row key is live.
+        let (live, allocated) = table.approximate_id_hole_stats(ts);
+        if table.max_start_ts() <= ts && live == allocated {
+            return (true, Vec::new());
+        }
+        (false, table.live_ids(&guard))
+    });
+    let key = crate::engine::data_store::EdgeTableKey::new(
+        src_label_id,
+        dst_label_id,
+        edge_info.edge_type_id,
+    );
+    // The walk always follows the query direction leg, exactly like the
+    // seed-driven adjacency visit: a missing leg reads as empty, never as
+    // the stored leg. Edge visibility stays independently snapshot-exact
+    // in both modes.
+    // A missing edge table reads as zero, mirroring the seed-driven sum
+    // over an empty degree batch for a type with no partition yet.
+    let count = ctx
+        .data_store()
+        .with_single_edge_table(&key, |table| {
+            let leg = if check_out {
+                &table.out_csr
+            } else {
+                &table.in_csr
+            };
+            let mut count = 0u64;
+            for (row_vid, nbr) in leg.iter_all() {
+                if !table.is_visible_with_gate(nbr.edge_id, ts, &gate) {
+                    continue;
+                }
+                if !quiescent_full {
+                    let row = row_vid.as_int64().unwrap_or(-1);
+                    if row < 0 || live_ids.binary_search(&(row as u32)).is_err() {
+                        continue;
+                    }
+                }
+                count += 1;
+            }
+            Ok(count)
+        })
+        .unwrap_or(0);
+    Ok(count)
 }
 
 /// Full edge materialization across all types, one type scan at a time.
