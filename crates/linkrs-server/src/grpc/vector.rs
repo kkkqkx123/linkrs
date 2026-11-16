@@ -795,15 +795,37 @@ pub(crate) fn grpc_collection_config(
         None => None,
     };
     let always_ram = parse_optional_param::<bool>(params, "always_ram")?;
-    let mut config = linkrs_query::vector_ddl::build_collection_config(
-        opts.dimension as usize,
-        distance,
+    let options = linkrs_query::vector_ddl::CollectionOptions {
         hnsw_m,
-        hnsw_ef,
+        hnsw_ef_construct: hnsw_ef,
+        hnsw_full_scan_threshold: parse_optional_param::<usize>(
+            params,
+            "hnsw_full_scan_threshold",
+        )?,
+        hnsw_max_indexing_threads: parse_optional_param::<usize>(
+            params,
+            "hnsw_max_indexing_threads",
+        )?,
+        hnsw_on_disk: parse_optional_param::<bool>(params, "hnsw_on_disk")?,
+        hnsw_payload_m: parse_optional_param::<usize>(params, "hnsw_payload_m")?,
         quantization,
         quantile,
         compression,
         always_ram,
+        shard_number: parse_optional_param::<usize>(params, "shard_number")?,
+        replication_factor: parse_optional_param::<usize>(params, "replication_factor")?,
+        write_consistency_factor: parse_optional_param::<usize>(
+            params,
+            "write_consistency_factor",
+        )?,
+        on_disk_payload: parse_optional_param::<bool>(params, "on_disk_payload")?,
+        vectors_on_disk: parse_optional_param::<bool>(params, "vectors_on_disk")?,
+        max_points: parse_optional_param::<u64>(params, "max_points")?,
+    };
+    let mut config = linkrs_query::vector_ddl::build_collection_config(
+        opts.dimension as usize,
+        distance,
+        &options,
     )
     .map_err(Status::invalid_argument)?;
     match kind.as_str() {

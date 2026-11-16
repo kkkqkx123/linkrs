@@ -138,6 +138,11 @@ pub async fn start_service_with_config_path(
     );
 
     // Build the shared vector backend from configuration (Local or Qdrant).
+    //
+    // Configuration is validated before this point, so a failure here is an
+    // environment problem (unwritable directory, unreachable server) and
+    // aborts startup: a silently disabled vector subsystem turns every later
+    // vector query into a confusing "index missing" error.
     #[cfg(feature = "vector")]
     let (vector_backend, local_engine_handle): (
         Option<VectorBackend>,
@@ -146,55 +151,43 @@ pub async fn start_service_with_config_path(
         match config.vector_config().engine {
             linkrs_config::VectorEngineKind::Local => {
                 let data_dir = config.vector_data_dir();
-                match simvec::LocalVectorEngine::open(&data_dir) {
-                    Ok(engine) => {
-                        if let Some(hnsw) = linkrs_api::vector_config::local_hnsw_config(
-                            &config.vector_config().local,
-                        ) {
-                            engine.set_default_hnsw_config(hnsw);
-                        }
-                        if let Some(ivf) = linkrs_api::vector_config::local_ivf_config(
-                            &config.vector_config().local,
-                        ) {
-                            engine.set_default_ivf_config(ivf);
-                        }
-                        if let Some(quant) = linkrs_api::vector_config::local_quantization_config(
-                            &config.vector_config().local,
-                        ) {
-                            engine.set_default_quantization_config(quant);
-                        }
-                        info!("Local vector engine initialized at {}", data_dir.display());
-                        let arc = Arc::new(engine);
-                        let handle = Arc::clone(&arc);
-                        (Some(VectorBackend::from_local_arc(arc)), Some(handle))
-                    }
-                    Err(e) => {
-                        log::warn!(
-                            "Failed to open local vector engine at {}: {}. Vector search will be disabled.",
-                            data_dir.display(),
-                            e
-                        );
-                        (None, None)
-                    }
-                }
+                let engine = linkrs_sync::vector_defaults::assemble_local_engine(
+                    config.vector_config(),
+                    data_dir.clone(),
+                )
+                .map_err(|error| {
+                    linkrs_core::DBError::validation(format!("Vector subsystem: {error}"))
+                })?;
+                info!(
+                    "Local vector engine initialized at {}",
+                    data_dir.display()
+                );
+                (
+                    Some(VectorBackend::from_local_arc_with_limit(
+                        Arc::clone(&engine),
+                        config.vector_config().limits.default_max_points,
+                    )),
+                    Some(engine),
+                )
             }
             #[cfg(feature = "vector-qdrant")]
             linkrs_config::VectorEngineKind::Qdrant => {
                 let client_config =
                     linkrs_sync::backend::qdrant_client_config(&config.vector_config().qdrant);
-                match VectorManager::new(client_config).await {
-                    Ok(vm) => {
-                        info!("VectorManager initialized");
-                        (Some(VectorBackend::qdrant(Arc::new(vm))), None)
-                    }
-                    Err(e) => {
-                        log::warn!(
-                            "Failed to create VectorManager: {}. Vector search will be disabled.",
-                            e
-                        );
-                        (None, None)
-                    }
-                }
+                let manager = VectorManager::new(client_config).await.map_err(|error| {
+                    linkrs_core::DBError::validation(format!("Vector subsystem: {error}"))
+                })?;
+                info!("VectorManager initialized");
+                (
+                    Some(VectorBackend::qdrant_with_defaults(
+                        Arc::new(manager),
+                        linkrs_sync::vector_defaults::CollectionDefaults::from_qdrant(
+                            &config.vector_config().qdrant.collection,
+                            config.vector_config().limits.default_max_points,
+                        ),
+                    )),
+                    None,
+                )
             }
         }
     } else {

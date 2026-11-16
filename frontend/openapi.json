@@ -9043,6 +9043,14 @@
             ],
             "minimum": 0
           },
+          "hnsw_full_scan_threshold": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "HNSW: live-point threshold above which an exact scan collection is\npromoted to a published graph.",
+            "minimum": 0
+          },
           "hnsw_m": {
             "type": [
               "integer",
@@ -9050,6 +9058,45 @@
             ],
             "description": "HNSW overrides",
             "minimum": 0
+          },
+          "hnsw_max_indexing_threads": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "HNSW: build parallelism (`0` = engine default).",
+            "minimum": 0
+          },
+          "hnsw_on_disk": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "HNSW: keep the graph on disk (remote backends only)."
+          },
+          "hnsw_payload_m": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "HNSW: filtered-graph connection cap.",
+            "minimum": 0
+          },
+          "max_points": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Admission cap on live points; `0`/absent means unlimited.",
+            "minimum": 0
+          },
+          "on_disk_payload": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Storage layout: keep payloads on disk instead of in RAM."
           },
           "quantile": {
             "type": [
@@ -9066,6 +9113,22 @@
             ],
             "description": "Quantization: scalar/binary/product/none (case-insensitive). None = disabled."
           },
+          "replication_factor": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Storage layout: replica count (remote backends only).",
+            "minimum": 0
+          },
+          "shard_number": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Storage layout: shard count (remote backends only).",
+            "minimum": 0
+          },
           "space_id": {
             "type": "integer",
             "format": "int64",
@@ -9077,6 +9140,21 @@
           },
           "vector_size": {
             "type": "integer",
+            "minimum": 0
+          },
+          "vectors_on_disk": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Storage layout: keep dense vectors on disk (remote backends only)."
+          },
+          "write_consistency_factor": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Storage layout: acknowledgements required per write (remote only).",
             "minimum": 0
           }
         }
@@ -14706,7 +14784,8 @@
           "points_count",
           "indexed_vectors_count",
           "vector_size",
-          "distance"
+          "distance",
+          "storage"
         ],
         "properties": {
           "collection_name": {
@@ -14727,6 +14806,9 @@
           },
           "status": {
             "type": "string"
+          },
+          "storage": {
+            "$ref": "#/components/schemas/VectorStorageInfo"
           },
           "vector_size": {
             "type": "integer",
@@ -14790,6 +14872,17 @@
           },
           "status": {
             "type": "string"
+          },
+          "storage": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/VectorStorageInfo",
+                "description": "Storage layout of the backing collection; absent when the engine has\nno live collection for this logical index."
+              }
+            ]
           },
           "tag_name": {
             "type": "string"
@@ -15113,6 +15206,60 @@
           "upsert_errors": {
             "type": "integer",
             "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "VectorStorageInfo": {
+        "type": "object",
+        "description": "Storage layout of the physical collection backing a logical index.\n\nMirrors what the engine reports for the collection rather than what the\nrequest asked for, so a caller can tell whether a later request drifted.",
+        "required": [
+          "quantization"
+        ],
+        "properties": {
+          "max_points": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "on_disk_payload": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "quantization": {
+            "type": "string",
+            "description": "Quantization spelling (`scalar` / `binary` / `product`), `none` when\nexact `f32` storage is in force."
+          },
+          "replication_factor": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "shard_number": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "vectors_on_disk": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "write_consistency_factor": {
+            "type": [
+              "integer",
+              "null"
+            ],
             "minimum": 0
           }
         }

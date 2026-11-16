@@ -488,15 +488,16 @@ Linkrs 使用 TOML 格式的配置文件，默认配置文件为 `config.toml`�
 
 向量检索支持两种引擎：`local`（内置，默认）与 `qdrant`（外部服务，需启用 `vector-qdrant` feature）。
 
+整个 `[vector]` 段参与启动期校验（`Config::validate`）：`engine = "qdrant"` 但未启用后端、HNSW `ef_construct < max(2*m, 4)`、量化的类型/参数组合非法、存储阈值越界，都会在启动时报错退出，不再静默关闭向量检索。
+
 ### 13.1 顶层参数
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | enabled | bool | false | 是否启用向量检索（二级索引默认关闭，需显式开启） |
 | engine | String | `"local"` | 引擎类型：`local` 或 `qdrant` |
-| auto_embed_text | bool | false | 写时文本自动向量化（默认关闭；开启后写路径批量调用嵌入服务，失败则写事务失败） |
-| mvcc.ssi_read_set | bool | false | 向量搜索的 MVCC SSI 读集（默认关闭） |
 | collection.granularity | String | `"space"` | 向量集合粒度：`space`（单空间单集合，按`group_id`隔离）或 `field`（单字段单集合，物理隔离） |
+| limits.default_max_points | u64 | 0 | 新集合的活跃点上限（0 不限制）；本地引擎强制执行，远程后端忽略 |
 | embedding | 子节（可选） | 无 | 后端无关嵌入端点（feature `embedding`），本地与远程引擎共享；存在 `[vector.qdrant.embedding]` 时被其覆盖。结构同 §13.3 的 `[vector.qdrant.embedding]` |
 | embedding_query_preprocessor | 子节（可选） | 无 | 读侧预处理器覆盖（feature `embedding`）；共享 `embedding` 配置携带写侧（document）预处理器 |
 | rerank | 子节（可选） | 无 | 召回后重排（feature `rerank`）：`base_url` / `model` / `max_candidates`（1..=100，默认 20）/ `fusion` / `text_field`；缺省禁用零开销，配置非法仅告警并禁用，不阻断启动 |
@@ -527,6 +528,22 @@ Linkrs 使用 TOML 格式的配置文件，默认配置文件为 `config.toml`�
 | quantization.compression | Option\<String\> | null | 压缩比（x4/x8/x16/x32/x64） |
 | quantization.always_ram | Option\<bool\> | null | 量化数据是否常驻内存 |
 | quantization.enabled | bool | false | 是否启用量化 |
+| hnsw.max_indexing_threads | usize | 0 | 图构建并行度（0 引擎默认、1 串行、n≥2 并发） |
+| hnsw.on_disk | Option\<bool\> | null | 图是否落盘（本地引擎仅记录，不落盘） |
+| hnsw.payload_m | usize | 0 | 过滤图每层连接上限（0 由 `m` 推导） |
+| hnsw.stale_rebuild_ratio | Option\<f64\> | null | 覆写比例超过该值触发重建（null 关闭） |
+
+#### [vector.local.storage]
+
+引擎级存储调优，作用于该引擎根目录下的**所有**集合（非单集合布局）。缺省字段保持引擎默认。
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| wal_checkpoint_bytes | Option\<u64\> | 67108864 | WAL 累计字节达到该值触发后台检查点 |
+| compaction_threshold | Option\<f64\> | 0.20 | 墓碑比例触发物理回收，须在 (0,1) |
+| meta_save_interval | Option\<u64\> | 64 | 每 N 个事务落一次 meta.bin |
+| payload_block_size | Option\<usize\> | 128 | payload 块字节数 |
+| payload_page_size_bytes | Option\<usize\> | 33554432 | payload 页字节数，须为块大小的整数倍 |
 
 ### 13.3 Qdrant 引擎 [vector.qdrant]
 
@@ -549,6 +566,24 @@ Linkrs 使用 TOML 格式的配置文件，默认配置文件为 `config.toml`�
 | api_key | Option\<String\> | null | API Key |
 | connect_timeout_secs | u64 | 5 | 连接超时（秒） |
 
+#### [vector.qdrant.collection]
+
+新建集合时的默认布局，仅在 linkrs 创建集合时生效；已存在集合以服务端为准。
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| shard_number | Option\<u32\> | null | 分片数（≥1） |
+| replication_factor | Option\<u32\> | null | 副本数（≥1） |
+| write_consistency_factor | Option\<u32\> | null | 每写需确认的副本数（≥1，且不超过副本数） |
+| on_disk_payload | Option\<bool\> | null | payload 是否落盘 |
+| vectors_on_disk | Option\<bool\> | null | 向量本体是否落盘 |
+| strict_mode_enabled | Option\<bool\> | null | 是否启用严格模式查询限制 |
+| max_points | Option\<u64\> | null | 活跃点上限（本地引擎执行，远程忽略） |
+| hnsw.m / ef_construct / full_scan_threshold / max_indexing_threads / on_disk / payload_m | Option | null | HNSW 默认值，未设字段由服务端默认 |
+| quantization.* | 子节（可选） | 无 | 结构与 §13.2 的 `quantization` 一致 |
+| optimizers.deleted_threshold / vacuum_min_vector_number / default_segment_number / max_segment_size / memmap_threshold / indexing_threshold / flush_interval_sec / max_optimization_threads | Option | null | 段优化器默认值，映射为 Qdrant `optimizers_config` |
+| wal.wal_capacity_mb / wal_segments_ahead | Option\<u64\> | null | 写前日志默认值，映射为 Qdrant `wal_config` |
+
 #### [vector.qdrant.timeout]
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
@@ -558,7 +593,7 @@ Linkrs 使用 TOML 格式的配置文件，默认配置文件为 `config.toml`�
 
 #### [vector.qdrant.embedding]（可选）
 
-未配置时仅支持显式向量读写，`TEXT`向量查询返回明确错误；离线单机部署请保持未配置。已配置时读时文本查询为便利能力，写时自动向量化需另开`auto_embed_text`。
+未配置时仅支持显式向量读写，`TEXT`向量查询返回明确错误；离线单机部署请保持未配置。已配置时仅支持**读时**文本查询（写入仍需显式向量列）；写时自动向量化未实现，`vector.auto_embed_text` 已移除。
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
@@ -869,6 +904,9 @@ index_memory_bytes = 268435456  # 256MB
 [vector]
 enabled = true
 engine = "qdrant"
+
+[vector.qdrant]
+enabled = true
 
 [vector.qdrant.connection]
 host = "qdrant.example.com"

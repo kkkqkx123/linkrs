@@ -214,24 +214,19 @@ impl<
             let backend = match shared_vector_backend {
                 Some(backend) => backend,
                 None => {
-                    let engine = simvec::LocalVectorEngine::open(config.vector_data_dir())
-                        .unwrap_or_else(|_| panic!("Failed to open local vector engine"));
-                    if let Some(hnsw) =
-                        linkrs_api::vector_config::local_hnsw_config(&config.vector_config().local)
-                    {
-                        engine.set_default_hnsw_config(hnsw);
-                    }
-                    if let Some(ivf) =
-                        linkrs_api::vector_config::local_ivf_config(&config.vector_config().local)
-                    {
-                        engine.set_default_ivf_config(ivf);
-                    }
-                    if let Some(quant) = linkrs_api::vector_config::local_quantization_config(
-                        &config.vector_config().local,
-                    ) {
-                        engine.set_default_quantization_config(quant);
-                    }
-                    linkrs_sync::backend::VectorBackend::local(engine)
+                    // This constructor has no error channel (it returns the
+                    // service directly), so an unusable vector subsystem can
+                    // only fail fast. The assembly itself is shared with
+                    // `startup.rs` so both paths apply identical tuning.
+                    let engine = linkrs_sync::vector_defaults::assemble_local_engine(
+                        config.vector_config(),
+                        config.vector_data_dir(),
+                    )
+                    .unwrap_or_else(|error| panic!("Vector subsystem unavailable: {error}"));
+                    linkrs_sync::backend::VectorBackend::from_local_arc_with_limit(
+                        engine,
+                        config.vector_config().limits.default_max_points,
+                    )
                 }
             };
 

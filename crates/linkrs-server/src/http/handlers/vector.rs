@@ -37,6 +37,66 @@ pub struct CreateVectorIndexRequest {
     pub compression: Option<String>,
     /// Keep quantized vectors in RAM
     pub always_ram: Option<bool>,
+    /// HNSW: live-point threshold above which an exact scan collection is
+    /// promoted to a published graph.
+    pub hnsw_full_scan_threshold: Option<usize>,
+    /// HNSW: build parallelism (`0` = engine default).
+    pub hnsw_max_indexing_threads: Option<usize>,
+    /// HNSW: keep the graph on disk (remote backends only).
+    pub hnsw_on_disk: Option<bool>,
+    /// HNSW: filtered-graph connection cap.
+    pub hnsw_payload_m: Option<usize>,
+    /// Storage layout: shard count (remote backends only).
+    pub shard_number: Option<usize>,
+    /// Storage layout: replica count (remote backends only).
+    pub replication_factor: Option<usize>,
+    /// Storage layout: acknowledgements required per write (remote only).
+    pub write_consistency_factor: Option<usize>,
+    /// Storage layout: keep payloads on disk instead of in RAM.
+    pub on_disk_payload: Option<bool>,
+    /// Storage layout: keep dense vectors on disk (remote backends only).
+    pub vectors_on_disk: Option<bool>,
+    /// Admission cap on live points; `0`/absent means unlimited.
+    pub max_points: Option<u64>,
+}
+
+/// Storage layout of the physical collection backing a logical index.
+///
+/// Mirrors what the engine reports for the collection rather than what the
+/// request asked for, so a caller can tell whether a later request drifted.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct VectorStorageInfo {
+    pub vectors_on_disk: Option<bool>,
+    pub on_disk_payload: Option<bool>,
+    pub shard_number: Option<usize>,
+    pub replication_factor: Option<usize>,
+    pub write_consistency_factor: Option<usize>,
+    pub max_points: Option<u64>,
+    /// Quantization spelling (`scalar` / `binary` / `product`), `none` when
+    /// exact `f32` storage is in force.
+    pub quantization: String,
+}
+
+impl VectorStorageInfo {
+    fn from_config(config: &simvec::CollectionConfig) -> Self {
+        let quantization = match config.quantization_config.as_ref() {
+            None => "none".to_string(),
+            Some(cfg) => match cfg.quant_type {
+                simvec::QuantizationType::Scalar { .. } => "scalar".to_string(),
+                simvec::QuantizationType::Binary { .. } => "binary".to_string(),
+                simvec::QuantizationType::Product { .. } => "product".to_string(),
+            },
+        };
+        Self {
+            vectors_on_disk: config.vectors_on_disk,
+            on_disk_payload: config.on_disk_payload,
+            shard_number: config.shard_number,
+            replication_factor: config.replication_factor,
+            write_consistency_factor: config.write_consistency_factor,
+            max_points: config.max_points,
+            quantization,
+        }
+    }
 }
 
 fn default_distance() -> DistanceMetric {
@@ -54,6 +114,9 @@ pub struct VectorIndexInfo {
     pub distance: String,
     pub points_count: u64,
     pub status: String,
+    /// Storage layout of the backing collection; absent when the engine has
+    /// no live collection for this logical index.
+    pub storage: Option<VectorStorageInfo>,
 }
 
 /// Vector search request
@@ -126,6 +189,7 @@ pub struct VectorIndexDetailsResponse {
     pub indexed_vectors_count: u64,
     pub vector_size: usize,
     pub distance: String,
+    pub storage: VectorStorageInfo,
 }
 
 #[utoipa::path(
@@ -210,15 +274,28 @@ pub async fn create_index<
             },
             None => None,
         };
+        let options = linkrs_query::vector_ddl::CollectionOptions {
+            hnsw_m: request.hnsw_m,
+            hnsw_ef_construct: request.hnsw_ef_construct,
+            hnsw_full_scan_threshold: request.hnsw_full_scan_threshold,
+            hnsw_max_indexing_threads: request.hnsw_max_indexing_threads,
+            hnsw_on_disk: request.hnsw_on_disk,
+            hnsw_payload_m: request.hnsw_payload_m,
+            quantization,
+            quantile: request.quantile,
+            compression,
+            always_ram: request.always_ram,
+            shard_number: request.shard_number,
+            replication_factor: request.replication_factor,
+            write_consistency_factor: request.write_consistency_factor,
+            on_disk_payload: request.on_disk_payload,
+            vectors_on_disk: request.vectors_on_disk,
+            max_points: request.max_points,
+        };
         let config = linkrs_query::vector_ddl::build_collection_config(
             request.vector_size,
             request.distance,
-            request.hnsw_m,
-            request.hnsw_ef_construct,
-            quantization,
-            request.quantile,
-            compression,
-            request.always_ram,
+            &options,
         )
         .map_err(HttpError::BadRequest)?;
         let collection_name = vector_api
@@ -340,6 +417,7 @@ pub async fn get_index_info<
                 indexed_vectors_count: 0,
                 vector_size: info.config.vector_size,
                 distance: format!("{:?}", info.config.distance),
+                storage: VectorStorageInfo::from_config(&info.config),
             })),
             Ok(None) => Err(HttpError::NotFound("Vector index not found".to_string())),
             Err(e) => Err(HttpError::InternalError(e.to_string())),
@@ -385,13 +463,14 @@ pub async fn list_indexes<
     if let Some(vector_api) = vector_api {
         let mut indexes = Vec::new();
         for (wrapper, meta) in vector_api.list_indexes() {
-            let (vector_size, distance, points_count) = match meta {
+            let (vector_size, distance, points_count, storage) = match meta {
                 Some(info) => (
                     info.config.vector_size,
                     format!("{:?}", info.config.distance),
                     info.vector_count,
+                    Some(VectorStorageInfo::from_config(&info.config)),
                 ),
-                None => (0, "Cosine".to_string(), 0),
+                None => (0, "Cosine".to_string(), 0, None),
             };
             indexes.push(VectorIndexInfo {
                 name: wrapper.collection_name,
@@ -402,6 +481,7 @@ pub async fn list_indexes<
                 distance,
                 points_count,
                 status: "green".to_string(),
+                storage,
             });
         }
         let count = indexes.len();

@@ -499,6 +499,8 @@ impl Config {
         #[cfg(feature = "embedded")]
         self.embedded.validate()?;
         self.fulltext.validate()?;
+        #[cfg(feature = "vector")]
+        self.vector.validate()?;
         Ok(())
     }
 
@@ -1245,6 +1247,9 @@ fusion = "linear_weighted"
         assert!(bad_window.validate().is_err());
     }
 
+    #[cfg(feature = "rerank")]
+    use llm_rerank::{RerankConfig, RerankFusionStrategy};
+
     #[cfg(feature = "server")]
     #[test]
     fn test_generate_bootstrap_password_has_expected_length() {
@@ -1526,6 +1531,9 @@ index_memory_bytes = 268435456
 [vector]
 enabled = true
 engine = "qdrant"
+
+[vector.qdrant]
+enabled = true
 
 [vector.qdrant.connection]
 host = "qdrant.example.com"

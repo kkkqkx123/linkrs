@@ -99,6 +99,21 @@ pub struct HnswSettings {
     pub iterative_max_rounds: usize,
     #[serde(default)]
     pub max_scan_tuples: u64,
+    /// Graph build parallelism. `0` leaves the engine default; `1` builds
+    /// sequentially; `n >= 2` inserts disjoint slot subsets concurrently.
+    #[serde(default)]
+    pub max_indexing_threads: usize,
+    /// Whether the graph lives on disk. Local engine only documents the
+    /// value: it keeps published graphs in memory and never spills them.
+    #[serde(default)]
+    pub on_disk: Option<bool>,
+    /// Per-layer connection cap for filtered graphs. `0` derives it from `m`.
+    #[serde(default)]
+    pub payload_m: usize,
+    /// Overwrite-upsert ratio after which the graph is rebuilt to recover
+    /// recall. Absent disables the staleness trigger.
+    #[serde(default)]
+    pub stale_rebuild_ratio: Option<f64>,
 }
 
 impl Default for HnswSettings {
@@ -110,6 +125,10 @@ impl Default for HnswSettings {
             ef_search: 0,
             iterative_max_rounds: 0,
             max_scan_tuples: 0,
+            max_indexing_threads: 0,
+            on_disk: None,
+            payload_m: 0,
+            stale_rebuild_ratio: None,
         }
     }
 }
@@ -137,6 +156,27 @@ pub struct QuantizationSettings {
     pub enabled: bool,
 }
 
+/// Storage tuning for the local engine (`[vector.local.storage]`).
+///
+/// These knobs describe the host IO profile (log size, checkpoint cadence,
+/// payload page geometry) rather than one collection's layout, so they apply
+/// to every collection under the engine root. Every field is optional: absent
+/// keeps the engine default, so an existing configuration is unaffected.
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct LocalStorageSettings {
+    #[serde(default)]
+    pub wal_checkpoint_bytes: Option<u64>,
+    #[serde(default)]
+    pub compaction_threshold: Option<f64>,
+    #[serde(default)]
+    pub meta_save_interval: Option<u64>,
+    #[serde(default)]
+    pub payload_block_size: Option<usize>,
+    #[serde(default)]
+    pub payload_page_size_bytes: Option<usize>,
+}
+
 /// Local vector engine configuration
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
 #[serde(deny_unknown_fields)]
@@ -149,14 +189,30 @@ pub struct LocalVectorConfig {
     pub ivf: Option<IvfSettings>,
     #[serde(default)]
     pub quantization: Option<QuantizationSettings>,
+    #[serde(default)]
+    pub storage: Option<LocalStorageSettings>,
 }
 
-/// MVCC settings for vector search (default off).
-#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Default)]
+/// Cross-backend limits (`[vector.limits]`).
+///
+/// Only backends that enforce a limit act on it: the local engine refuses
+/// writes past `default_max_points`, the remote backend ignores it (its
+/// capacity is governed server-side).
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq)]
 #[serde(deny_unknown_fields)]
-pub struct VectorMvccConfig {
+pub struct VectorLimitsConfig {
+    /// Live-point cap applied to collections created without an explicit
+    /// `max_points`. `0` disables the cap.
     #[serde(default)]
-    pub ssi_read_set: bool,
+    pub default_max_points: u64,
+}
+
+impl Default for VectorLimitsConfig {
+    fn default() -> Self {
+        Self {
+            default_max_points: 0,
+        }
+    }
 }
 
 /// Collection granularity for vector indexes.
@@ -332,6 +388,94 @@ impl Default for QdrantTimeoutConfig {
     }
 }
 
+/// Collection defaults applied when a logical index creates a qdrant
+/// collection (`[vector.qdrant.collection]`).
+///
+/// Only consulted at creation time: an existing collection keeps the layout
+/// the server reports, matching the fact that most qdrant storage knobs are
+/// immutable after creation.
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Default)]
+#[serde(deny_unknown_fields)]
+pub struct QdrantCollectionConfig {
+    #[serde(default)]
+    pub shard_number: Option<u32>,
+    #[serde(default)]
+    pub replication_factor: Option<u32>,
+    #[serde(default)]
+    pub write_consistency_factor: Option<u32>,
+    /// Keep payloads on disk instead of in RAM.
+    #[serde(default)]
+    pub on_disk_payload: Option<bool>,
+    /// Keep the dense vectors themselves on disk.
+    #[serde(default)]
+    pub vectors_on_disk: Option<bool>,
+    /// Live-point admission cap; enforced by the local engine only.
+    #[serde(default)]
+    pub max_points: Option<u64>,
+    #[serde(default)]
+    pub hnsw: Option<QdrantHnswSettings>,
+    #[serde(default)]
+    pub quantization: Option<QuantizationSettings>,
+    #[serde(default)]
+    pub optimizers: Option<QdrantOptimizersSettings>,
+    #[serde(default)]
+    pub wal: Option<QdrantWalSettings>,
+    /// Whether the server enforces strict-mode query limits.
+    #[serde(default)]
+    pub strict_mode_enabled: Option<bool>,
+}
+
+/// HNSW defaults for qdrant collections. Every field is optional so a caller
+/// overrides one knob without restating the server defaults.
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Default)]
+#[serde(deny_unknown_fields)]
+pub struct QdrantHnswSettings {
+    #[serde(default)]
+    pub m: Option<usize>,
+    #[serde(default)]
+    pub ef_construct: Option<usize>,
+    #[serde(default)]
+    pub full_scan_threshold: Option<usize>,
+    #[serde(default)]
+    pub max_indexing_threads: Option<usize>,
+    #[serde(default)]
+    pub on_disk: Option<bool>,
+    #[serde(default)]
+    pub payload_m: Option<usize>,
+}
+
+/// Segment-optimizer defaults for qdrant collections.
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Default)]
+#[serde(deny_unknown_fields)]
+pub struct QdrantOptimizersSettings {
+    #[serde(default)]
+    pub deleted_threshold: Option<f64>,
+    #[serde(default)]
+    pub vacuum_min_vector_number: Option<u64>,
+    #[serde(default)]
+    pub default_segment_number: Option<u64>,
+    #[serde(default)]
+    pub max_segment_size: Option<u64>,
+    #[serde(default)]
+    pub memmap_threshold: Option<u64>,
+    #[serde(default)]
+    pub indexing_threshold: Option<u64>,
+    #[serde(default)]
+    pub flush_interval_sec: Option<u64>,
+    #[serde(default)]
+    pub max_optimization_threads: Option<u64>,
+}
+
+/// Write-ahead log defaults for qdrant collections.
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Default)]
+#[serde(deny_unknown_fields)]
+pub struct QdrantWalSettings {
+    #[serde(default)]
+    pub wal_capacity_mb: Option<u64>,
+    #[serde(default)]
+    pub wal_segments_ahead: Option<u64>,
+}
+
 /// Remote Qdrant service configuration.
 ///
 /// TOML surface matches the client crate's config so existing `[vector.qdrant]`
@@ -347,6 +491,9 @@ pub struct QdrantConfig {
     pub connection: QdrantConnectionConfig,
     #[serde(default)]
     pub timeout: QdrantTimeoutConfig,
+    /// Creation-time collection defaults.
+    #[serde(default)]
+    pub collection: QdrantCollectionConfig,
     /// Per-engine embedding endpoint; overrides the shared
     /// `[vector.embedding]` when both are set.
     #[cfg(feature = "embedding")]
@@ -361,6 +508,7 @@ impl QdrantConfig {
             enabled: false,
             connection: QdrantConnectionConfig::default(),
             timeout: QdrantTimeoutConfig::default(),
+            collection: QdrantCollectionConfig::default(),
             #[cfg(feature = "embedding")]
             embedding: None,
         }
@@ -387,22 +535,12 @@ pub struct VectorConfig {
     #[serde(default)]
     pub qdrant: QdrantConfig,
     #[serde(default)]
-    pub mvcc: VectorMvccConfig,
-    #[serde(default)]
     pub collection: VectorCollectionConfig,
+    /// Cross-backend admission limits.
+    #[serde(default)]
+    pub limits: VectorLimitsConfig,
     #[serde(default)]
     pub retention: OutboxRetentionConfig,
-    /// Optional write-time text-to-vector conversion.
-    ///
-    /// The write path only persists explicit vector columns by default.
-    /// Text queries are a read-time convenience resolved through the
-    /// embedding service. When enabled, vertex writes embed text fields
-    /// that already have a vector index and stage the resulting vectors
-    /// alongside the original properties. Explicit vectors win over
-    /// auto-embedded values for the same field. Failures fail the staged
-    /// write so deployments pay the embedding availability cost directly.
-    #[serde(default)]
-    pub auto_embed_text: bool,
     /// Backend-independent embedding endpoint shared by the local engine
     /// and the remote client. `[vector.qdrant.embedding]` overrides it
     /// when both are set.
@@ -434,10 +572,9 @@ impl fmt::Debug for VectorConfig {
         debug
             .field("enabled", &self.enabled)
             .field("engine", &self.engine)
-            .field("mvcc", &self.mvcc)
             .field("collection", &self.collection)
-            .field("retention", &self.retention)
-            .field("auto_embed_text", &self.auto_embed_text);
+            .field("limits", &self.limits)
+            .field("retention", &self.retention);
         #[cfg(feature = "embedding")]
         debug.field("embedding_configured", &self.embedding.is_some());
         #[cfg(feature = "vector-qdrant")]
@@ -456,10 +593,9 @@ impl Default for VectorConfig {
             local: LocalVectorConfig::default(),
             #[cfg(feature = "vector-qdrant")]
             qdrant: QdrantConfig::disabled(),
-            mvcc: VectorMvccConfig::default(),
             collection: VectorCollectionConfig::default(),
+            limits: VectorLimitsConfig::default(),
             retention: OutboxRetentionConfig::default(),
-            auto_embed_text: false,
             #[cfg(feature = "embedding")]
             embedding: None,
             #[cfg(feature = "embedding")]
@@ -467,5 +603,321 @@ impl Default for VectorConfig {
             #[cfg(feature = "rerank")]
             rerank: None,
         }
+    }
+}
+
+// ── Validation ───────────────────────────────────────────────────────────
+//
+// Every check here is static: it can be answered without an embedding
+// service, a live qdrant, or a concrete collection dimension. Anything that
+// needs runtime state (vector size vs. embedding dimension, server version)
+// stays where it already happens — engine assembly and collection creation.
+
+impl HnswSettings {
+    /// Validate the graph parameters using the same floor the engines apply
+    /// (`ef_construct >= max(2*m, 4)`). A zero value means "engine default"
+    /// and is validated against the default it will resolve to.
+    pub fn validate(&self) -> Result<(), String> {
+        let m = if self.m == 0 { default_hnsw_m() } else { self.m };
+        let ef = if self.ef_construct == 0 {
+            default_hnsw_ef_construct()
+        } else {
+            self.ef_construct
+        };
+        let min_ef = (2 * m).max(4);
+        if ef < min_ef {
+            return Err(format!(
+                "hnsw.ef_construct {ef} must be >= max(2*m, 4) = {min_ef} (m = {m})"
+            ));
+        }
+        if let Some(ratio) = self.stale_rebuild_ratio {
+            if !(ratio > 0.0 && ratio < 1.0) {
+                return Err(format!(
+                    "hnsw.stale_rebuild_ratio {ratio} must be within (0, 1)"
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+impl IvfSettings {
+    /// Validate the coarse-quantizer parameters.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.lists > 0 && self.default_nprobe as u32 > self.lists {
+            return Err(format!(
+                "ivf.default_nprobe {} must not exceed ivf.lists {}",
+                self.default_nprobe, self.lists
+            ));
+        }
+        if self.lists > 0 && self.max_probes > 0 && self.max_probes as u32 > self.lists {
+            return Err(format!(
+                "ivf.max_probes {} must not exceed ivf.lists {}",
+                self.max_probes, self.lists
+            ));
+        }
+        if self.drift_threshold <= 0.0 || self.drift_threshold >= 1.0 {
+            return Err(format!(
+                "ivf.drift_threshold {} must be within (0, 1)",
+                self.drift_threshold
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl QuantizationSettings {
+    /// Validate the quantization selector. A disabled block is always valid;
+    /// an enabled one must name a supported type and carry only the
+    /// parameters that type understands.
+    pub fn validate(&self) -> Result<(), String> {
+        if !self.enabled {
+            return Ok(());
+        }
+        let kind = self
+            .quantization_type
+            .as_deref()
+            .map(str::to_lowercase)
+            .unwrap_or_default();
+        match kind.as_str() {
+            "scalar" => {
+                if let Some(quantile) = self.quantile {
+                    if !(quantile > 0.0 && quantile <= 1.0) {
+                        return Err(format!(
+                            "quantization.quantile {quantile} must be within (0, 1]"
+                        ));
+                    }
+                }
+                if self.compression.is_some() {
+                    return Err(
+                        "quantization.compression is only valid for product quantization"
+                            .to_string(),
+                    );
+                }
+            }
+            "binary" => {
+                if self.compression.is_some() {
+                    return Err(
+                        "quantization.compression is only valid for product quantization"
+                            .to_string(),
+                    );
+                }
+            }
+            "product" | "pq" => {
+                if let Some(compression) = self.compression.as_deref() {
+                    let normalized = compression.to_lowercase();
+                    if !matches!(
+                        normalized.as_str(),
+                        "x4" | "4" | "x8" | "8" | "x16" | "16" | "x32" | "32" | "x64" | "64"
+                    ) {
+                        return Err(format!(
+                            "quantization.compression '{compression}' must be one of \
+                             x4/x8/x16/x32/x64"
+                        ));
+                    }
+                }
+            }
+            "" => {
+                return Err(
+                    "quantization.enabled is true but quantization.quantization_type is missing"
+                        .to_string(),
+                )
+            }
+            other => {
+                return Err(format!(
+                    "unknown quantization.quantization_type '{other}'; expected \
+                     scalar, binary or product"
+                ))
+            }
+        }
+        Ok(())
+    }
+}
+
+impl LocalStorageSettings {
+    /// Validate the storage tuning block against the engine's structural
+    /// requirements (page geometry must divide evenly, ratios must be usable).
+    pub fn validate(&self) -> Result<(), String> {
+        if let Some(bytes) = self.wal_checkpoint_bytes {
+            if bytes == 0 {
+                return Err("storage.wal_checkpoint_bytes must be >= 1".to_string());
+            }
+        }
+        if let Some(threshold) = self.compaction_threshold {
+            if !(threshold > 0.0 && threshold < 1.0) {
+                return Err(format!(
+                    "storage.compaction_threshold {threshold} must be within (0, 1)"
+                ));
+            }
+        }
+        if let Some(interval) = self.meta_save_interval {
+            if interval == 0 {
+                return Err("storage.meta_save_interval must be >= 1".to_string());
+            }
+        }
+        if let Some(block) = self.payload_block_size {
+            if block == 0 {
+                return Err("storage.payload_block_size must be >= 1".to_string());
+            }
+        }
+        if let Some(page) = self.payload_page_size_bytes {
+            if page == 0 {
+                return Err("storage.payload_page_size_bytes must be >= 1".to_string());
+            }
+            if let Some(block) = self.payload_block_size {
+                if block > 0 && page % block != 0 {
+                    return Err(format!(
+                        "storage.payload_page_size_bytes {page} must be a multiple of \
+                         storage.payload_block_size {block}"
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+impl LocalVectorConfig {
+    /// Validate every sub-block that is present.
+    pub fn validate(&self) -> Result<(), String> {
+        if let Some(hnsw) = &self.hnsw {
+            hnsw.validate()?;
+        }
+        if let Some(ivf) = &self.ivf {
+            ivf.validate()?;
+        }
+        if let Some(quantization) = &self.quantization {
+            quantization.validate()?;
+        }
+        if let Some(storage) = &self.storage {
+            storage.validate()?;
+        }
+        Ok(())
+    }
+}
+
+impl VectorLimitsConfig {
+    /// Validate the admission limits.
+    pub fn validate(&self) -> Result<(), String> {
+        // `0` means "no cap"; every other value is a legal cap.
+        Ok(())
+    }
+}
+
+impl QdrantHnswSettings {
+    /// Validate the graph parameters against the defaults they resolve to.
+    pub fn validate(&self) -> Result<(), String> {
+        let m = self.m.unwrap_or(default_hnsw_m());
+        let ef = self.ef_construct.unwrap_or(default_hnsw_ef_construct());
+        let min_ef = (2 * m).max(4);
+        if ef < min_ef {
+            return Err(format!(
+                "collection.hnsw.ef_construct {ef} must be >= max(2*m, 4) = {min_ef} (m = {m})"
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl QdrantOptimizersSettings {
+    /// Validate the segment-optimizer block.
+    pub fn validate(&self) -> Result<(), String> {
+        if let Some(threshold) = self.deleted_threshold {
+            if !(threshold > 0.0 && threshold < 1.0) {
+                return Err(format!(
+                    "collection.optimizers.deleted_threshold {threshold} must be within (0, 1)"
+                ));
+            }
+        }
+        if self.max_segment_size == Some(0) {
+            return Err("collection.optimizers.max_segment_size must be >= 1".to_string());
+        }
+        if self.indexing_threshold == Some(0) {
+            return Err("collection.optimizers.indexing_threshold must be >= 1".to_string());
+        }
+        if self.memmap_threshold == Some(0) {
+            return Err("collection.optimizers.memmap_threshold must be >= 1".to_string());
+        }
+        Ok(())
+    }
+}
+
+impl QdrantWalSettings {
+    /// Validate the write-ahead-log block.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.wal_capacity_mb == Some(0) {
+            return Err("collection.wal.wal_capacity_mb must be >= 1".to_string());
+        }
+        Ok(())
+    }
+}
+
+impl QdrantCollectionConfig {
+    /// Validate the creation-time collection defaults.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.shard_number == Some(0) {
+            return Err("collection.shard_number must be >= 1".to_string());
+        }
+        if self.replication_factor == Some(0) {
+            return Err("collection.replication_factor must be >= 1".to_string());
+        }
+        if self.write_consistency_factor == Some(0) {
+            return Err("collection.write_consistency_factor must be >= 1".to_string());
+        }
+        if let (Some(write), Some(replication)) =
+            (self.write_consistency_factor, self.replication_factor)
+        {
+            if write > replication {
+                return Err(format!(
+                    "collection.write_consistency_factor {write} must not exceed \
+                     collection.replication_factor {replication}"
+                ));
+            }
+        }
+        if self.max_points == Some(0) {
+            return Err("collection.max_points must be >= 1 when set".to_string());
+        }
+        if let Some(hnsw) = &self.hnsw {
+            hnsw.validate()?;
+        }
+        if let Some(quantization) = &self.quantization {
+            quantization.validate()?;
+        }
+        if let Some(optimizers) = &self.optimizers {
+            optimizers.validate()?;
+        }
+        if let Some(wal) = &self.wal {
+            wal.validate()?;
+        }
+        Ok(())
+    }
+}
+
+#[cfg(feature = "vector-qdrant")]
+impl QdrantConfig {
+    /// Validate the remote backend block, including the engine/backend
+    /// enablement cross-check that previously only surfaced as a silently
+    /// dropped vector subsystem.
+    pub fn validate(&self, engine: VectorEngineKind) -> Result<(), String> {
+        if engine == VectorEngineKind::Qdrant && !self.enabled {
+            return Err(
+                "vector.engine is \"qdrant\" but vector.qdrant.enabled is false; enable the \
+                 backend or set vector.engine = \"local\""
+                    .to_string(),
+            );
+        }
+        self.collection.validate()
+    }
+}
+
+impl VectorConfig {
+    /// Validate the whole vector section. Called from `Config::validate` so a
+    /// bad value fails startup instead of degrading the subsystem at runtime.
+    pub fn validate(&self) -> Result<(), String> {
+        self.local.validate()?;
+        self.limits.validate()?;
+        #[cfg(feature = "vector-qdrant")]
+        self.qdrant.validate(self.engine)?;
+        Ok(())
     }
 }

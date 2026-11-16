@@ -11,6 +11,11 @@ use std::collections::HashSet;
 ///    (is_/as_/as_mut_ + the unified `define_all_plan_nodes!` table;
 ///    compiler-enforced),
 /// 2. this mirror list (test-enforced against the macro table).
+///
+/// `REMOVE` is deliberately absent from both lists: `RemovePlanner` rejects a
+/// standalone REMOVE with a user-facing error before any plan node is built
+/// (`planning::statements::dml::remove_planner`), so there is no `Remove`
+/// variant to mirror. Do not re-add it until that path produces a plan node.
 #[cfg(not(feature = "vector"))]
 const DOCUMENTED_NAMES: &[&str] = &[
     // Access (7)
@@ -157,7 +162,6 @@ const DOCUMENTED_NAMES: &[&str] = &[
     "Savepoint",
     "ReleaseSavepoint",
     "DataCollect",
-    "Remove",
     "PatternApply",
     "RollUpApply",
     "CorrelatedApply",

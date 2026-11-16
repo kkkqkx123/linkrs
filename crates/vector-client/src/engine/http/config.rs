@@ -2,8 +2,9 @@ use serde_json::{json, Value};
 
 use crate::error::VectorClientError;
 use crate::types::{
-    CompressionRatio, DistanceMetric, HnswConfig, IndexConfig, PayloadSchemaType,
-    QuantizationConfig, QuantizationType, DEFAULT_WITH_PAYLOAD,
+    CollectionConfig, CompressionRatio, DistanceMetric, HnswConfig, IndexConfig,
+    OptimizersHints, PayloadSchemaType, QuantizationConfig, QuantizationType, StorageHints,
+    WalHints, DEFAULT_WITH_PAYLOAD,
 };
 
 /// Translate a shared metric into Qdrant's REST spelling.
@@ -134,37 +135,89 @@ fn build_quantization_json(qt: &QuantizationType) -> Value {
     Value::Object(outer)
 }
 
-#[allow(clippy::too_many_arguments)]
+/// Build the REST body for `PUT /collections/{name}`.
+///
+/// Every storage knob the shared [`CollectionConfig`] can express is emitted
+/// here; `None` leaves the server default untouched.
 pub fn build_create_collection_body(
-    _name: &str,
-    vector_size: usize,
-    distance: DistanceMetric,
-    index: &IndexConfig,
-    quantization_config: &Option<QuantizationConfig>,
-    on_disk_payload: Option<bool>,
-    shard_number: Option<usize>,
-    replication_factor: Option<usize>,
-    write_consistency_factor: Option<usize>,
+    cfg: &CollectionConfig,
 ) -> Result<Value, VectorClientError> {
-    let vectors = build_vectors_json(vector_size, distance, index, quantization_config)?;
+    let mut vectors = build_vectors_json(
+        cfg.vector_size,
+        cfg.distance,
+        &cfg.index,
+        &cfg.quantization_config,
+    )?;
+
+    // `vectors.on_disk` lives next to size/distance rather than at the
+    // collection level.
+    if let Some(on_disk) = cfg.vectors_on_disk {
+        if let Value::Object(ref mut map) = vectors {
+            map.insert("on_disk".to_string(), json!(on_disk));
+        }
+    }
 
     let mut body = serde_json::Map::new();
     body.insert("vectors".to_string(), vectors);
 
-    if let Some(on_disk) = on_disk_payload {
+    if let Some(on_disk) = cfg.on_disk_payload {
         body.insert("on_disk_payload".to_string(), json!(on_disk));
     }
 
-    if let Some(shards) = shard_number {
+    if let Some(shards) = cfg.shard_number {
         body.insert("shard_number".to_string(), json!(shards));
     }
 
-    if let Some(rf) = replication_factor {
+    if let Some(rf) = cfg.replication_factor {
         body.insert("replication_factor".to_string(), json!(rf));
     }
 
-    if let Some(wcf) = write_consistency_factor {
+    if let Some(wcf) = cfg.write_consistency_factor {
         body.insert("write_consistency_factor".to_string(), json!(wcf));
+    }
+
+    if let Some(hints) = cfg.storage_hints.as_ref() {
+        if let Some(optimizers) = hints.optimizers.as_ref() {
+            let mut obj = serde_json::Map::new();
+            if let Some(v) = optimizers.deleted_threshold {
+                obj.insert("deleted_threshold".to_string(), json!(v));
+            }
+            if let Some(v) = optimizers.vacuum_min_vector_number {
+                obj.insert("vacuum_min_vector_number".to_string(), json!(v));
+            }
+            if let Some(v) = optimizers.default_segment_number {
+                obj.insert("default_segment_number".to_string(), json!(v));
+            }
+            if let Some(v) = optimizers.max_segment_size {
+                obj.insert("max_segment_size".to_string(), json!(v));
+            }
+            if let Some(v) = optimizers.memmap_threshold {
+                obj.insert("memmap_threshold".to_string(), json!(v));
+            }
+            if let Some(v) = optimizers.indexing_threshold {
+                obj.insert("indexing_threshold".to_string(), json!(v));
+            }
+            if let Some(v) = optimizers.flush_interval_sec {
+                obj.insert("flush_interval_sec".to_string(), json!(v));
+            }
+            if let Some(v) = optimizers.max_optimization_threads {
+                obj.insert("max_optimization_threads".to_string(), json!(v));
+            }
+            body.insert("optimizers_config".to_string(), Value::Object(obj));
+        }
+        if let Some(wal) = hints.wal.as_ref() {
+            let mut obj = serde_json::Map::new();
+            if let Some(v) = wal.wal_capacity_mb {
+                obj.insert("wal_capacity_mb".to_string(), json!(v));
+            }
+            if let Some(v) = wal.wal_segments_ahead {
+                obj.insert("wal_segments_ahead".to_string(), json!(v));
+            }
+            body.insert("wal_config".to_string(), Value::Object(obj));
+        }
+        if let Some(enabled) = hints.strict_mode_enabled {
+            body.insert("strict_mode_config".to_string(), json!({ "enabled": enabled }));
+        }
     }
 
     Ok(Value::Object(body))
@@ -359,18 +412,8 @@ mod tests {
 
     #[test]
     fn test_build_create_collection_body() {
-        let body = build_create_collection_body(
-            "test",
-            384,
-            DistanceMetric::Cosine,
-            &IndexConfig::default(),
-            &None,
-            None,
-            None,
-            None,
-            None,
-        )
-        .unwrap();
+        let cfg = CollectionConfig::new(384, DistanceMetric::Cosine);
+        let body = build_create_collection_body(&cfg).unwrap();
         let vectors = body.get("vectors").unwrap();
         assert_eq!(vectors.get("size").unwrap().as_u64(), Some(384));
         assert_eq!(vectors.get("distance").unwrap().as_str(), Some("Cosine"));
@@ -378,18 +421,8 @@ mod tests {
 
     #[test]
     fn test_build_create_collection_body_with_manhattan() {
-        let body = build_create_collection_body(
-            "test",
-            64,
-            DistanceMetric::Manhattan,
-            &IndexConfig::default(),
-            &None,
-            None,
-            None,
-            None,
-            None,
-        )
-        .unwrap();
+        let cfg = CollectionConfig::new(64, DistanceMetric::Manhattan);
+        let body = build_create_collection_body(&cfg).unwrap();
         let vectors = body.get("vectors").unwrap();
         assert_eq!(vectors.get("size").unwrap().as_u64(), Some(64));
         assert_eq!(vectors.get("distance").unwrap().as_str(), Some("Manhattan"));
@@ -398,18 +431,8 @@ mod tests {
     #[test]
     fn test_build_create_collection_body_with_hnsw() {
         let hnsw = HnswConfig::new(32, 200).with_on_disk(true);
-        let body = build_create_collection_body(
-            "test",
-            128,
-            DistanceMetric::Dot,
-            &IndexConfig::Hnsw(hnsw),
-            &None,
-            None,
-            None,
-            None,
-            None,
-        )
-        .unwrap();
+        let cfg = CollectionConfig::new(128, DistanceMetric::Dot).with_hnsw(hnsw);
+        let body = build_create_collection_body(&cfg).unwrap();
         let vectors = body.get("vectors").unwrap();
         let hnsw_json = vectors.get("hnsw_config").unwrap();
         assert_eq!(hnsw_json.get("m").unwrap().as_u64(), Some(32));
@@ -419,56 +442,74 @@ mod tests {
 
     #[test]
     fn test_build_create_collection_body_with_shards() {
-        let body = build_create_collection_body(
-            "test",
-            384,
-            DistanceMetric::Cosine,
-            &IndexConfig::default(),
-            &None,
-            None,
-            Some(3),
-            None,
-            None,
-        )
-        .unwrap();
+        let cfg = CollectionConfig::new(384, DistanceMetric::Cosine).with_shard_number(3);
+        let body = build_create_collection_body(&cfg).unwrap();
         assert_eq!(body.get("shard_number").unwrap().as_u64(), Some(3));
     }
 
     #[test]
     fn test_build_create_collection_body_on_disk_payload() {
-        let body = build_create_collection_body(
-            "test",
-            384,
-            DistanceMetric::Cosine,
-            &IndexConfig::default(),
-            &None,
-            Some(true),
-            None,
-            None,
-            None,
-        )
-        .unwrap();
+        let cfg = CollectionConfig::new(384, DistanceMetric::Cosine).with_on_disk_payload(true);
+        let body = build_create_collection_body(&cfg).unwrap();
         assert_eq!(body.get("on_disk_payload").unwrap().as_bool(), Some(true));
     }
 
     #[test]
     fn test_build_create_collection_body_with_replication() {
-        let body = build_create_collection_body(
-            "test",
-            384,
-            DistanceMetric::Cosine,
-            &IndexConfig::default(),
-            &None,
-            None,
-            None,
-            Some(2),
-            Some(1),
-        )
-        .unwrap();
+        let mut cfg = CollectionConfig::new(384, DistanceMetric::Cosine);
+        cfg.replication_factor = Some(2);
+        cfg.write_consistency_factor = Some(1);
+        let body = build_create_collection_body(&cfg).unwrap();
         assert_eq!(body.get("replication_factor").unwrap().as_u64(), Some(2));
         assert_eq!(
             body.get("write_consistency_factor").unwrap().as_u64(),
             Some(1)
+        );
+    }
+
+    #[test]
+    fn test_build_create_collection_body_vectors_on_disk() {
+        let cfg = CollectionConfig::new(384, DistanceMetric::Cosine).with_vectors_on_disk(true);
+        let body = build_create_collection_body(&cfg).unwrap();
+        assert_eq!(
+            body.get("vectors")
+                .and_then(|vectors| vectors.get("on_disk"))
+                .and_then(|value| value.as_bool()),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn test_build_create_collection_body_storage_hints() {
+        let hints = StorageHints {
+            optimizers: Some(OptimizersHints {
+                deleted_threshold: Some(0.3),
+                memmap_threshold: Some(20_000),
+                indexing_threshold: Some(10_000),
+                ..OptimizersHints::default()
+            }),
+            wal: Some(WalHints {
+                wal_capacity_mb: Some(64),
+                wal_segments_ahead: Some(1),
+            }),
+            strict_mode_enabled: Some(true),
+        };
+        let cfg = CollectionConfig::new(384, DistanceMetric::Cosine).with_storage_hints(hints);
+        let body = build_create_collection_body(&cfg).unwrap();
+        let optimizers = body.get("optimizers_config").unwrap();
+        assert_eq!(
+            optimizers.get("deleted_threshold").unwrap().as_f64(),
+            Some(0.3)
+        );
+        assert_eq!(optimizers.get("memmap_threshold").unwrap().as_u64(), Some(20_000));
+        let wal = body.get("wal_config").unwrap();
+        assert_eq!(wal.get("wal_capacity_mb").unwrap().as_u64(), Some(64));
+        assert_eq!(wal.get("wal_segments_ahead").unwrap().as_u64(), Some(1));
+        assert_eq!(
+            body.get("strict_mode_config")
+                .and_then(|value| value.get("enabled"))
+                .and_then(|value| value.as_bool()),
+            Some(true)
         );
     }
 

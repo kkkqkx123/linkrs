@@ -32,6 +32,8 @@ pub mod sqlite_outbox;
 pub mod types;
 pub mod vector_error;
 #[cfg(feature = "vector")]
+pub mod vector_defaults;
+#[cfg(feature = "vector")]
 pub mod vector_index_manager;
 #[cfg(feature = "vector")]
 pub mod vector_rebuild;

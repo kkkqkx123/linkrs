@@ -45,109 +45,34 @@ pub use linkrs_query::{FusionStrategy, HybridFusionRequest};
 /// types; keeps the two crates decoupled from each other.
 #[cfg(feature = "vector")]
 pub mod vector_config {
+    //! Thin re-exports of the canonical mapping in `linkrs_sync::vector_defaults`.
+    //!
+    //! The mapping lives below this crate so the backend assembly path and the
+    //! API surface cannot drift apart; these wrappers keep the historical
+    //! `linkrs_api::vector_config::*` paths working for callers.
+
     use linkrs_config::LocalVectorConfig;
 
     /// Map raw TOML IVF settings to the local engine's IVF configuration.
     pub fn local_ivf_config(local: &LocalVectorConfig) -> Option<simvec::IvfConfig> {
-        let s = local.ivf.as_ref()?;
-        Some(simvec::IvfConfig {
-            lists: if s.lists == 0 {
-                None
-            } else {
-                Some(s.lists.max(1))
-            },
-            min_build_points: s.min_build_points,
-            sample_limit: s.sample_limit,
-            kmeans_max_iter: s.kmeans_max_iter,
-            drift_threshold: s.drift_threshold,
-            drift_check_interval: s.drift_check_interval,
-            default_nprobe: s.default_nprobe,
-            auto_promotion: s.auto_promotion,
-            max_probes: if s.max_probes == 0 {
-                None
-            } else {
-                Some(s.max_probes)
-            },
-        })
+        linkrs_sync::vector_defaults::local_ivf_config(local)
     }
 
     /// Map raw TOML HNSW settings to the local engine's HNSW configuration.
-    /// A TOML value of `0` leaves the field at the engine default; nonzero
-    /// values override it.
     pub fn local_hnsw_config(local: &LocalVectorConfig) -> Option<simvec::HnswConfig> {
-        let s = local.hnsw.as_ref()?;
-        let defaults = simvec::HnswConfig::default();
-        Some(simvec::HnswConfig {
-            m: if s.m > 0 { s.m } else { defaults.m },
-            ef_construct: if s.ef_construct > 0 {
-                s.ef_construct
-            } else {
-                defaults.ef_construct
-            },
-            full_scan_threshold: (s.full_scan_threshold > 0).then_some(s.full_scan_threshold),
-            ef_search: if s.ef_search > 0 {
-                s.ef_search
-            } else {
-                defaults.ef_search
-            },
-            iterative_max_rounds: (s.iterative_max_rounds > 0).then_some(s.iterative_max_rounds),
-            max_scan_tuples: (s.max_scan_tuples > 0).then_some(s.max_scan_tuples),
-            ..defaults
-        })
+        linkrs_sync::vector_defaults::local_hnsw_config(local)
     }
 
-    /// Map raw TOML quantization settings to the local engine's quantization config.
-    ///
-    /// Mirrors Qdrant's scalar/product/binary builders;
-    /// `enabled=false` or missing/unknown type yields `None` (exact f32).
+    /// Map raw TOML quantization settings to the local engine's configuration.
     pub fn local_quantization_config(
         local: &LocalVectorConfig,
     ) -> Option<simvec::QuantizationConfig> {
-        let s = local.quantization.as_ref()?;
-        if !s.enabled {
-            return None;
-        }
-        let type_str = s.quantization_type.as_deref()?.to_lowercase();
-        let always_ram = s.always_ram;
-        match type_str.as_str() {
-            "scalar" => {
-                let quantile = s.quantile.unwrap_or(0.99);
-                let mut cfg = simvec::QuantizationConfig::scalar(quantile);
-                if let Some(ar) = always_ram {
-                    cfg = cfg.with_always_ram(ar);
-                }
-                Some(cfg)
-            }
-            "binary" => {
-                let mut cfg = simvec::QuantizationConfig::binary();
-                if let Some(ar) = always_ram {
-                    cfg = cfg.with_always_ram(ar);
-                }
-                Some(cfg)
-            }
-            "product" | "pq" => {
-                let ratio = match s
-                    .compression
-                    .as_deref()
-                    .unwrap_or("x4")
-                    .to_lowercase()
-                    .as_str()
-                {
-                    "x4" | "4" => simvec::CompressionRatio::X4,
-                    "x8" | "8" => simvec::CompressionRatio::X8,
-                    "x16" | "16" => simvec::CompressionRatio::X16,
-                    "x32" | "32" => simvec::CompressionRatio::X32,
-                    "x64" | "64" => simvec::CompressionRatio::X64,
-                    _ => simvec::CompressionRatio::X4,
-                };
-                let mut cfg = simvec::QuantizationConfig::product(ratio);
-                if let Some(ar) = always_ram {
-                    cfg = cfg.with_always_ram(ar);
-                }
-                Some(cfg)
-            }
-            _ => None,
-        }
+        linkrs_sync::vector_defaults::local_quantization_config(local)
+    }
+
+    /// Resolve the local engine's storage tuning with engine defaults filled in.
+    pub fn local_storage_config(local: &LocalVectorConfig) -> simvec::StorageConfig {
+        linkrs_sync::vector_defaults::local_storage_config(local)
     }
 }
 

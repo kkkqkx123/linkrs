@@ -95,15 +95,22 @@ pub(crate) fn handle(
                             // mapping and validation live in vector_ddl so
                             // the HTTP/gRPC index endpoints cannot drift
                             // from the statement pipeline.
+                            // The statement grammar carries only index-shape
+                            // options; storage layout stays a transport-level
+                            // concern, so everything else keeps its default.
+                            let options = crate::vector_ddl::CollectionOptions {
+                                hnsw_m: *hnsw_m,
+                                hnsw_ef_construct: *hnsw_ef_construct,
+                                quantization: *quantization,
+                                quantile: *quantile,
+                                compression: *compression,
+                                always_ram: *always_ram,
+                                ..crate::vector_ddl::CollectionOptions::default()
+                            };
                             let config = crate::vector_ddl::build_collection_config(
                                 *vector_size,
                                 distance,
-                                *hnsw_m,
-                                *hnsw_ef_construct,
-                                *quantization,
-                                *quantile,
-                                *compression,
-                                *always_ram,
+                                &options,
                             )
                             .map_err(QueryError::execution)?;
                             let res = if config.quantization_config.is_some()

@@ -48,6 +48,33 @@ pub fn compression_from_str(raw: &str) -> Option<CompressionRatioKind> {
     }
 }
 
+/// Structured options for building a collection configuration.
+///
+/// Storage-layout knobs (`shard_number`, `on_disk_payload`, …) are carried
+/// only by the HTTP/gRPC entry points; the GQL statement pipeline leaves them
+/// at `None` so the statement grammar does not grow transport-specific
+/// keywords. Every field is optional: `None` means "engine or backend
+/// default".
+#[derive(Debug, Clone, Default)]
+pub struct CollectionOptions {
+    pub hnsw_m: Option<usize>,
+    pub hnsw_ef_construct: Option<usize>,
+    pub hnsw_full_scan_threshold: Option<usize>,
+    pub hnsw_max_indexing_threads: Option<usize>,
+    pub hnsw_on_disk: Option<bool>,
+    pub hnsw_payload_m: Option<usize>,
+    pub quantization: Option<QuantizationKind>,
+    pub quantile: Option<f32>,
+    pub compression: Option<CompressionRatioKind>,
+    pub always_ram: Option<bool>,
+    pub shard_number: Option<usize>,
+    pub replication_factor: Option<usize>,
+    pub write_consistency_factor: Option<usize>,
+    pub on_disk_payload: Option<bool>,
+    pub vectors_on_disk: Option<bool>,
+    pub max_points: Option<u64>,
+}
+
 /// Build the engine collection config from DDL parameters.
 ///
 /// This is the single source of truth for how `CREATE VECTOR INDEX`
@@ -55,32 +82,46 @@ pub fn compression_from_str(raw: &str) -> Option<CompressionRatioKind> {
 /// and the HTTP / gRPC index endpoints all route through it so the
 /// transports cannot drift from the statement pipeline.
 #[cfg(feature = "vector")]
-#[allow(clippy::too_many_arguments)]
 pub fn build_collection_config(
     vector_size: usize,
     distance: simvec::DistanceMetric,
-    hnsw_m: Option<usize>,
-    hnsw_ef_construct: Option<usize>,
-    quantization: Option<QuantizationKind>,
-    quantile: Option<f32>,
-    compression: Option<CompressionRatioKind>,
-    always_ram: Option<bool>,
+    options: &CollectionOptions,
 ) -> Result<simvec::CollectionConfig, String> {
     let mut config = simvec::CollectionConfig::new(vector_size, distance);
-    if hnsw_m.is_some() || hnsw_ef_construct.is_some() {
+
+    let has_hnsw = options.hnsw_m.is_some()
+        || options.hnsw_ef_construct.is_some()
+        || options.hnsw_full_scan_threshold.is_some()
+        || options.hnsw_max_indexing_threads.is_some()
+        || options.hnsw_on_disk.is_some()
+        || options.hnsw_payload_m.is_some();
+    if has_hnsw {
         let mut hnsw = simvec::HnswConfig::default();
-        if let Some(m) = hnsw_m {
+        if let Some(m) = options.hnsw_m {
             hnsw.m = m;
         }
-        if let Some(ef) = hnsw_ef_construct {
-            hnsw.ef_construct = ef;
+        if let Some(ef_construct) = options.hnsw_ef_construct {
+            hnsw.ef_construct = ef_construct;
+        }
+        if let Some(threshold) = options.hnsw_full_scan_threshold {
+            hnsw.full_scan_threshold = Some(threshold);
+        }
+        if let Some(threads) = options.hnsw_max_indexing_threads {
+            hnsw.max_indexing_threads = Some(threads);
+        }
+        if let Some(on_disk) = options.hnsw_on_disk {
+            hnsw.on_disk = Some(on_disk);
+        }
+        if let Some(payload_m) = options.hnsw_payload_m {
+            hnsw.payload_m = Some(payload_m);
         }
         hnsw.validate()
             .map_err(|e| format!("invalid HNSW parameters: {}", e))?;
         config = config.with_hnsw(hnsw);
     }
-    if let Some(kind) = quantization {
-        if compression.is_some() && !matches!(kind, QuantizationKind::Product) {
+
+    if let Some(kind) = options.quantization {
+        if options.compression.is_some() && !matches!(kind, QuantizationKind::Product) {
             return Err(format!(
                 "compression requires quantization=PRODUCT, got quantization={:?}; omit compression or use PRODUCT",
                 kind
@@ -88,21 +129,21 @@ pub fn build_collection_config(
         }
         let cfg = match kind {
             QuantizationKind::Scalar => {
-                let mut cfg = simvec::QuantizationConfig::scalar(quantile.unwrap_or(0.99));
-                if let Some(ar) = always_ram {
-                    cfg = cfg.with_always_ram(ar);
+                let mut cfg = simvec::QuantizationConfig::scalar(options.quantile.unwrap_or(0.99));
+                if let Some(always_ram) = options.always_ram {
+                    cfg = cfg.with_always_ram(always_ram);
                 }
                 cfg
             }
             QuantizationKind::Binary => {
                 let mut cfg = simvec::QuantizationConfig::binary();
-                if let Some(ar) = always_ram {
-                    cfg = cfg.with_always_ram(ar);
+                if let Some(always_ram) = options.always_ram {
+                    cfg = cfg.with_always_ram(always_ram);
                 }
                 cfg
             }
             QuantizationKind::Product => {
-                let ratio = match compression {
+                let ratio = match options.compression {
                     Some(CompressionRatioKind::X4) => simvec::CompressionRatio::X4,
                     Some(CompressionRatioKind::X8) => simvec::CompressionRatio::X8,
                     Some(CompressionRatioKind::X16) => simvec::CompressionRatio::X16,
@@ -111,8 +152,8 @@ pub fn build_collection_config(
                     None => simvec::CompressionRatio::X4,
                 };
                 let mut cfg = simvec::QuantizationConfig::product(ratio);
-                if let Some(ar) = always_ram {
-                    cfg = cfg.with_always_ram(ar);
+                if let Some(always_ram) = options.always_ram {
+                    cfg = cfg.with_always_ram(always_ram);
                 }
                 cfg
             }
@@ -121,6 +162,38 @@ pub fn build_collection_config(
             .map_err(|e| format!("invalid quantization parameters: {}", e))?;
         config = config.with_quantization(cfg);
     }
+
+    // Storage layout: rejected here rather than at the engine so every
+    // transport reports the same message.
+    if options.shard_number == Some(0) {
+        return Err("shard_number must be >= 1 when set".to_string());
+    }
+    if options.replication_factor == Some(0) {
+        return Err("replication_factor must be >= 1 when set".to_string());
+    }
+    if options.write_consistency_factor == Some(0) {
+        return Err("write_consistency_factor must be >= 1 when set".to_string());
+    }
+    if let (Some(write), Some(replication)) = (
+        options.write_consistency_factor,
+        options.replication_factor,
+    ) {
+        if write > replication {
+            return Err(format!(
+                "write_consistency_factor {write} must not exceed replication_factor {replication}"
+            ));
+        }
+    }
+    if options.max_points == Some(0) {
+        return Err("max_points must be >= 1 when set".to_string());
+    }
+
+    config.shard_number = options.shard_number;
+    config.replication_factor = options.replication_factor;
+    config.write_consistency_factor = options.write_consistency_factor;
+    config.on_disk_payload = options.on_disk_payload;
+    config.vectors_on_disk = options.vectors_on_disk;
+    config.max_points = options.max_points;
     Ok(config)
 }
 
@@ -135,15 +208,11 @@ mod tests {
             let config = build_collection_config(
                 128,
                 simvec::DistanceMetric::Cosine,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
+                &CollectionOptions::default(),
             )
             .expect("config");
             assert_eq!(config.vector_size, 128);
+            assert_eq!(config.shard_number, None);
         }
     }
 
@@ -154,15 +223,70 @@ mod tests {
             let err = build_collection_config(
                 128,
                 simvec::DistanceMetric::Cosine,
-                None,
-                None,
-                Some(QuantizationKind::Scalar),
-                None,
-                Some(CompressionRatioKind::X8),
-                None,
+                &CollectionOptions {
+                    quantization: Some(QuantizationKind::Scalar),
+                    compression: Some(CompressionRatioKind::X8),
+                    ..CollectionOptions::default()
+                },
             )
             .unwrap_err();
             assert!(err.contains("PRODUCT"));
+        }
+    }
+
+    #[test]
+    fn storage_options_land_on_the_config() {
+        #[cfg(feature = "vector")]
+        {
+            let config = build_collection_config(
+                64,
+                simvec::DistanceMetric::Euclid,
+                &CollectionOptions {
+                    hnsw_m: Some(24),
+                    hnsw_ef_construct: Some(128),
+                    hnsw_on_disk: Some(true),
+                    shard_number: Some(4),
+                    replication_factor: Some(2),
+                    write_consistency_factor: Some(1),
+                    on_disk_payload: Some(true),
+                    vectors_on_disk: Some(true),
+                    max_points: Some(1_000_000),
+                    ..CollectionOptions::default()
+                },
+            )
+            .expect("config");
+            assert_eq!(config.shard_number, Some(4));
+            assert_eq!(config.replication_factor, Some(2));
+            assert_eq!(config.write_consistency_factor, Some(1));
+            assert_eq!(config.on_disk_payload, Some(true));
+            assert_eq!(config.vectors_on_disk, Some(true));
+            assert_eq!(config.max_points, Some(1_000_000));
+            match config.index {
+                simvec::IndexConfig::Hnsw(hnsw) => {
+                    assert_eq!(hnsw.m, 24);
+                    assert_eq!(hnsw.ef_construct, 128);
+                    assert_eq!(hnsw.on_disk, Some(true));
+                }
+                other => panic!("expected HNSW, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn write_consistency_above_replication_is_rejected() {
+        #[cfg(feature = "vector")]
+        {
+            let err = build_collection_config(
+                64,
+                simvec::DistanceMetric::Cosine,
+                &CollectionOptions {
+                    replication_factor: Some(1),
+                    write_consistency_factor: Some(2),
+                    ..CollectionOptions::default()
+                },
+            )
+            .unwrap_err();
+            assert!(err.contains("must not exceed"));
         }
     }
 

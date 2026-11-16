@@ -695,6 +695,22 @@ fn matches_condition(condition: &FilterCondition, point: &VectorPoint) -> bool {
             }
             false
         }
+        ConditionType::StartsWith { prefix } => {
+            if let Some(field_value) = payload.get(&condition.field) {
+                if let Some(text) = field_value.as_str() {
+                    return text.starts_with(prefix);
+                }
+                if let Some(arr) = field_value.as_array() {
+                    return arr
+                        .iter()
+                        .any(|v| v.as_str().map(|s| s.starts_with(prefix)).unwrap_or(false));
+                }
+            }
+            false
+        }
+        ConditionType::Not {
+            condition: nested,
+        } => !matches_condition(nested, point),
     }
 }
 

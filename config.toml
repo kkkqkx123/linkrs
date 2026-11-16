@@ -383,8 +383,6 @@ history_size = 0
 enabled = false
 # Vector search engine type (local | qdrant)
 engine = "local"
-# Write-time automatic text vectorization (disabled by default; enabling it requires configuring an embedding service, and failures fail the write transaction)
-auto_embed_text = false
 
 [vector.local]
 # Local vector engine data directory (defaults to <storage_path>/vector when unset)
@@ -392,9 +390,109 @@ auto_embed_text = false
 # Distance metrics: Cosine / Euclid / Dot are supported by both the local and Qdrant backends;
 # Manhattan is only available for the local engine (`crates/simvec` implements naive/avx2 kernels with the score contract 1/(1+sqrt(d)); the Qdrant backend rejects it with an error. No extra configuration is needed; the metric is passed along with the collection creation parameters.
 
+# Inverted-file (IVF) defaults, applied to IVF collections created without
+# explicit parameters. `lists = 0` derives the centroid count from the live
+# point count; `auto_promotion` promotes an exact-scan collection once it
+# passes `min_build_points`.
+# [vector.local.ivf]
+# lists = 0
+# auto_promotion = false
+# min_build_points = 100000
+# sample_limit = 65536
+# kmeans_max_iter = 10
+# drift_threshold = 0.10
+# drift_check_interval = 25000
+# default_nprobe = 8
+# max_probes = 0
+
+# HNSW defaults. Zeroth values keep the engine default; `stale_rebuild_ratio`
+# triggers a rebuild once overwrite upserts erode recall past the ratio.
+# [vector.local.hnsw]
+# m = 16
+# ef_construct = 100
+# full_scan_threshold = 10000
+# ef_search = 40
+# iterative_max_rounds = 0
+# max_scan_tuples = 0
+# max_indexing_threads = 0
+# on_disk = false
+# payload_m = 16
+# stale_rebuild_ratio = 0.5
+
+# Quantization defaults (scalar | binary | product). `compression` is only
+# valid for product quantization.
+# [vector.local.quantization]
+# enabled = false
+# quantization_type = "scalar"
+# quantile = 0.99
+# compression = "x8"
+# always_ram = true
+
+# Storage tuning for the whole engine root. These govern IO behaviour rather
+# than one collection's layout, so a change applies to every collection this
+# process opens and creates.
+[vector.local.storage]
+# WAL bytes after which a background checkpoint runs (default 64 MiB)
+wal_checkpoint_bytes = 67108864
+# Tombstone ratio that triggers physical reclamation (default 0.20)
+compaction_threshold = 0.20
+# Transactions between meta.bin saves (default 64)
+meta_save_interval = 64
+# Payload store block size in bytes (default 128)
+payload_block_size = 128
+# Payload store page size in bytes; must be a multiple of the block size
+payload_page_size_bytes = 33554432
+
+# Cross-backend admission limits. The local engine refuses writes past the
+# cap; the remote backend ignores it (capacity is governed server-side).
+[vector.limits]
+# Live-point cap for collections created without an explicit max_points
+# (0 = unlimited)
+default_max_points = 0
+
 [vector.qdrant]
 # Whether to enable the qdrant backend (only takes effect when engine = "qdrant")
 enabled = false
+
+# Creation-time collection defaults. Only consulted when linkrs creates a
+# collection; an existing collection keeps the layout the server reports.
+[vector.qdrant.collection]
+# shard_number = 1
+# replication_factor = 1
+# write_consistency_factor = 1
+# on_disk_payload = true
+# vectors_on_disk = false
+# strict_mode_enabled = false
+# max_points = 0
+#
+# [vector.qdrant.collection.hnsw]
+# m = 16
+# ef_construct = 100
+# full_scan_threshold = 10000
+# max_indexing_threads = 0
+# on_disk = false
+# payload_m = 16
+#
+# [vector.qdrant.collection.quantization]
+# enabled = false
+# quantization_type = "scalar"
+# quantile = 0.99
+# compression = "x8"
+# always_ram = true
+#
+# [vector.qdrant.collection.optimizers]
+# deleted_threshold = 0.2
+# vacuum_min_vector_number = 1000
+# default_segment_number = 0
+# max_segment_size = 200000
+# memmap_threshold = 20000
+# indexing_threshold = 20000
+# flush_interval_sec = 5
+# max_optimization_threads = 1
+#
+# [vector.qdrant.collection.wal]
+# wal_capacity_mb = 32
+# wal_segments_ahead = 0
 
 [vector.qdrant.connection]
 # Qdrant server address

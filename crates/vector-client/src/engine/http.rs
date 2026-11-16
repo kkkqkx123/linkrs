@@ -447,17 +447,7 @@ impl RemoteVectorEngine for QdrantEngine {
     async fn create_collection(&self, name: &str, cfg: CollectionConfig) -> Result<()> {
         debug!("Creating collection '{}' with config: {:?}", name, cfg);
 
-        let body = build_create_collection_body(
-            name,
-            cfg.vector_size,
-            cfg.distance,
-            &cfg.index,
-            &cfg.quantization_config,
-            cfg.on_disk_payload,
-            cfg.shard_number,
-            cfg.replication_factor,
-            cfg.write_consistency_factor,
-        )?;
+        let body = build_create_collection_body(&cfg)?;
 
         let response = self
             .request_json(

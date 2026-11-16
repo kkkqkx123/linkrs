@@ -23,6 +23,7 @@ use simvec::{
 #[cfg(feature = "vector-qdrant")]
 use vector_client::VectorManager;
 
+use super::vector_defaults::CollectionDefaults;
 use super::vector_error::{VectorCoordinatorError, VectorCoordinatorResult, VectorError};
 
 /// Engine-neutral operations every vector backend must provide.
@@ -281,12 +282,29 @@ pub trait VectorEngineHandle: Send + Sync + fmt::Debug + 'static {
 /// [`VectorEngineHandle`] implementation wrapping the built-in
 /// [`LocalVectorEngine`].
 #[derive(Debug)]
-pub struct LocalEngineHandle(Arc<LocalVectorEngine>);
+pub struct LocalEngineHandle {
+    engine: Arc<LocalVectorEngine>,
+    /// `[vector.limits].default_max_points`; `None` leaves the engine
+    /// uncapped.
+    max_points: Option<u64>,
+}
 
 impl LocalEngineHandle {
     /// Wrap an already-allocated local engine.
     pub fn new(engine: Arc<LocalVectorEngine>) -> Self {
-        Self(engine)
+        Self {
+            engine,
+            max_points: None,
+        }
+    }
+
+    /// Wrap an already-allocated local engine and apply an admission cap to
+    /// collections created without an explicit `max_points`.
+    pub fn with_max_points(engine: Arc<LocalVectorEngine>, max_points: u64) -> Self {
+        Self {
+            engine,
+            max_points: (max_points > 0).then_some(max_points),
+        }
     }
 }
 
@@ -304,8 +322,34 @@ impl VectorEngineHandle for LocalEngineHandle {
         Ok(HealthStatus::healthy("simvec", env!("CARGO_PKG_VERSION")))
     }
 
+    /// Explicitly reject remote-only layout fields instead of silently
+    /// ignoring them: a local deployment that sets `shard_number` or a
+    /// qdrant storage hint has misunderstood the engine, and a warning at
+    /// creation time is the cheapest place to say so.
+    fn default_collection_config(
+        &self,
+        vector_size: usize,
+        distance: simvec::DistanceMetric,
+    ) -> CollectionConfig {
+        let mut config = CollectionConfig::new(vector_size, distance);
+        config.max_points = self.max_points;
+        config
+    }
+
     fn effective_collection_config(&self, config: &CollectionConfig) -> CollectionConfig {
-        let engine = &self.0;
+        if config.shard_number.is_some()
+            || config.replication_factor.is_some()
+            || config.write_consistency_factor.is_some()
+            || config.vectors_on_disk.is_some()
+            || config.storage_hints.is_some()
+        {
+            tracing::warn!(
+                "local vector engine ignores remote-only collection layout fields \
+                 (shard_number/replication_factor/write_consistency_factor/vectors_on_disk/\
+                 storage_hints); storage layout is governed by [vector.local.storage]"
+            );
+        }
+        let engine = &self.engine;
         let mut effective = config.clone();
         match &mut effective.index {
             simvec::types::IndexConfig::Hnsw(cfg) => {
@@ -331,7 +375,7 @@ impl VectorEngineHandle for LocalEngineHandle {
     }
 
     fn local_engine(&self) -> Option<Arc<LocalVectorEngine>> {
-        Some(Arc::clone(&self.0))
+        Some(Arc::clone(&self.engine))
     }
 
     async fn create_index(
@@ -339,7 +383,7 @@ impl VectorEngineHandle for LocalEngineHandle {
         name: &str,
         config: &CollectionConfig,
     ) -> VectorCoordinatorResult<()> {
-        self.0
+        self.engine
             .create_collection(name, config)
             .map_err(VectorError::from)?;
         Ok(())
@@ -351,14 +395,14 @@ impl VectorEngineHandle for LocalEngineHandle {
         field: &str,
         schema: PayloadSchemaType,
     ) -> VectorCoordinatorResult<()> {
-        self.0
+        self.engine
             .create_payload_index(collection, field, schema)
             .map_err(VectorError::from)?;
         Ok(())
     }
 
     fn index_exists(&self, name: &str) -> bool {
-        self.0.collection_exists(name)
+        self.engine.collection_exists(name)
     }
 
     fn supports_atomic_promote(&self) -> bool {
@@ -398,7 +442,7 @@ impl VectorEngineHandle for LocalEngineHandle {
             }
         }
         if !ops.is_empty() {
-            self.0.apply_txn(ops).map_err(VectorError::from)?;
+            self.engine.apply_txn(ops).map_err(VectorError::from)?;
         }
         Ok(())
     }
@@ -409,26 +453,26 @@ impl VectorEngineHandle for LocalEngineHandle {
         temp: &str,
         backup_suffix: &str,
     ) -> VectorCoordinatorResult<()> {
-        self.0
+        self.engine
             .promote_temp_collection(live, temp, backup_suffix)
             .map_err(VectorError::from)?;
         Ok(())
     }
 
     async fn restore_promote_backup(&self, live: &str) -> VectorCoordinatorResult<String> {
-        self.0
+        self.engine
             .restore_promote_backup(live)
             .map_err(VectorError::from)
             .map_err(VectorCoordinatorError::Vector)
     }
 
     async fn list_collections(&self) -> VectorCoordinatorResult<Vec<String>> {
-        Ok(self.0.list_collections())
+        Ok(self.engine.list_collections())
     }
 
     fn get_index_metadata(&self, name: &str) -> Option<IndexMetadata> {
-        let config = self.0.collection_config(name).ok().flatten()?;
-        let vector_count = self.0.count(name).ok()?;
+        let config = self.engine.collection_config(name).ok().flatten()?;
+        let vector_count = self.engine.count(name).ok()?;
         Some(IndexMetadata {
             name: name.to_string(),
             config,
@@ -439,7 +483,7 @@ impl VectorEngineHandle for LocalEngineHandle {
     }
 
     async fn delete_collection(&self, name: &str) -> VectorCoordinatorResult<()> {
-        self.0.delete_collection(name).map_err(VectorError::from)?;
+        self.engine.delete_collection(name).map_err(VectorError::from)?;
         Ok(())
     }
 
@@ -449,15 +493,15 @@ impl VectorEngineHandle for LocalEngineHandle {
         point_id: &str,
     ) -> VectorCoordinatorResult<Option<VectorPoint>> {
         let pid = PointId::from(point_id);
-        Ok(self.0.get(collection, &pid).map_err(VectorError::from)?)
+        Ok(self.engine.get(collection, &pid).map_err(VectorError::from)?)
     }
 
     async fn count(&self, collection: &str) -> VectorCoordinatorResult<u64> {
-        Ok(self.0.count(collection).map_err(VectorError::from)?)
+        Ok(self.engine.count(collection).map_err(VectorError::from)?)
     }
 
     async fn upsert(&self, collection: &str, point: VectorPoint) -> VectorCoordinatorResult<()> {
-        self.0
+        self.engine
             .upsert(collection, point)
             .map_err(VectorError::from)?;
         Ok(())
@@ -468,7 +512,7 @@ impl VectorEngineHandle for LocalEngineHandle {
         collection: &str,
         points: Vec<VectorPoint>,
     ) -> VectorCoordinatorResult<()> {
-        self.0
+        self.engine
             .upsert_batch(collection, &points)
             .map_err(VectorError::from)?;
         Ok(())
@@ -476,7 +520,7 @@ impl VectorEngineHandle for LocalEngineHandle {
 
     async fn delete(&self, collection: &str, point_id: &str) -> VectorCoordinatorResult<()> {
         let pid = PointId::from(point_id);
-        self.0.delete(collection, &pid).map_err(VectorError::from)?;
+        self.engine.delete(collection, &pid).map_err(VectorError::from)?;
         Ok(())
     }
 
@@ -486,7 +530,7 @@ impl VectorEngineHandle for LocalEngineHandle {
         point_ids: &[&str],
     ) -> VectorCoordinatorResult<()> {
         let ids: Vec<PointId> = point_ids.iter().map(|s| PointId::from(*s)).collect();
-        self.0
+        self.engine
             .delete_batch(collection, &ids)
             .map_err(VectorError::from)?;
         Ok(())
@@ -497,7 +541,7 @@ impl VectorEngineHandle for LocalEngineHandle {
         collection: &str,
         filter: VectorFilter,
     ) -> VectorCoordinatorResult<()> {
-        self.0
+        self.engine
             .delete_by_filter(collection, &filter)
             .map_err(VectorError::from)?;
         Ok(())
@@ -511,7 +555,7 @@ impl VectorEngineHandle for LocalEngineHandle {
     ) -> VectorCoordinatorResult<()> {
         for id in &point_ids {
             let pid = PointId::from(*id);
-            self.0
+            self.engine
                 .set_payload(collection, &pid, payload.clone())
                 .map_err(VectorError::from)?;
         }
@@ -526,7 +570,7 @@ impl VectorEngineHandle for LocalEngineHandle {
     ) -> VectorCoordinatorResult<()> {
         for id in &point_ids {
             let pid = PointId::from(*id);
-            self.0
+            self.engine
                 .set_payload_fields(collection, &pid, fields.clone())
                 .map_err(VectorError::from)?;
         }
@@ -542,7 +586,7 @@ impl VectorEngineHandle for LocalEngineHandle {
         let owned_keys: Vec<String> = keys.iter().map(|s| s.to_string()).collect();
         for id in &point_ids {
             let pid = PointId::from(*id);
-            self.0
+            self.engine
                 .delete_payload(collection, &pid, owned_keys.clone())
                 .map_err(VectorError::from)?;
         }
@@ -559,7 +603,7 @@ impl VectorEngineHandle for LocalEngineHandle {
     ) -> VectorCoordinatorResult<(Vec<VectorPoint>, Option<String>)> {
         let offset = offset.map(PointId::from);
         let (points, next) = self
-            .0
+            .engine
             .scroll(
                 collection,
                 limit,
@@ -576,7 +620,7 @@ impl VectorEngineHandle for LocalEngineHandle {
         collection: &str,
         field: &str,
     ) -> VectorCoordinatorResult<()> {
-        self.0
+        self.engine
             .delete_payload_index(collection, field)
             .map(|_| ())
             .map_err(VectorError::from)?;
@@ -588,7 +632,7 @@ impl VectorEngineHandle for LocalEngineHandle {
         collection: &str,
     ) -> VectorCoordinatorResult<Vec<(String, PayloadSchemaType)>> {
         Ok(self
-            .0
+            .engine
             .list_payload_indexes(collection)
             .map_err(VectorError::from)?)
     }
@@ -599,7 +643,7 @@ impl VectorEngineHandle for LocalEngineHandle {
         query: SearchQuery,
     ) -> VectorCoordinatorResult<Vec<SearchResult>> {
         Ok(self
-            .0
+            .engine
             .search(collection, &query)
             .map_err(VectorError::from)?)
     }
@@ -612,7 +656,7 @@ impl VectorEngineHandle for LocalEngineHandle {
         Pin<Box<dyn Stream<Item = VectorCoordinatorResult<SearchResult>> + Send>>,
     > {
         let results = self
-            .0
+            .engine
             .search(collection, &query)
             .map_err(VectorError::from)?;
         let stream = futures::stream::iter(results.into_iter().map(Ok));
@@ -629,7 +673,7 @@ impl VectorEngineHandle for LocalEngineHandle {
         Pin<Box<dyn Stream<Item = VectorCoordinatorResult<VectorPoint>> + Send>>,
     > {
         use std::collections::VecDeque;
-        let engine = Arc::clone(&self.0);
+        let engine = Arc::clone(&self.engine);
         let collection = collection.to_string();
         let page = batch_size.max(1);
         let stream = futures::stream::unfold(
@@ -678,13 +722,26 @@ impl VectorEngineHandle for LocalEngineHandle {
 /// [`VectorEngineHandle`] implementation wrapping the remote Qdrant client.
 #[cfg(feature = "vector-qdrant")]
 #[derive(Debug)]
-pub struct QdrantEngineHandle(Arc<VectorManager>);
+pub struct QdrantEngineHandle {
+    manager: Arc<VectorManager>,
+    /// `[vector.qdrant.collection]` creation defaults.
+    defaults: CollectionDefaults,
+}
 
 #[cfg(feature = "vector-qdrant")]
 impl QdrantEngineHandle {
     /// Wrap an already-allocated Qdrant manager.
     pub fn new(manager: Arc<VectorManager>) -> Self {
-        Self(manager)
+        Self {
+            manager,
+            defaults: CollectionDefaults::default(),
+        }
+    }
+
+    /// Wrap an already-allocated Qdrant manager with explicit creation
+    /// defaults taken from configuration.
+    pub fn with_defaults(manager: Arc<VectorManager>, defaults: CollectionDefaults) -> Self {
+        Self { manager, defaults }
     }
 }
 
@@ -696,11 +753,11 @@ impl VectorEngineHandle for QdrantEngineHandle {
     }
 
     fn is_disabled(&self) -> bool {
-        self.0.engine().name() == "disabled"
+        self.manager.engine().name() == "disabled"
     }
 
     async fn health_check(&self) -> VectorCoordinatorResult<HealthStatus> {
-        Ok(self.0.engine().health_check().await?)
+        Ok(self.manager.engine().health_check().await?)
     }
 
     fn effective_collection_config(&self, config: &CollectionConfig) -> CollectionConfig {
@@ -709,7 +766,7 @@ impl VectorEngineHandle for QdrantEngineHandle {
     }
 
     fn qdrant_manager(&self) -> Option<Arc<VectorManager>> {
-        Some(Arc::clone(&self.0))
+        Some(Arc::clone(&self.manager))
     }
 
     async fn create_index(
@@ -717,7 +774,7 @@ impl VectorEngineHandle for QdrantEngineHandle {
         name: &str,
         config: &CollectionConfig,
     ) -> VectorCoordinatorResult<()> {
-        self.0.create_index(name, config.clone()).await?;
+        self.manager.create_index(name, config.clone()).await?;
         Ok(())
     }
 
@@ -727,7 +784,7 @@ impl VectorEngineHandle for QdrantEngineHandle {
         field: &str,
         schema: PayloadSchemaType,
     ) -> VectorCoordinatorResult<()> {
-        self.0
+        self.manager
             .engine()
             .create_payload_index(collection, field, schema)
             .await?;
@@ -735,7 +792,7 @@ impl VectorEngineHandle for QdrantEngineHandle {
     }
 
     fn index_exists(&self, name: &str) -> bool {
-        self.0.index_exists(name)
+        self.manager.index_exists(name)
     }
 
     fn supports_atomic_promote(&self) -> bool {
@@ -747,8 +804,17 @@ impl VectorEngineHandle for QdrantEngineHandle {
         vector_size: usize,
         distance: simvec::DistanceMetric,
     ) -> CollectionConfig {
-        let hnsw_config = simvec::HnswConfig::new(16, 100).with_payload_m(16);
-        CollectionConfig::new(vector_size, distance).with_hnsw(hnsw_config)
+        let mut config = CollectionConfig::new(vector_size, distance);
+        // Qdrant's own defaults are m=16, ef_construct=100 with a payload
+        // graph of the same width; keep them when configuration stays silent.
+        config.index = simvec::IndexConfig::Hnsw(
+            self.defaults
+                .hnsw
+                .clone()
+                .unwrap_or_else(|| simvec::HnswConfig::new(16, 100).with_payload_m(16)),
+        );
+        self.defaults.apply(&mut config);
+        config
     }
 
     async fn promote_temp_collection(
@@ -806,7 +872,7 @@ impl VectorEngineHandle for QdrantEngineHandle {
     }
 
     async fn list_collections(&self) -> VectorCoordinatorResult<Vec<String>> {
-        self.0
+        self.manager
             .engine()
             .list_collections()
             .await
@@ -815,11 +881,11 @@ impl VectorEngineHandle for QdrantEngineHandle {
     }
 
     fn get_index_metadata(&self, name: &str) -> Option<IndexMetadata> {
-        self.0.get_index_metadata(name)
+        self.manager.get_index_metadata(name)
     }
 
     async fn delete_collection(&self, name: &str) -> VectorCoordinatorResult<()> {
-        self.0.drop_index(name).await?;
+        self.manager.drop_index(name).await?;
         Ok(())
     }
 
@@ -828,15 +894,15 @@ impl VectorEngineHandle for QdrantEngineHandle {
         collection: &str,
         point_id: &str,
     ) -> VectorCoordinatorResult<Option<VectorPoint>> {
-        Ok(self.0.get(collection, point_id).await?)
+        Ok(self.manager.get(collection, point_id).await?)
     }
 
     async fn count(&self, collection: &str) -> VectorCoordinatorResult<u64> {
-        Ok(self.0.count(collection).await?)
+        Ok(self.manager.count(collection).await?)
     }
 
     async fn upsert(&self, collection: &str, point: VectorPoint) -> VectorCoordinatorResult<()> {
-        self.0.upsert(collection, point).await?;
+        self.manager.upsert(collection, point).await?;
         Ok(())
     }
 
@@ -845,12 +911,12 @@ impl VectorEngineHandle for QdrantEngineHandle {
         collection: &str,
         points: Vec<VectorPoint>,
     ) -> VectorCoordinatorResult<()> {
-        self.0.upsert_batch(collection, points).await?;
+        self.manager.upsert_batch(collection, points).await?;
         Ok(())
     }
 
     async fn delete(&self, collection: &str, point_id: &str) -> VectorCoordinatorResult<()> {
-        self.0.delete(collection, point_id).await?;
+        self.manager.delete(collection, point_id).await?;
         Ok(())
     }
 
@@ -859,7 +925,7 @@ impl VectorEngineHandle for QdrantEngineHandle {
         collection: &str,
         point_ids: &[&str],
     ) -> VectorCoordinatorResult<()> {
-        self.0.delete_batch(collection, point_ids.to_vec()).await?;
+        self.manager.delete_batch(collection, point_ids.to_vec()).await?;
         Ok(())
     }
 
@@ -868,7 +934,7 @@ impl VectorEngineHandle for QdrantEngineHandle {
         collection: &str,
         filter: VectorFilter,
     ) -> VectorCoordinatorResult<()> {
-        self.0.delete_by_filter(collection, filter).await?;
+        self.manager.delete_by_filter(collection, filter).await?;
         Ok(())
     }
 
@@ -878,7 +944,7 @@ impl VectorEngineHandle for QdrantEngineHandle {
         point_ids: Vec<&str>,
         payload: Payload,
     ) -> VectorCoordinatorResult<()> {
-        self.0
+        self.manager
             .engine()
             .set_payload(collection, point_ids, payload)
             .await?;
@@ -891,7 +957,7 @@ impl VectorEngineHandle for QdrantEngineHandle {
         point_ids: Vec<&str>,
         fields: Payload,
     ) -> VectorCoordinatorResult<()> {
-        self.0
+        self.manager
             .engine()
             .set_payload_fields(collection, point_ids, fields)
             .await?;
@@ -904,7 +970,7 @@ impl VectorEngineHandle for QdrantEngineHandle {
         point_ids: Vec<&str>,
         keys: Vec<&str>,
     ) -> VectorCoordinatorResult<()> {
-        self.0
+        self.manager
             .engine()
             .delete_payload(collection, point_ids, keys)
             .await?;
@@ -920,7 +986,7 @@ impl VectorEngineHandle for QdrantEngineHandle {
         with_vector: Option<bool>,
     ) -> VectorCoordinatorResult<(Vec<VectorPoint>, Option<String>)> {
         Ok(self
-            .0
+            .manager
             .engine()
             .scroll(collection, limit, offset, with_payload, with_vector)
             .await
@@ -932,7 +998,7 @@ impl VectorEngineHandle for QdrantEngineHandle {
         collection: &str,
         field: &str,
     ) -> VectorCoordinatorResult<()> {
-        self.0
+        self.manager
             .engine()
             .delete_payload_index(collection, field)
             .await?;
@@ -944,7 +1010,7 @@ impl VectorEngineHandle for QdrantEngineHandle {
         collection: &str,
     ) -> VectorCoordinatorResult<Vec<(String, PayloadSchemaType)>> {
         Ok(self
-            .0
+            .manager
             .engine()
             .list_payload_indexes(collection)
             .await
@@ -956,7 +1022,7 @@ impl VectorEngineHandle for QdrantEngineHandle {
         collection: &str,
         query: SearchQuery,
     ) -> VectorCoordinatorResult<Vec<SearchResult>> {
-        Ok(self.0.search(collection, query).await?)
+        Ok(self.manager.search(collection, query).await?)
     }
 
     async fn search_stream(
@@ -968,7 +1034,7 @@ impl VectorEngineHandle for QdrantEngineHandle {
     > {
         // Prefer native streaming when the gRPC engine is in use; fall back
         // to unary search + iter for HTTP or disabled.
-        let results = self.0.search(collection, query).await?;
+        let results = self.manager.search(collection, query).await?;
         let stream = futures::stream::iter(results.into_iter().map(Ok));
         Ok(Box::pin(stream))
     }
@@ -983,7 +1049,7 @@ impl VectorEngineHandle for QdrantEngineHandle {
         Pin<Box<dyn Stream<Item = VectorCoordinatorResult<VectorPoint>> + Send>>,
     > {
         use std::collections::VecDeque;
-        let manager = Arc::clone(&self.0);
+        let manager = Arc::clone(&self.manager);
         let collection = collection.to_string();
         let page = batch_size.max(1);
         let stream = futures::stream::unfold(
@@ -1196,11 +1262,38 @@ impl VectorBackend {
         }
     }
 
+    /// Wrap an already-allocated `Arc<LocalVectorEngine>` and cap collections
+    /// created without an explicit `max_points`.
+    pub fn from_local_arc_with_limit(arc: Arc<LocalVectorEngine>, max_points: u64) -> Self {
+        let metrics = Arc::new(crate::metrics_handle::MetricsEngineHandle::new(Arc::new(
+            LocalEngineHandle::with_max_points(arc, max_points),
+        )));
+        Self {
+            engine: metrics.clone(),
+            metrics: Some(metrics),
+        }
+    }
+
     /// Wrap a [`VectorManager`] in the [`VectorBackend`] handle.
     #[cfg(feature = "vector-qdrant")]
     pub fn qdrant(manager: Arc<VectorManager>) -> Self {
         let metrics = Arc::new(crate::metrics_handle::MetricsEngineHandle::new(Arc::new(
             QdrantEngineHandle::new(manager),
+        )));
+        Self {
+            engine: metrics.clone(),
+            metrics: Some(metrics),
+        }
+    }
+
+    /// Wrap a [`VectorManager`] with configuration-driven creation defaults.
+    #[cfg(feature = "vector-qdrant")]
+    pub fn qdrant_with_defaults(
+        manager: Arc<VectorManager>,
+        defaults: CollectionDefaults,
+    ) -> Self {
+        let metrics = Arc::new(crate::metrics_handle::MetricsEngineHandle::new(Arc::new(
+            QdrantEngineHandle::with_defaults(manager, defaults),
         )));
         Self {
             engine: metrics.clone(),
@@ -1237,14 +1330,16 @@ impl VectorBackend {
                 let data_dir = config
                     .local
                     .data_dir
-                    .as_deref()
-                    .unwrap_or_else(|| std::path::Path::new("vector"));
-                let engine = LocalVectorEngine::open(data_dir).map_err(|e| {
-                    VectorCoordinatorError::Vector(VectorError::Internal(format!(
-                        "failed to open local vector engine: {e}"
-                    )))
-                })?;
-                Ok(Self::local(engine))
+                    .clone()
+                    .unwrap_or_else(|| std::path::PathBuf::from("vector"));
+                let engine =
+                    crate::vector_defaults::assemble_local_engine(config, data_dir).map_err(|e| {
+                        VectorCoordinatorError::Vector(VectorError::Internal(e))
+                    })?;
+                Ok(Self::from_local_arc_with_limit(
+                    engine,
+                    config.limits.default_max_points,
+                ))
             }
             #[cfg(feature = "vector-qdrant")]
             linkrs_config::VectorEngineKind::Qdrant => {
@@ -1269,7 +1364,13 @@ impl VectorBackend {
                         .await
                         .map_err(|e| VectorCoordinatorError::Vector(VectorError::from(e)))?,
                 );
-                Ok(Self::qdrant(manager))
+                Ok(Self::qdrant_with_defaults(
+                    manager,
+                    CollectionDefaults::from_qdrant(
+                        &config.qdrant.collection,
+                        config.limits.default_max_points,
+                    ),
+                ))
             }
         }
     }

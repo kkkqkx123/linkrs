@@ -239,17 +239,54 @@ pub fn collection_config_to_create(
             // Nested per-vector params mirror the collection-level values.
             hnsw_config,
             quantization_config,
-            on_disk: None,
+            on_disk: cfg.vectors_on_disk,
             datatype: None,
             multivector_config: None,
         })),
     };
 
+    // Storage-engine hints travel as their own diff messages; an absent
+    // sub-block leaves the server default untouched.
+    let (wal_config, optimizers_config, strict_mode_config) = match cfg.storage_hints.as_ref() {
+        None => (None, None, None),
+        Some(hints) => (
+            hints.wal.as_ref().map(|wal| proto::WalConfigDiff {
+                wal_capacity_mb: wal.wal_capacity_mb,
+                wal_segments_ahead: wal.wal_segments_ahead,
+            }),
+            hints
+                .optimizers
+                .as_ref()
+                .map(|optimizers| proto::OptimizersConfigDiff {
+                    deleted_threshold: optimizers.deleted_threshold,
+                    vacuum_min_vector_number: optimizers.vacuum_min_vector_number,
+                    default_segment_number: optimizers.default_segment_number,
+                    max_segment_size: optimizers.max_segment_size,
+                    memmap_threshold: optimizers.memmap_threshold,
+                    indexing_threshold: optimizers.indexing_threshold,
+                    flush_interval_sec: optimizers.flush_interval_sec,
+                    max_optimization_threads: optimizers.max_optimization_threads,
+                }),
+            hints
+                .strict_mode_enabled
+                .map(|enabled| proto::StrictModeConfig {
+                    enabled: Some(enabled),
+                    max_query_limit: None,
+                    max_timeout: None,
+                    unindexed_filtering_retrieve: None,
+                    unindexed_filtering_update: None,
+                    search_max_hnsw_ef: None,
+                    search_allow_exact: None,
+                    search_max_oversampling: None,
+                }),
+        ),
+    };
+
     Ok(proto::CreateCollection {
         collection_name: name.to_string(),
         hnsw_config,
-        wal_config: None,
-        optimizers_config: None,
+        wal_config,
+        optimizers_config,
         shard_number: cfg.shard_number.map(|v| v as u32),
         on_disk_payload: cfg.on_disk_payload,
         timeout: None,
@@ -260,7 +297,7 @@ pub fn collection_config_to_create(
         quantization_config,
         sharding_method: None,
         sparse_vectors_config: None,
-        strict_mode_config: None,
+        strict_mode_config,
     })
 }
 
@@ -495,6 +532,41 @@ pub fn collection_info_from_proto(
         Some(hnsw) => IndexConfig::Hnsw(hnsw),
         None => IndexConfig::Hnsw(HnswConfig::default()),
     };
+    // Vector-level `on_disk` lives inside the vectors config, not the
+    // collection params block.
+    let vectors_on_disk = params
+        .and_then(|p| p.vectors_config.as_ref())
+        .and_then(|vectors| match vectors.config.as_ref() {
+            Some(proto::vectors_config::Config::Params(vector_params)) => vector_params.on_disk,
+            _ => None,
+        });
+    let optimizers = proto_config
+        .and_then(|c| c.optimizer_config.as_ref())
+        .map(|o| OptimizersHints {
+            deleted_threshold: o.deleted_threshold,
+            vacuum_min_vector_number: o.vacuum_min_vector_number,
+            default_segment_number: o.default_segment_number,
+            max_segment_size: o.max_segment_size,
+            memmap_threshold: o.memmap_threshold,
+            indexing_threshold: o.indexing_threshold,
+            flush_interval_sec: o.flush_interval_sec,
+            max_optimization_threads: o.max_optimization_threads,
+        });
+    let wal = proto_config
+        .and_then(|c| c.wal_config.as_ref())
+        .map(|w| WalHints {
+            wal_capacity_mb: w.wal_capacity_mb,
+            wal_segments_ahead: w.wal_segments_ahead,
+        });
+    let strict_mode_enabled = proto_config
+        .and_then(|c| c.strict_mode_config.as_ref())
+        .and_then(|s| s.enabled);
+    let storage_hints = (optimizers.is_some() || wal.is_some() || strict_mode_enabled.is_some())
+        .then(|| StorageHints {
+            optimizers,
+            wal,
+            strict_mode_enabled,
+        });
     let config = CollectionConfig {
         vector_size,
         distance,
@@ -509,6 +581,8 @@ pub fn collection_info_from_proto(
         shard_number: params.map(|p| p.shard_number as usize),
         // Qdrant has no live-point admission cap concept; None = no cap.
         max_points: None,
+        vectors_on_disk,
+        storage_hints,
     };
 
     Ok(CollectionInfo {
