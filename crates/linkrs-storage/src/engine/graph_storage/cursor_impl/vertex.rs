@@ -17,6 +17,9 @@ use linkrs_core::{StorageError, StorageResult, Value, Vertex};
 struct TagCache {
     labels: Vec<LabelId>,
     names: HashMap<LabelId, String>,
+    /// Per-table TTL config for tags with a valid TTL: (duration, column).
+    /// Snapshotted at open from the schema; tables without TTL pay nothing.
+    ttl: HashMap<LabelId, (i64, Arc<str>)>,
 }
 
 struct StagedColumnOut<'a> {
@@ -96,13 +99,19 @@ impl GraphVertexCursor {
             .read_timestamp
             .unwrap_or_else(|| ctx.get_read_timestamp());
         let tag_infos = ctx.schema_manager().list_tags(&space)?;
-        let tags = TagCache {
-            labels: tag_infos.iter().map(|t| t.tag_id).collect(),
-            names: tag_infos
-                .into_iter()
-                .map(|t| (t.tag_id, t.tag_name))
-                .collect(),
-        };
+        let mut labels = Vec::with_capacity(tag_infos.len());
+        let mut names = HashMap::with_capacity(tag_infos.len());
+        let mut ttl = HashMap::new();
+        for info in &tag_infos {
+            labels.push(info.tag_id);
+            names.insert(info.tag_id, info.tag_name.clone());
+            if linkrs_core::types::ttl::has_valid_ttl(info.ttl_duration, info.ttl_col.as_deref()) {
+                if let (Some(duration), Some(col)) = (info.ttl_duration, info.ttl_col.as_deref()) {
+                    ttl.insert(info.tag_id, (duration, Arc::from(col)));
+                }
+            }
+        }
+        let tags = TagCache { labels, names, ttl };
         // When the scan is tag-restricted, scan only that tag's table.  A tag
         // that does not exist in the schema yields no rows (an unknown tag
         // matches no vertex), which mirrors the old residual
@@ -119,6 +128,7 @@ impl GraphVertexCursor {
         let tags = TagCache {
             labels,
             names: tags.names,
+            ttl: tags.ttl,
         };
 
         // Internal ID spaces are per tag table: an allowlist without a tag
@@ -199,6 +209,33 @@ impl GraphVertexCursor {
             staged_rows: Vec::new(),
             staged_idx: 0,
         })
+    }
+
+    /// TTL config of one scanned table, if the schema gives it a valid TTL.
+    /// Tables without TTL skip every expiry check below at zero decode cost.
+    fn table_ttl(&self, label: LabelId) -> Option<(i64, Arc<str>)> {
+        self.tags.ttl.get(&label).cloned()
+    }
+
+    /// Whether one property value is past its TTL at the scan instant.
+    /// A missing column never counts as expired, matching the
+    /// materializing read paths row for row.
+    fn row_expired(
+        ttl: &Option<(i64, Arc<str>)>,
+        properties: &[(Arc<str>, Value)],
+        now: i64,
+    ) -> bool {
+        let Some((duration, col)) = ttl.as_ref() else {
+            return false;
+        };
+        linkrs_core::types::ttl::is_expired(
+            *duration,
+            properties
+                .iter()
+                .find(|(name, _)| name.as_ref() == col.as_ref())
+                .map(|(_, value)| value),
+            now,
+        )
     }
 
     /// Load the next non-empty table's snapshot-visible live ids into
@@ -315,6 +352,8 @@ impl GraphVertexCursor {
             columns,
         } = out;
         let end = (self.staged_idx + (batch_size - internal_ids.len())).min(self.staged_rows.len());
+        let staged_ttl = self.current_label.and_then(|label| self.table_ttl(label));
+        let now = linkrs_core::types::ttl::now_secs();
         let mut rows_sel: Vec<usize> = Vec::new();
         for index in self.staged_idx..end {
             let vid = self.staged_rows[index].vid;
@@ -323,6 +362,11 @@ impl GraphVertexCursor {
                     Some(v) if (range.start..range.end).contains(&v) => {}
                     _ => continue,
                 }
+            }
+            // Expired staged rows are absent: skip before offset
+            // accounting, exactly like the base-table paths.
+            if Self::row_expired(&staged_ttl, &self.staged_rows[index].properties, now) {
+                continue;
             }
             if self.offset_remaining > 0 {
                 self.offset_remaining -= 1;
@@ -452,6 +496,7 @@ impl GraphVertexCursor {
         let names = self.tags.names.clone();
         let (gate_vm, gate_own) = self.ctx.gate_inputs();
         let ts = self.ts;
+        let now = linkrs_core::types::ttl::now_secs();
         let result = data_store.with_vertex_tables(|tables| {
             let guard = crate::mvcc_visibility::VisibilityGuard::new(
                 ts,
@@ -533,21 +578,33 @@ impl GraphVertexCursor {
                     .map(|s| s.as_str())
                     .unwrap_or("unknown");
 
+                let run_ttl = label_id.and_then(|label| self.table_ttl(label));
                 // Decode names for this table run.  A full-row decode (empty
                 // projection) decodes every column of the table; otherwise the
-                // projection plus any pushed-predicate columns.
-                let run_names: Vec<std::sync::Arc<str>> = if prop_names.is_empty() {
-                    Vec::new()
-                } else {
-                    let mut run = prop_names.to_vec();
-                    for predicate in &self.predicate {
-                        let column: std::sync::Arc<str> = predicate.column().into();
-                        if !run.contains(&column) {
-                            run.push(column);
+                // projection plus any pushed-predicate columns.  A TTL table
+                // always decodes its TTL column on top so expiry is
+                // decidable, even on the topology path that otherwise
+                // skips decode entirely.
+                let mut run_names: Vec<std::sync::Arc<str>> =
+                    if prop_names.is_empty() && !self.topology_only {
+                        Vec::new()
+                    } else {
+                        let mut run = prop_names.to_vec();
+                        for predicate in &self.predicate {
+                            let column: std::sync::Arc<str> = predicate.column().into();
+                            if !run.contains(&column) {
+                                run.push(column);
+                            }
                         }
+                        run
+                    };
+                let mut ttl_added = false;
+                if let Some((_, col)) = run_ttl.as_ref() {
+                    if !run_names.iter().any(|name| name == col) {
+                        run_names.push(col.clone());
+                        ttl_added = true;
                     }
-                    run
-                };
+                }
 
                 // Zone-map pruning over the candidate window: rows dropped
                 // here are exactly those the pushed predicates would reject
@@ -566,8 +623,11 @@ impl GraphVertexCursor {
 
                 // Topology-only run: resolve identities with zero property
                 // decode. Predicates are empty by construction (rejected in
-                // `new`), so no predicate filtering applies here.
-                if self.topology_only {
+                // `new`), so no predicate filtering applies here. A TTL
+                // table cannot take this shortcut: it falls through to the
+                // decode path, filters on the TTL column, and strips the
+                // helper column back out below.
+                if self.topology_only && run_ttl.is_none() {
                     let (run_internal, run_vids) = table.scan_topology(&candidates, &guard);
                     if run_internal.is_empty() {
                         continue;
@@ -627,7 +687,51 @@ impl GraphVertexCursor {
                     run_internal = selection.iter().map(|&row| pruned_ids[row]).collect();
                     run_vids = selection.iter().map(|&row| pruned_vids[row]).collect();
                 }
-                let run_rows = run_internal.len();
+                let mut run_rows = run_internal.len();
+                if run_rows == 0 {
+                    continue;
+                }
+
+                // Expired rows are absent: drop them before the merge so
+                // they never consume offset/limit downstream. A TTL column
+                // that was never written keeps every row, matching the
+                // materializing reads.
+                if let Some((duration, _)) = run_ttl.as_ref() {
+                    if let Some(ttl_idx) = decoded
+                        .iter()
+                        .position(|(name, _)| Some(name) == run_ttl.as_ref().map(|(_, col)| col))
+                    {
+                        let mut selection: Vec<usize> = Vec::with_capacity(run_rows);
+                        for row in 0..run_rows {
+                            let expired = decoded[ttl_idx].1.value_at(row).is_some_and(|value| {
+                                linkrs_core::types::ttl::is_expired(*duration, Some(&value), now)
+                            });
+                            if !expired {
+                                selection.push(row);
+                            }
+                        }
+                        if selection.len() != run_rows {
+                            for (_, column) in decoded.iter_mut() {
+                                column.select(&selection);
+                            }
+                            let pruned_ids = std::mem::take(&mut run_internal);
+                            let pruned_vids = std::mem::take(&mut run_vids);
+                            run_internal = selection.iter().map(|&row| pruned_ids[row]).collect();
+                            run_vids = selection.iter().map(|&row| pruned_vids[row]).collect();
+                        }
+                    }
+                }
+                // The helper TTL column leaves the run again unless this
+                // is a genuine full decode: topology output stays
+                // column-free and projections stay exact.
+                if ttl_added && !(prop_names.is_empty() && !self.topology_only) {
+                    if let Some((_, col)) = run_ttl.as_ref() {
+                        if let Some(idx) = decoded.iter().position(|(name, _)| name == col) {
+                            decoded.remove(idx);
+                        }
+                    }
+                }
+                run_rows = run_internal.len();
                 if run_rows == 0 {
                     continue;
                 }
@@ -763,6 +867,7 @@ impl GraphVertexCursor {
         let names = self.tags.names.clone();
         let (gate_vm, gate_own) = self.ctx.gate_inputs();
         let ts = self.ts;
+        let now = linkrs_core::types::ttl::now_secs();
         let batch = data_store.with_vertex_tables(|tables| -> Result<Vec<T>, StorageError> {
             let guard = crate::mvcc_visibility::VisibilityGuard::new(
                 ts,
@@ -785,6 +890,7 @@ impl GraphVertexCursor {
                             .map(|s| s.as_str())
                             .unwrap_or("unknown")
                             .to_string();
+                        let staged_ttl = self.current_label.and_then(|label| self.table_ttl(label));
                         while self.staged_idx < end && !self.exhausted {
                             let index = self.staged_idx;
                             self.staged_idx += 1;
@@ -792,6 +898,12 @@ impl GraphVertexCursor {
                             let internal_id = self.staged_rows[index].id;
                             let mut properties =
                                 std::mem::take(&mut self.staged_rows[index].properties);
+                            // Expired staged rows are absent: skip before
+                            // the projection trims the TTL column away and
+                            // before offset/limit accounting.
+                            if Self::row_expired(&staged_ttl, &properties, now) {
+                                continue;
+                            }
                             if let Some(names) = self.projection.as_deref() {
                                 properties.retain(|(name, _)| names.iter().any(|n| n == name));
                             }
@@ -867,14 +979,27 @@ impl GraphVertexCursor {
                     None => window,
                 };
                 let label_id = self.current_label;
+                let base_ttl = label_id.and_then(|label| self.table_ttl(label));
+                // A TTL table decodes its TTL column on top of the
+                // projection so expiry is decidable; the column is
+                // trimmed back below when the projection did not ask
+                // for it.
+                let (fetch_projection, added_ttl) = match (&self.projection, base_ttl.as_ref()) {
+                    (Some(names), Some((_, col))) if !names.iter().any(|name| name == col) => {
+                        let mut extended = names.clone();
+                        extended.push(col.clone());
+                        (Some(extended), true)
+                    }
+                    _ => (self.projection.clone(), false),
+                };
                 let records =
-                    table.resolve_projected_batch(ids, &guard, self.projection.as_deref())?;
+                    table.resolve_projected_batch(ids, &guard, fetch_projection.as_deref())?;
                 let tag_name = label_id
                     .and_then(|l| names.get(&l))
                     .map(|s| s.as_str())
                     .unwrap_or("unknown");
 
-                for record in records.into_iter().flatten() {
+                for mut record in records.into_iter().flatten() {
                     // The vertex-id range is applied to the external vertex ID
                     // (the same domain as `PartitionSpec` ranges). Internal IDs
                     // are shard-local and cannot be addressed by a global
@@ -890,6 +1015,18 @@ impl GraphVertexCursor {
                         && !self.predicate.iter().all(|p| p.matches(&record.properties))
                     {
                         continue;
+                    }
+                    // Expired rows are absent: skip before offset/limit
+                    // accounting, then drop the helper TTL column again.
+                    if Self::row_expired(&base_ttl, &record.properties, now) {
+                        continue;
+                    }
+                    if added_ttl {
+                        if let Some(names) = self.projection.as_deref() {
+                            record
+                                .properties
+                                .retain(|(name, _)| names.iter().any(|n| n == name));
+                        }
                     }
                     if self.offset_remaining > 0 {
                         self.offset_remaining -= 1;

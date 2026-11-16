@@ -29,6 +29,9 @@ struct TableDef {
 struct TargetDef {
     edge_type_name: String,
     tables: Vec<TableDef>,
+    /// TTL config of the edge type, when it configures a valid TTL:
+    /// (duration, column). Types without TTL skip every expiry check.
+    ttl: Option<(i64, Arc<str>)>,
 }
 
 #[derive(Clone, Debug)]
@@ -320,6 +323,7 @@ impl GraphEdgeCursor {
 
         let ctx = Arc::clone(&self.ctx);
         let ts = self.ts;
+        let now = linkrs_core::types::ttl::now_secs();
         let predicate = self.predicate.clone();
         let src_id_range = self.src_id_range.clone();
         let targets = self.targets.clone();
@@ -339,6 +343,33 @@ impl GraphEdgeCursor {
                     break;
                 }
                 let target = &targets[self.target_idx];
+                // A TTL type decodes its TTL column on top of the fetch
+                // set so expiry is decidable; it is stripped back out
+                // below when the projection did not ask for it.
+                let ttl_col: Option<std::sync::Arc<str>> = match &target.ttl {
+                    Some((_, col)) if fetch_names.iter().all(|name| name != col) => {
+                        Some(col.clone())
+                    }
+                    _ => None,
+                };
+                let extended_fetch: Option<Vec<std::sync::Arc<str>>>;
+                let fetch_for_decode: Option<&[std::sync::Arc<str>]> = if self.topology_only {
+                    // TTL-gated topology decode: identities plus the
+                    // TTL column only; the column is stripped again
+                    // below so the output stays column-free.
+                    extended_fetch = ttl_col.clone().map(|col| vec![col]);
+                    extended_fetch.as_deref()
+                } else {
+                    match (&fetch_opt, &ttl_col) {
+                        (Some(base), Some(col)) => {
+                            let mut names = base.clone();
+                            names.push(col.clone());
+                            extended_fetch = Some(names);
+                            extended_fetch.as_deref()
+                        }
+                        (base, _) => base.as_deref(),
+                    }
+                };
                 if self.table_idx >= target.tables.len() {
                     self.target_idx += 1;
                     self.table_idx = 0;
@@ -422,7 +453,10 @@ impl GraphEdgeCursor {
                     continue;
                 }
 
-                if self.topology_only {
+                // A TTL type cannot take the topology shortcut: fall
+                // through to the decode path, filter on the TTL column,
+                // and strip the helper column back out below.
+                if self.topology_only && target.ttl.is_none() {
                     if self.offset_remaining > 0 {
                         let skip = self.offset_remaining.min(raw_src.len());
                         raw_src.drain(..skip);
@@ -473,14 +507,14 @@ impl GraphEdgeCursor {
                     &raw_edge,
                     &raw_row,
                     ts,
-                    fetch_opt.as_deref(),
+                    fetch_for_decode,
                 );
                 let mut col_map: std::collections::HashMap<std::sync::Arc<str>, ColumnValues> =
                     std::collections::HashMap::new();
                 for (name, values) in decoded {
                     col_map.insert(name, values);
                 }
-                let run_names: Vec<std::sync::Arc<str>> = if prop_names.is_empty() {
+                let mut run_names: Vec<std::sync::Arc<str>> = if prop_names.is_empty() {
                     let mut names: Vec<std::sync::Arc<str>> =
                         col_map.keys().cloned().collect::<Vec<_>>();
                     names.sort();
@@ -488,6 +522,11 @@ impl GraphEdgeCursor {
                 } else {
                     fetch_names.clone()
                 };
+                if let Some(col) = ttl_col.as_ref() {
+                    if !run_names.iter().any(|name| name == col) {
+                        run_names.push(col.clone());
+                    }
+                }
                 let mut run_columns: Vec<ColumnValues> = run_names
                     .iter()
                     .map(|name| {
@@ -541,6 +580,63 @@ impl GraphEdgeCursor {
                         raw_row = next_row;
                         for col in run_columns.iter_mut() {
                             col.select(&selection);
+                        }
+                    }
+                }
+
+                // Expired edges are absent: drop them before offset/limit
+                // accounting. A TTL column that was never written keeps
+                // every row, matching the materializing reads.
+                if let Some((duration, _)) = target.ttl.as_ref() {
+                    if let Some(ttl_idx) = run_names
+                        .iter()
+                        .position(|name| ttl_col.as_ref().is_some_and(|col| name == col))
+                    {
+                        let mut selection: Vec<usize> = Vec::new();
+                        for row in 0..raw_src.len() {
+                            let expired = run_columns[ttl_idx].value_at(row).is_some_and(|value| {
+                                linkrs_core::types::ttl::is_expired(*duration, Some(&value), now)
+                            });
+                            if !expired {
+                                selection.push(row);
+                            }
+                        }
+                        if selection.len() != raw_src.len() {
+                            let mut next_src = Vec::with_capacity(selection.len());
+                            let mut next_dst = Vec::with_capacity(selection.len());
+                            let mut next_rank = Vec::with_capacity(selection.len());
+                            let mut next_edge = Vec::with_capacity(selection.len());
+                            let mut next_row = Vec::with_capacity(selection.len());
+                            for &i in &selection {
+                                next_src.push(raw_src[i]);
+                                next_dst.push(raw_dst[i]);
+                                next_rank.push(raw_rank[i]);
+                                next_edge.push(raw_edge[i]);
+                                next_row.push(raw_row[i]);
+                            }
+                            raw_src = next_src;
+                            raw_dst = next_dst;
+                            raw_rank = next_rank;
+                            raw_edge = next_edge;
+                            raw_row = next_row;
+                            for col in run_columns.iter_mut() {
+                                col.select(&selection);
+                            }
+                        }
+                    }
+                }
+                // The helper TTL column leaves the run again unless this
+                // is a genuine full decode: topology output stays
+                // column-free and projections stay exact.
+                let keep_ttl_output = prop_names.is_empty() && !self.topology_only;
+                if !keep_ttl_output {
+                    if let Some(col) = ttl_col.as_ref() {
+                        let requested = fetch_names.iter().any(|name| name == col);
+                        if !requested {
+                            if let Some(idx) = run_names.iter().position(|name| name == col) {
+                                run_names.remove(idx);
+                                run_columns.remove(idx);
+                            }
                         }
                     }
                 }
@@ -1068,7 +1164,9 @@ fn scan_mutable(args: ScanArgs) {
     } = args;
     // Column pruning: fetch the projection plus any predicate-only columns
     // in one storage read instead of decoding every column per edge.
-    // `None` still means all columns.
+    // `None` still means all columns. A TTL type additionally fetches its
+    // TTL column so expiry is decidable; trimming below drops it again
+    // when the projection did not ask for it.
     let fetch_columns: Option<Vec<Arc<str>>> = match *projection {
         None => None,
         Some(ref names) => {
@@ -1078,9 +1176,15 @@ fn scan_mutable(args: ScanArgs) {
                     cols.push(extra.clone());
                 }
             }
+            if let Some((_, ttl_col)) = target.ttl.as_ref() {
+                if !cols.iter().any(|c| c == ttl_col) {
+                    cols.push(ttl_col.clone());
+                }
+            }
             Some(cols)
         }
     };
+    let now = linkrs_core::types::ttl::now_secs();
 
     let mut no_stop = || false;
     let table_done = walk_mutable_entries(
@@ -1143,6 +1247,22 @@ fn scan_mutable(args: ScanArgs) {
             };
             if !predicate.iter().all(|p| p.matches(properties.as_slice())) {
                 return EntryVerdict::Take;
+            }
+            // Expired edges are absent: skip before offset/limit
+            // accounting. Trimming below drops the helper TTL column
+            // again when the projection did not ask for it.
+            if let Some((duration, ttl_col)) = target.ttl.as_ref() {
+                let expired = linkrs_core::types::ttl::is_expired(
+                    *duration,
+                    properties
+                        .iter()
+                        .find(|(name, _)| name == ttl_col)
+                        .map(|(_, value)| value),
+                    now,
+                );
+                if expired {
+                    return EntryVerdict::Take;
+                }
             }
             trim_to_projection(&mut properties, projection);
 
@@ -1362,9 +1482,18 @@ fn build_target(
         None => tables,
     };
 
+    let ttl = match (edge_info.ttl_duration, edge_info.ttl_col.as_deref()) {
+        (Some(duration), Some(col))
+            if linkrs_core::types::ttl::has_valid_ttl(Some(duration), Some(col)) =>
+        {
+            Some((duration, Arc::from(col)))
+        }
+        _ => None,
+    };
     Ok(TargetDef {
         edge_type_name: edge_type.to_string(),
         tables,
+        ttl,
     })
 }
 

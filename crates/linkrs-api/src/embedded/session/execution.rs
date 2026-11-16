@@ -89,13 +89,10 @@ impl<S: StorageClient + Clone + Send + Sync + 'static + linkrs_storage::UndoTarg
 
         let mut query_api = self.db.query_api.write();
         let result = if self.auto_commit {
-            let storage = self
-                .db
-                .storage
-                .read()
-                .bind_auto_commit_context()
-                .map_err(|error| CoreError::StorageError(error.to_string()))?;
-            query_api.execute_with_operation_storage(query, ctx, storage)?
+            match self.auto_commit_operation_storage(query)? {
+                Some(storage) => query_api.execute_with_operation_storage(query, ctx, storage)?,
+                None => query_api.execute(query, ctx)?,
+            }
         } else {
             query_api.execute(query, ctx)?
         };
@@ -120,6 +117,24 @@ impl<S: StorageClient + Clone + Send + Sync + 'static + linkrs_storage::UndoTarg
     /// transaction / session commands.
     fn parse_command(query: &str) -> CoreResult<Option<ParserResult>> {
         parse_session_command(query).map_err(CoreError::from)
+    }
+
+    /// Caller-side storage for auto-commit statements: pure reads return
+    /// `None` so the pipeline binds its own read-only storage per statement
+    /// class, while everything else keeps the write-capable auto-commit
+    /// binding. The statement class reuses the pipeline classifier, so the
+    /// two layers can never disagree on what a pure read is.
+    fn auto_commit_operation_storage(&self, query: &str) -> CoreResult<Option<S>> {
+        use linkrs_query::pipeline::prepared::{classify_query_text, StatementClass};
+        if classify_query_text(query) == Some(StatementClass::ReadOnly) {
+            return Ok(None);
+        }
+        self.db
+            .storage
+            .read()
+            .bind_auto_commit_context()
+            .map(|storage| Some(storage))
+            .map_err(|error| CoreError::StorageError(error.to_string()))
     }
 
     /// Execute a parameterized query
@@ -178,13 +193,10 @@ impl<S: StorageClient + Clone + Send + Sync + 'static + linkrs_storage::UndoTarg
 
         let mut query_api = self.db.query_api.write();
         let result = if self.auto_commit {
-            let storage = self
-                .db
-                .storage
-                .read()
-                .bind_auto_commit_context()
-                .map_err(|error| CoreError::StorageError(error.to_string()))?;
-            query_api.execute_with_operation_storage(query, ctx, storage)?
+            match self.auto_commit_operation_storage(query)? {
+                Some(storage) => query_api.execute_with_operation_storage(query, ctx, storage)?,
+                None => query_api.execute(query, ctx)?,
+            }
         } else {
             query_api.execute(query, ctx)?
         };
@@ -253,13 +265,10 @@ impl<S: StorageClient + Clone + Send + Sync + 'static + linkrs_storage::UndoTarg
 
         let mut query_api = self.db.query_api.write();
         let result = if self.auto_commit {
-            let storage = self
-                .db
-                .storage
-                .read()
-                .bind_auto_commit_context()
-                .map_err(|error| CoreError::StorageError(error.to_string()))?;
-            query_api.execute_with_operation_storage(query, ctx, storage)?
+            match self.auto_commit_operation_storage(query)? {
+                Some(storage) => query_api.execute_with_operation_storage(query, ctx, storage)?,
+                None => query_api.execute(query, ctx)?,
+            }
         } else {
             query_api.execute(query, ctx)?
         };
@@ -323,13 +332,10 @@ impl<S: StorageClient + Clone + Send + Sync + 'static + linkrs_storage::UndoTarg
                 .map_err(|e| CoreError::TransactionFailed(e.to_string()))?;
             result
         } else if self.auto_commit {
-            let storage = self
-                .db
-                .storage
-                .read()
-                .bind_auto_commit_context()
-                .map_err(|error| CoreError::StorageError(error.to_string()))?;
-            query_api.execute_with_operation_storage(query, ctx, storage)?
+            match self.auto_commit_operation_storage(query)? {
+                Some(storage) => query_api.execute_with_operation_storage(query, ctx, storage)?,
+                None => query_api.execute(query, ctx)?,
+            }
         } else {
             query_api.execute(query, ctx)?
         };

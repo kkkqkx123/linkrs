@@ -194,6 +194,19 @@ pub fn is_diagnostic(stmt: &Stmt) -> bool {
     matches!(stmt, Stmt::Explain(_) | Stmt::Profile(_))
 }
 
+/// Parse query text and classify the statement for caller-side binding.
+///
+/// `None` on parse failure: callers keep their current binding so the
+/// downstream parse reports the original error unchanged.
+pub fn classify_query_text(query: &str) -> Option<StatementClass> {
+    let mut parser = crate::parser::Parser::new(query);
+    let parsed = parser.parse().ok()?;
+    if parser.has_errors() {
+        return None;
+    }
+    Some(classify_statement(parsed.ast.stmt()))
+}
+
 pub fn is_read_only_cacheable(stmt: &Stmt) -> bool {
     match stmt {
         Stmt::Pipe(pipe) => {
@@ -375,6 +388,27 @@ mod tests {
             assert_eq!(classify_statement(&stmt), StatementClass::Ddl);
             assert!(!is_read_only_cacheable(&stmt));
         }
+    }
+
+    #[test]
+    fn query_text_classification_drives_binding_choice() {
+        assert_eq!(
+            classify_query_text("MATCH (n:person) RETURN n"),
+            Some(StatementClass::ReadOnly)
+        );
+        assert_eq!(
+            classify_query_text("MATCH (n:person) RETURN count(n)"),
+            Some(StatementClass::ReadOnly)
+        );
+        assert_eq!(
+            classify_query_text("INSERT VERTEX person(name) VALUES \"p1\": (\"a\")"),
+            Some(StatementClass::Dml)
+        );
+        assert_eq!(
+            classify_query_text("EXPLAIN MATCH (n) RETURN n"),
+            Some(StatementClass::Diagnostic)
+        );
+        assert_eq!(classify_query_text("MATCH (n RETURN"), None);
     }
 
     #[test]

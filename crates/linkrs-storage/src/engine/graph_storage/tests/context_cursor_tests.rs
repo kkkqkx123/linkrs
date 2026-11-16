@@ -930,3 +930,154 @@ fn cursor_edge_src_slice_rejects_empty_division() {
         "invalid edge slice must name the contract: {err}"
     );
 }
+
+/// TTL parity between the materializing reads and every cursor path.
+///
+/// Rows whose TTL column is past `now + duration` are absent everywhere:
+/// the Vec scan, the cursor row/flat/column batches and the topology-only
+/// scan must all hide the expired row without decoding anything extra
+/// for tables without TTL.
+#[test]
+fn cursor_scans_hide_ttl_expired_rows_like_vec_scans() {
+    let mut storage = create_test_storage();
+    setup_space(&mut storage);
+    let tag = linkrs_core::types::TagInfo::new("Session".to_string())
+        .with_properties(vec![
+            PropertyDef::new("id".into(), DataType::BigInt),
+            PropertyDef::new("expire_at".into(), DataType::BigInt),
+        ])
+        .with_ttl(Some(100), Some("expire_at".to_string()));
+    storage
+        .create_tag("test_space", &tag)
+        .expect("create ttl tag");
+    let live_at = linkrs_core::types::ttl::now_secs() + 1_000_000;
+    for (id, expire_at) in [(1, live_at), (2, 0)] {
+        let vertex = Vertex::new(
+            VertexId::try_from_int64(id).expect("test vertex id"),
+            Tag::new(
+                "Session".into(),
+                vec![
+                    ("id".into(), Value::BigInt(id)),
+                    ("expire_at".into(), Value::BigInt(expire_at)),
+                ]
+                .into_iter()
+                .collect(),
+            ),
+        );
+        storage
+            .insert_vertex("test_space", vertex)
+            .expect("insert session vertex");
+    }
+
+    let vec_rows = storage
+        .scan_vertices_by_tag("test_space", "Session")
+        .expect("vec scan");
+    assert_eq!(vec_rows.len(), 1, "vec scan hides the expired row");
+
+    let options = ScanOptions::default().with_tag("Session".into());
+    let mut cursor = storage
+        .create_vertex_cursor("test_space", &options)
+        .expect("cursor");
+    let rows = cursor.next_batch(16).expect("row batch");
+    assert_eq!(rows.len(), 1, "cursor row scan hides the expired row");
+    assert_eq!(
+        rows[0].vid,
+        VertexId::try_from_int64(1).expect("test vertex id")
+    );
+
+    let mut cursor = storage
+        .create_vertex_cursor("test_space", &options)
+        .expect("cursor");
+    let flat = cursor.next_flat_batch(16).expect("flat batch");
+    assert_eq!(flat.len(), 1, "cursor flat scan hides the expired row");
+
+    let mut cursor = storage
+        .create_vertex_cursor("test_space", &options)
+        .expect("cursor");
+    let columns = cursor.next_column_batch(&[], 16).expect("column batch");
+    assert_eq!(
+        columns.vids.len(),
+        1,
+        "cursor column scan hides the expired row"
+    );
+
+    let mut topo = ScanOptions::default().with_tag("Session".into());
+    topo.topology_only = true;
+    let mut cursor = storage
+        .create_vertex_cursor("test_space", &topo)
+        .expect("cursor");
+    let rows = cursor.next_batch(16).expect("topology batch");
+    assert_eq!(
+        rows.len(),
+        1,
+        "topology scan hides the expired row without decoding it"
+    );
+}
+
+/// Edge-side TTL parity: the materializing neighbor read and every edge
+/// cursor path hide the expired edge.
+#[test]
+fn edge_cursor_scans_hide_ttl_expired_rows_like_vec_scans() {
+    let mut storage = create_test_storage();
+    setup_space(&mut storage);
+    setup_person_tag(&mut storage);
+    let edge = linkrs_core::types::EdgeTypeInfo::new("SEEN".to_string())
+        .with_properties(vec![
+            PropertyDef::new("weight".into(), DataType::BigInt),
+            PropertyDef::new("expire_at".into(), DataType::BigInt),
+        ])
+        .with_ttl(Some(100), Some("expire_at".to_string()));
+    storage
+        .create_edge_type("test_space", &edge)
+        .expect("create ttl edge type");
+    insert_test_vertex(&mut storage, 1, "Alice");
+    insert_test_vertex(&mut storage, 2, "Bob");
+    insert_test_vertex(&mut storage, 3, "Carol");
+    let live_at = linkrs_core::types::ttl::now_secs() + 1_000_000;
+    for (dst, expire_at) in [(2, live_at), (3, 0)] {
+        storage
+            .insert_edge(
+                "test_space",
+                Edge::new(
+                    VertexId::try_from_int64(1).expect("test vertex id"),
+                    VertexId::try_from_int64(dst).expect("test vertex id"),
+                    "SEEN".into(),
+                    0,
+                    vec![
+                        ("weight".into(), Value::BigInt(1)),
+                        ("expire_at".into(), Value::BigInt(expire_at)),
+                    ]
+                    .into_iter()
+                    .collect(),
+                ),
+            )
+            .expect("insert edge");
+    }
+
+    let vec_edges = storage
+        .get_node_edges(
+            "test_space",
+            &VertexId::try_from_int64(1).expect("test vertex id"),
+            EdgeDirection::Out,
+            &["SEEN".to_string()],
+        )
+        .expect("vec edge read");
+    assert_eq!(vec_edges.len(), 1, "vec read hides the expired edge");
+
+    let options = ScanOptions::default().with_edge_type("SEEN".into());
+    let mut cursor = storage
+        .create_edge_cursor("test_space", &options)
+        .expect("cursor");
+    let rows = cursor.next_batch(16).expect("row batch");
+    assert_eq!(rows.len(), 1, "cursor row scan hides the expired edge");
+
+    let mut cursor = storage
+        .create_edge_cursor("test_space", &options)
+        .expect("cursor");
+    let columns = cursor.next_column_batch(&[], 16).expect("column batch");
+    assert_eq!(
+        columns.srcs.len(),
+        1,
+        "cursor column scan hides the expired edge"
+    );
+}

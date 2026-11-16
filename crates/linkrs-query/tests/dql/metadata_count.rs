@@ -251,6 +251,66 @@ fn undirected_edge_count_falls_back() {
 }
 
 #[test]
+fn undirected_edge_count_locks_two_e_minus_loops() {
+    // Slow-path Both semantics, locked as the oracle for any future
+    // metadata support. A pure Both count takes the count-only degree
+    // tail: per-seed deduped adjacency with seed-side liveness only, so
+    // the far side is ignored exactly like the directed degree sum. Each
+    // edge with a live seed endpoint counts once per such endpoint, a
+    // live self-loop counts once. Fixture: chain 0->1->2, self-loop 2->2,
+    // dangling-far 0->3 after deleting 3. Seeds 0/1/2 contribute 2/2/2
+    // (the dangling edge counts from live seed 0): total 6. Directed
+    // count over the same fixture is 4, pinning the per-direction sums
+    // a future metadata Both walk must reproduce.
+    let mut scenario = TestScenario::new()
+        .expect("scenario")
+        .setup_space("metadata_count_both_lock")
+        .exec_ddl("CREATE TAG Node(name STRING)")
+        .assert_success()
+        .exec_ddl("CREATE TAG Other(name STRING)")
+        .assert_success()
+        .exec_ddl("CREATE EDGE Link(weight DOUBLE) FROM Node TO Node")
+        .assert_success();
+    for i in 0..4 {
+        scenario = scenario.exec_dml(&format!("INSERT VERTEX Node(name) VALUES {i}:(\"{i}\")"));
+    }
+    scenario = scenario.assert_success();
+    scenario = scenario
+        .exec_dml("INSERT VERTEX Other(name) VALUES 10:(\"10\")")
+        .assert_success();
+    for (src, dst) in [(0, 1), (1, 2), (2, 2), (0, 3)] {
+        scenario = scenario.exec_dml(&format!(
+            "INSERT EDGE Link(weight) VALUES {src} -> {dst}:(1.0)"
+        ));
+    }
+    scenario = scenario.assert_success();
+    scenario = scenario
+        .exec_dml("DELETE VERTEX Node FROM 3")
+        .assert_success();
+
+    let query = "MATCH (a)-[r:Link]-(b) RETURN count(r)";
+    let scenario = scenario.query(&format!("EXPLAIN FORMAT = DOT {query}"));
+    assert_no_marker(&plan_of(&scenario), query);
+    let scenario = scenario.assert_success();
+    let scenario = scenario.query(query);
+    let scenario = scenario.assert_success().assert_result_count(1);
+    assert_eq!(count_value(&scenario), 6);
+
+    let directed = "MATCH ()-[r:Link]->() RETURN count(r)";
+    let scenario = scenario.query(directed);
+    let scenario = scenario.assert_success().assert_result_count(1);
+    assert_eq!(count_value(&scenario), 4);
+
+    let outside = "MATCH (a:Other)-[r:Link]-(b) RETURN count(r)";
+    let scenario = scenario.query(&format!("EXPLAIN FORMAT = DOT {outside}"));
+    assert_no_marker(&plan_of(&scenario), outside);
+    let scenario = scenario.assert_success();
+    let scenario = scenario.query(outside);
+    let scenario = scenario.assert_success().assert_result_count(1);
+    assert_eq!(count_value(&scenario), 0);
+}
+
+#[test]
 fn multi_hop_count_falls_back_with_exact_value() {
     let query = "MATCH (a:Node)-[:Link]->(b:Node)-[:Link]->(c:Node) RETURN count(c)";
     let scenario = setup_line();
@@ -295,10 +355,9 @@ fn edge_ttl_falls_back_with_exact_value() {
 
 #[test]
 fn vertex_ttl_falls_back_matching_cursor() {
-    // The streaming scan counts TTL-expired vertices (it never decodes
-    // expiry); metadata refuses TTL tags so the fallback observes the
-    // same rows, keeping both paths consistent today and after a future
-    // cursor TTL fix.
+    // The streaming cursor now filters expired rows exactly like the
+    // materializing reads; metadata refuses TTL tags so the fallback
+    // observes the same live rows, keeping both paths consistent.
     let mut scenario = TestScenario::new()
         .expect("scenario")
         .setup_space("metadata_count_vertex_ttl")
@@ -320,7 +379,7 @@ fn vertex_ttl_falls_back_matching_cursor() {
 
     let scenario = scenario.query(query);
     let scenario = scenario.assert_success().assert_result_count(1);
-    assert_eq!(count_value(&scenario), 2);
+    assert_eq!(count_value(&scenario), 1);
 }
 
 #[test]
