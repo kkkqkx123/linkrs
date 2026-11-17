@@ -74,6 +74,7 @@ pub struct BoundFetchVerticesStatement {
     pub tag_name: Option<String>,
     pub ids: Vec<BoundExpression>,
     pub properties: Option<Vec<String>>,
+    pub yield_clause: Option<BoundProjectionClause>,
 }
 
 #[derive(Debug, Clone)]
@@ -83,6 +84,7 @@ pub struct BoundFetchEdgesStatement {
     pub edge_type: String,
     pub rank: Option<BoundExpression>,
     pub properties: Option<Vec<String>>,
+    pub yield_clause: Option<BoundProjectionClause>,
 }
 
 #[derive(Debug, Clone)]
@@ -159,6 +161,8 @@ pub struct BoundPipeStatement {
 pub struct BoundGroupByStatement {
     pub keys: Vec<BoundExpression>,
     pub aggregates: Vec<BoundAggregateCall>,
+    /// Bound HAVING filter, evaluated above the aggregation.
+    pub having: Option<BoundExpression>,
 }
 
 #[derive(Debug, Clone)]

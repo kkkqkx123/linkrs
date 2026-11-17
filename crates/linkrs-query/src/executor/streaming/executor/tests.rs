@@ -468,6 +468,7 @@ fn run_aggregate(
                         vec![Expression::variable("v".to_string())],
                     ),
                 ],
+                aggregate_filters: vec![None; 5],
                 output_col_names: vec![],
             },
             &tracker_budget,
@@ -1023,4 +1024,82 @@ fn final_aggregate_drain_ignores_hidden_rows() {
     let values = pull_first_bigints(&mut executor);
     executor.close().expect("close should succeed");
     assert_eq!(values, vec![2, 3]);
+}
+
+#[test]
+fn aggregate_filter_counts_only_qualifying_rows() {
+    use crate::executor::streaming::operators::spec::BlockingSpec;
+    use linkrs_core::types::expr::Expression;
+    use linkrs_core::types::operators::{AggregateFunction, BinaryOperator};
+
+    // Rows v = 1..=4 with FILTER (WHERE v > 2): the filtered count is 2
+    // while the unfiltered count over the same input would be 4.
+    let rows = (1..=4).map(|v| vec![Value::BigInt(v)]).collect();
+    let filter = Expression::binary(
+        Expression::variable("v"),
+        BinaryOperator::GreaterThan,
+        Expression::literal(Value::BigInt(2)),
+    );
+    let mut executor = blocking_over(
+        Box::new(scan_executor(rows, vec!["v".to_string()])),
+        &BlockingSpec::Aggregate {
+            group_by_expressions: vec![],
+            aggregate_functions: vec![(AggregateFunction::Count, vec![Expression::variable("v")])],
+            aggregate_filters: vec![Some(filter)],
+            output_col_names: vec!["c".to_string()],
+        },
+    );
+
+    executor.open().expect("open should succeed");
+    let values = pull_first_bigints(&mut executor);
+    executor.close().expect("close should succeed");
+    assert_eq!(values, vec![2]);
+}
+
+#[test]
+fn partial_aggregate_filter_counts_only_qualifying_rows() {
+    use crate::executor::streaming::operators::spec::BlockingSpec;
+    use linkrs_core::types::expr::Expression;
+    use linkrs_core::types::operators::{AggregateFunction, BinaryOperator};
+
+    // Same FILTER contract on the partial phase: rows failing the
+    // predicate never enter the accumulator.
+    let rows = (1..=4).map(|v| vec![Value::BigInt(v)]).collect();
+    let filter = Expression::binary(
+        Expression::variable("v"),
+        BinaryOperator::GreaterThan,
+        Expression::literal(Value::BigInt(2)),
+    );
+    let mut executor = blocking_over(
+        Box::new(scan_executor(rows, vec!["v".to_string()])),
+        &BlockingSpec::PartialAggregate {
+            group_by_expressions: vec![],
+            aggregate_functions: vec![(AggregateFunction::Count, vec![Expression::variable("v")])],
+            aggregate_filters: vec![Some(filter)],
+            output_col_names: vec!["c".to_string()],
+        },
+    );
+
+    executor.open().expect("open should succeed");
+    let mut partials = Vec::new();
+    while let Some(chunk) = executor.advance().expect("advance should succeed") {
+        partials.extend(chunk.rows);
+    }
+    executor.close().expect("close should succeed");
+    assert_eq!(partials.len(), 1, "one global group expected");
+    // The partial row holds the group key plus one partial accumulator
+    // value; decoding it must observe exactly the 2 qualifying rows.
+    let partial_value = partials[0].last().cloned().expect("partial value");
+    let decoded =
+        crate::executor::streaming::helpers::accumulator_states::decode_partial_with_args(
+            &AggregateFunction::Count,
+            &[Expression::variable("v")],
+            &partial_value,
+        )
+        .expect("partial must decode");
+    assert_eq!(
+        decoded.finalize(),
+        Value::BigInt(2),
+        "partial must hold 2 qualifying rows"
+    );
 }

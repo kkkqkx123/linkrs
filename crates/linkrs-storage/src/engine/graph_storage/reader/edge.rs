@@ -1022,9 +1022,7 @@ pub(crate) fn count_visible_edges(
                 && table.mvcc.total_tombstone_count() == 0
                 && table.mvcc.max_create_ts() <= ts;
             if edge_quiescent {
-                log::debug!(
-                    "edge metadata count quiescent fast path: {edge_type} {direction:?}"
-                );
+                log::debug!("edge metadata count quiescent fast path: {edge_type} {direction:?}");
                 if quiescent_full {
                     return Ok(leg.edge_count());
                 }
@@ -1112,10 +1110,7 @@ fn count_leg_groups(
 /// so every physical entry is visible and only the seed-side liveness
 /// probe remains. Callers with a quiescent hole-free endpoint table skip
 /// this walk entirely via the physical leg length.
-fn count_leg_seed_only(
-    leg: &crate::edge::node_group::CsrShardSet,
-    live_ids: &[u32],
-) -> u64 {
+fn count_leg_seed_only(leg: &crate::edge::node_group::CsrShardSet, live_ids: &[u32]) -> u64 {
     let groups = leg.group_ids();
     if groups.len() < 2 || leg.edge_count() < 8192 {
         return count_leg_seed_groups(leg, &groups, live_ids);

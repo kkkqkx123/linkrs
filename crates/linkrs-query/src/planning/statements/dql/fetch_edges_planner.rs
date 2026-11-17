@@ -3,11 +3,15 @@
 
 use crate::binder::BoundStatement;
 use crate::planning::plan::core::node_id_generator::next_node_id;
-use crate::planning::plan::core::nodes::{GetEdgesNode, PlanNodeEnum};
+use crate::planning::plan::core::nodes::{GetEdgesNode, PlanNodeEnum, ProjectNode};
 use crate::planning::plan::execution_plan::SubPlan;
 use crate::planning::plan::logical::logical_nodes::access::LogicalGetEdgesNode;
+use crate::planning::plan::logical::logical_nodes::operation::LogicalProjectNode;
 use crate::planning::plan::logical::LogicalNodeEnum;
 use crate::planning::planner::{Planner, PlannerError};
+use crate::planning::statements::clauses::yield_planner::{
+    apply_bound_tail_logical, apply_bound_tail_physical,
+};
 use crate::planning::statements::projection_util;
 
 /// The FETCH EDGES query planner
@@ -66,19 +70,59 @@ impl Planner for FetchEdgesPlanner {
             None => "0".to_string(),
         };
 
-        let get_edges_node = PlanNodeEnum::GetEdges(GetEdgesNode::new(
+        let mut current_node = PlanNodeEnum::GetEdges(GetEdgesNode::new(
             1,
             &src_str,
             &fetch.edge_type,
             &rank_str,
             &dst_str,
         ));
-        let current_logical = match &get_edges_node {
+        let mut current_logical = match &current_node {
             PlanNodeEnum::GetEdges(node) => get_edges_mirror(node),
             _ => unreachable!("fetch edges root is always a GetEdges node"),
         };
 
-        let sub_plan = SubPlan::from_dual(Some(get_edges_node), None, Some(current_logical));
+        // Embedded YIELD projects above the edge lookup; the shared tail
+        // lowers row filter, dedup, sort, sample, and pagination.
+        if let Some(ref yield_clause) = fetch.yield_clause {
+            let yield_columns: Vec<linkrs_core::YieldColumn> = yield_clause
+                .items
+                .iter()
+                .map(|item| {
+                    crate::binder::expr_converter::bound_projection_to_yield_column(item, &expr_ctx)
+                        .map_err(PlannerError::InvalidOperation)
+                })
+                .collect::<Result<Vec<_>, PlannerError>>()?;
+            let project_aliases: Vec<String> =
+                yield_columns.iter().map(|col| col.alias.clone()).collect();
+            let project_node = ProjectNode::new(current_node.clone(), yield_columns.clone())
+                .map_err(|e| {
+                    PlannerError::PlanGenerationFailed(format!(
+                        "Failed to create ProjectNode: {}",
+                        e
+                    ))
+                })?;
+            current_node = PlanNodeEnum::Project(project_node);
+            current_logical = LogicalNodeEnum::Project(LogicalProjectNode {
+                id: next_node_id(),
+                input: Some(Box::new(current_logical)),
+                columns: yield_columns,
+                subqueries: Vec::new(),
+                has_folded_expressions: false,
+                output_var: None,
+                col_names: project_aliases.clone(),
+                column_types: vec![],
+            });
+            current_node = apply_bound_tail_physical(current_node, yield_clause, &expr_ctx)?;
+            current_logical = apply_bound_tail_logical(
+                current_logical,
+                yield_clause,
+                &expr_ctx,
+                &project_aliases,
+            )?;
+        }
+
+        let sub_plan = SubPlan::from_dual(Some(current_node), None, Some(current_logical));
         Ok(sub_plan)
     }
 }

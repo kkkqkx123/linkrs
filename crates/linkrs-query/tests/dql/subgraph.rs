@@ -189,9 +189,11 @@ fn test_get_subgraph_with_yield_execution() {
         .exec_dml("INSERT VERTEX Person(name) VALUES 1:('Alice'), 2:('Bob')")
         .exec_dml("INSERT EDGE KNOWS(since) VALUES 1 -> 2:('2020-01-01')")
         .assert_success()
+        // The embedded YIELD projects the traversal output under its own
+        // aliases instead of passing the expand columns through.
         .query("GET SUBGRAPH FROM 1 YIELD vertices, edges")
         .assert_success()
-        .assert_result_columns(&["_expand_edge", "_expand_dst"]);
+        .assert_result_columns(&["vertices", "edges"]);
 }
 
 #[test]
@@ -269,4 +271,25 @@ fn test_subgraph_pipe_root_is_some() {
         }
         other => panic!("expected PIPE, got {:?}", other),
     }
+}
+
+#[test]
+fn test_get_subgraph_yield_tail() {
+    // YIELD projects the traversal output under aliases; LIMIT truncates it.
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Person(id INT, name STRING)")
+        .exec_ddl("CREATE EDGE KNOWS(since DATE) FROM Person TO Person")
+        .exec_dml("INSERT VERTEX Person(name) VALUES 1:('Alice'), 2:('Bob'), 3:('Charlie')")
+        .exec_dml("INSERT EDGE KNOWS(since) VALUES 1 -> 2:('2020-01-01'), 1 -> 3:('2021-01-01')")
+        .assert_success()
+        // The engine yields no subgraph rows for these fixtures yet, so the
+        // tail is locked by output shape, not by row counts.
+        .query("GET SUBGRAPH 1 STEPS FROM 1 OVER KNOWS YIELD _expand_dst AS dst")
+        .assert_success()
+        .assert_result_columns(&["dst"])
+        .query("GET SUBGRAPH 1 STEPS FROM 1 OVER KNOWS YIELD _expand_dst AS dst LIMIT 1")
+        .assert_success()
+        .assert_result_columns(&["dst"]);
 }

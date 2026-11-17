@@ -23,10 +23,16 @@ impl Binder {
                     .iter()
                     .map(|id| self.bind_expr(id))
                     .collect::<DBResult<Vec<_>>>()?;
+                let yield_clause = stmt
+                    .yield_clause
+                    .as_ref()
+                    .map(|yc| self.bind_yield_clause(yc))
+                    .transpose()?;
                 Ok(BoundStatement::FetchVertices(BoundFetchVerticesStatement {
                     tag_name: tag_name.clone(),
                     ids: bound_ids,
                     properties: properties.clone(),
+                    yield_clause,
                 }))
             }
             FetchTarget::Edges {
@@ -39,12 +45,18 @@ impl Binder {
                 let bound_src = self.bind_expr(src)?;
                 let bound_dst = self.bind_expr(dst)?;
                 let bound_rank = rank.as_ref().map(|r| self.bind_expr(r)).transpose()?;
+                let yield_clause = stmt
+                    .yield_clause
+                    .as_ref()
+                    .map(|yc| self.bind_yield_clause(yc))
+                    .transpose()?;
                 Ok(BoundStatement::FetchEdges(BoundFetchEdgesStatement {
                     src: bound_src,
                     dst: bound_dst,
                     edge_type: edge_type.clone(),
                     rank: bound_rank,
                     properties: properties.clone(),
+                    yield_clause,
                 }))
             }
         }

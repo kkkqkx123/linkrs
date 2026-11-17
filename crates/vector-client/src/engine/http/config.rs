@@ -2,9 +2,9 @@ use serde_json::{json, Value};
 
 use crate::error::VectorClientError;
 use crate::types::{
-    CollectionConfig, CompressionRatio, DistanceMetric, HnswConfig, IndexConfig,
-    OptimizersHints, PayloadSchemaType, QuantizationConfig, QuantizationType, StorageHints,
-    WalHints, DEFAULT_WITH_PAYLOAD,
+    CollectionConfig, CompressionRatio, DistanceMetric, HnswConfig, IndexConfig, OptimizersHints,
+    PayloadSchemaType, QuantizationConfig, QuantizationType, StorageHints, WalHints,
+    DEFAULT_WITH_PAYLOAD,
 };
 
 /// Translate a shared metric into Qdrant's REST spelling.
@@ -139,9 +139,7 @@ fn build_quantization_json(qt: &QuantizationType) -> Value {
 ///
 /// Every storage knob the shared [`CollectionConfig`] can express is emitted
 /// here; `None` leaves the server default untouched.
-pub fn build_create_collection_body(
-    cfg: &CollectionConfig,
-) -> Result<Value, VectorClientError> {
+pub fn build_create_collection_body(cfg: &CollectionConfig) -> Result<Value, VectorClientError> {
     let mut vectors = build_vectors_json(
         cfg.vector_size,
         cfg.distance,
@@ -216,7 +214,10 @@ pub fn build_create_collection_body(
             body.insert("wal_config".to_string(), Value::Object(obj));
         }
         if let Some(enabled) = hints.strict_mode_enabled {
-            body.insert("strict_mode_config".to_string(), json!({ "enabled": enabled }));
+            body.insert(
+                "strict_mode_config".to_string(),
+                json!({ "enabled": enabled }),
+            );
         }
     }
 
@@ -501,7 +502,10 @@ mod tests {
             optimizers.get("deleted_threshold").unwrap().as_f64(),
             Some(0.3)
         );
-        assert_eq!(optimizers.get("memmap_threshold").unwrap().as_u64(), Some(20_000));
+        assert_eq!(
+            optimizers.get("memmap_threshold").unwrap().as_u64(),
+            Some(20_000)
+        );
         let wal = body.get("wal_config").unwrap();
         assert_eq!(wal.get("wal_capacity_mb").unwrap().as_u64(), Some(64));
         assert_eq!(wal.get("wal_segments_ahead").unwrap().as_u64(), Some(1));

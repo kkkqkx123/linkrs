@@ -311,9 +311,10 @@ fn row_gate_engages_exactly_at_twice_min_rows() {
     // boundary is inclusive and must stay that way.
     let stats = stats_with_vertex_count(2_000);
     let decision = planner_with_min_rows(1_000).decide(&tagged_scan(), &view_of(&stats));
-    let spec = decision.partition_spec.as_ref().expect(
-        "2000 rows at min_rows 1000 must partition, got: ",
-    );
+    let spec = decision
+        .partition_spec
+        .as_ref()
+        .expect("2000 rows at min_rows 1000 must partition, got: ");
     assert_eq!(spec.partition_count(), 2);
 }
 
@@ -380,8 +381,7 @@ fn pure_global_count_respects_the_row_gate_boundary() {
         serial.reason
     );
     let above = stats_with_vertex_count(2_000);
-    let parallel =
-        planner_with_min_rows(1_000).decide(&plan_of(tagged_scan()), &view_of(&above));
+    let parallel = planner_with_min_rows(1_000).decide(&plan_of(tagged_scan()), &view_of(&above));
     assert!(
         parallel.partition_spec.is_some(),
         "release shape at the gate must partition, got: {}",

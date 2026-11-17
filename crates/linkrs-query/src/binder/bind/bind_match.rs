@@ -196,6 +196,7 @@ impl Binder {
                         alias: None,
                     }],
                     distinct: false,
+                    where_clause: None,
                     order_by: None,
                     limit: None,
                     skip: None,

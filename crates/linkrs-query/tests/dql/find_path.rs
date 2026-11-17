@@ -765,3 +765,25 @@ fn test_find_path_weight_matches_match_weighted() {
         "MATCH *WEIGHTED must reach David at least once"
     );
 }
+
+#[test]
+fn test_find_all_path_yield_limit() {
+    // Diamond: 1 -> {2, 3} -> 4 gives two paths; the YIELD tail LIMIT
+    // truncates them after projection.
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Person(id INT, name STRING)")
+        .exec_ddl("CREATE EDGE KNOWS(since DATE) FROM Person TO Person")
+        .exec_dml("INSERT VERTEX Person(name) VALUES 1:('A'), 2:('B'), 3:('C'), 4:('D')")
+        .exec_dml("INSERT EDGE KNOWS(since) VALUES 1 -> 2:('2020-01-01'), 1 -> 3:('2020-01-02'), 2 -> 4:('2020-01-03'), 3 -> 4:('2020-01-04')")
+        .assert_success()
+        .query("FIND ALL PATH FROM 1 TO 4 OVER KNOWS YIELD path")
+        .assert_success()
+        .assert_result_count(2)
+        .assert_result_columns(&["path"])
+        .query("FIND ALL PATH FROM 1 TO 4 OVER KNOWS YIELD path LIMIT 1")
+        .assert_success()
+        .assert_result_columns(&["path"])
+        .assert_result_count(1);
+}

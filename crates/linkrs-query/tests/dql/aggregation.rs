@@ -64,7 +64,7 @@ fn test_group_by_with_rollup_execution() {
         )
         .assert_success()
         .query("GROUP BY ROLLUP(category) YIELD category, SUM(amount) AS total")
-        .assert_success();
+        .assert_error_contains("ROLLUP");
 }
 
 #[test]
@@ -78,7 +78,7 @@ fn test_group_by_with_cube_execution() {
         )
         .assert_success()
         .query("GROUP BY CUBE(category) YIELD category, SUM(amount) AS total")
-        .assert_success();
+        .assert_error_contains("CUBE");
 }
 
 #[test]
@@ -92,7 +92,7 @@ fn test_group_by_with_grouping_sets_execution() {
         )
         .assert_success()
         .query("GROUP BY GROUPING SETS((category)) YIELD category, SUM(amount) AS total")
-        .assert_success();
+        .assert_error_contains("GROUPING SETS");
 }
 
 // ==================== GROUP BY Parser Tests ====================
@@ -465,4 +465,62 @@ fn test_group_by_execution() {
         .query("MATCH (p:Product) RETURN p.category, COUNT(*) AS count ORDER BY count DESC")
         .assert_success()
         .assert_result_count(2);
+}
+
+// ==================== Aggregate FILTER (WHERE ...) Tests ====================
+
+#[test]
+fn test_group_by_aggregate_filter_row_counts() {
+    // Unfiltered counts: Electronics 2, Clothing 2.
+    // FILTER (WHERE amount > 120): Electronics 1 (200), Clothing 1 (150).
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Sale(id INT, category STRING, amount INT)")
+        .exec_dml("INSERT VERTEX Sale(category, amount) VALUES 1:('Electronics', 100), 2:('Electronics', 200), 3:('Clothing', 150), 4:('Clothing', 50)")
+        .assert_success()
+        .query("GROUP BY category YIELD category, count(*) AS total")
+        .assert_success()
+        .assert_result_count(2)
+        .assert_result_contains(vec![Value::string("Electronics"), Value::BigInt(2)])
+        .query("GROUP BY category YIELD category, count(*) FILTER (WHERE amount > 120) AS total")
+        .assert_success()
+        .assert_result_count(2)
+        .assert_result_contains(vec![Value::string("Electronics"), Value::BigInt(1)])
+        .assert_result_contains(vec![Value::string("Clothing"), Value::BigInt(1)]);
+}
+
+#[test]
+fn test_group_by_having_filters_groups() {
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Sale(id INT, category STRING, amount INT)")
+        .exec_dml("INSERT VERTEX Sale(category, amount) VALUES 1:('Electronics', 100), 2:('Electronics', 200), 3:('Clothing', 150)")
+        .assert_success()
+        .query("GROUP BY category YIELD category, count(*) AS total")
+        .assert_success()
+        .assert_result_count(2)
+        .query("GROUP BY category YIELD category, count(*) AS total HAVING total > 1")
+        .assert_success()
+        .assert_result_count(1)
+        .assert_result_contains(vec![Value::string("Electronics"), Value::BigInt(2)]);
+}
+
+#[test]
+fn test_match_return_aggregate_filter() {
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Person(id INT, name STRING, age INT)")
+        .exec_dml("INSERT VERTEX Person(name, age) VALUES 1:('Alice', 30), 2:('Bob', 25), 3:('Charlie', 35)")
+        .assert_success()
+        .query("MATCH (n:Person) RETURN count(n) AS c")
+        .assert_success()
+        .assert_result_count(1)
+        .assert_result_contains(vec![Value::BigInt(3)])
+        .query("MATCH (n:Person) RETURN count(n) FILTER (WHERE n.age > 26) AS c")
+        .assert_success()
+        .assert_result_count(1)
+        .assert_result_contains(vec![Value::BigInt(2)]);
 }

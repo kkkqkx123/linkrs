@@ -209,3 +209,21 @@ fn test_fetch_nonexistent_tag() {
         .query("FETCH PROP ON NonExistentTag 1")
         .assert_error();
 }
+
+#[test]
+fn test_fetch_yield_row_filter_and_limit() {
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Person(id INT, name STRING, age INT)")
+        .exec_dml("INSERT VERTEX Person(name, age) VALUES 1:('Alice', 30), 2:('Bob', 25), 3:('Charlie', 35)")
+        .assert_success()
+        .query("FETCH PROP ON Person 1, 2, 3 YIELD Person.name AS name WHERE name == 'Bob'")
+        .assert_success()
+        .assert_result_columns(&["name"])
+        .assert_result_count(1)
+        .query("FETCH PROP ON Person 1, 2, 3 YIELD Person.name AS name LIMIT 2")
+        .assert_success()
+        .assert_result_columns(&["name"])
+        .assert_result_count(2);
+}

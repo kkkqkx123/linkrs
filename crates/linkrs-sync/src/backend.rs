@@ -483,7 +483,9 @@ impl VectorEngineHandle for LocalEngineHandle {
     }
 
     async fn delete_collection(&self, name: &str) -> VectorCoordinatorResult<()> {
-        self.engine.delete_collection(name).map_err(VectorError::from)?;
+        self.engine
+            .delete_collection(name)
+            .map_err(VectorError::from)?;
         Ok(())
     }
 
@@ -493,7 +495,10 @@ impl VectorEngineHandle for LocalEngineHandle {
         point_id: &str,
     ) -> VectorCoordinatorResult<Option<VectorPoint>> {
         let pid = PointId::from(point_id);
-        Ok(self.engine.get(collection, &pid).map_err(VectorError::from)?)
+        Ok(self
+            .engine
+            .get(collection, &pid)
+            .map_err(VectorError::from)?)
     }
 
     async fn count(&self, collection: &str) -> VectorCoordinatorResult<u64> {
@@ -520,7 +525,9 @@ impl VectorEngineHandle for LocalEngineHandle {
 
     async fn delete(&self, collection: &str, point_id: &str) -> VectorCoordinatorResult<()> {
         let pid = PointId::from(point_id);
-        self.engine.delete(collection, &pid).map_err(VectorError::from)?;
+        self.engine
+            .delete(collection, &pid)
+            .map_err(VectorError::from)?;
         Ok(())
     }
 
@@ -925,7 +932,9 @@ impl VectorEngineHandle for QdrantEngineHandle {
         collection: &str,
         point_ids: &[&str],
     ) -> VectorCoordinatorResult<()> {
-        self.manager.delete_batch(collection, point_ids.to_vec()).await?;
+        self.manager
+            .delete_batch(collection, point_ids.to_vec())
+            .await?;
         Ok(())
     }
 
@@ -1288,10 +1297,7 @@ impl VectorBackend {
 
     /// Wrap a [`VectorManager`] with configuration-driven creation defaults.
     #[cfg(feature = "vector-qdrant")]
-    pub fn qdrant_with_defaults(
-        manager: Arc<VectorManager>,
-        defaults: CollectionDefaults,
-    ) -> Self {
+    pub fn qdrant_with_defaults(manager: Arc<VectorManager>, defaults: CollectionDefaults) -> Self {
         let metrics = Arc::new(crate::metrics_handle::MetricsEngineHandle::new(Arc::new(
             QdrantEngineHandle::with_defaults(manager, defaults),
         )));
@@ -1332,10 +1338,8 @@ impl VectorBackend {
                     .data_dir
                     .clone()
                     .unwrap_or_else(|| std::path::PathBuf::from("vector"));
-                let engine =
-                    crate::vector_defaults::assemble_local_engine(config, data_dir).map_err(|e| {
-                        VectorCoordinatorError::Vector(VectorError::Internal(e))
-                    })?;
+                let engine = crate::vector_defaults::assemble_local_engine(config, data_dir)
+                    .map_err(|e| VectorCoordinatorError::Vector(VectorError::Internal(e)))?;
                 Ok(Self::from_local_arc_with_limit(
                     engine,
                     config.limits.default_max_points,

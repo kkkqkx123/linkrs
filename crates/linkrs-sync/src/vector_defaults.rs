@@ -72,9 +72,7 @@ pub fn local_hnsw_config(local: &LocalVectorConfig) -> Option<simvec::HnswConfig
 /// Shared by the local engine and the remote collection defaults so both
 /// backends read the same TOML block the same way. `enabled = false` or a
 /// missing/unknown type yields `None` (exact `f32`).
-pub fn quantization_config(
-    settings: &QuantizationSettings,
-) -> Option<simvec::QuantizationConfig> {
+pub fn quantization_config(settings: &QuantizationSettings) -> Option<simvec::QuantizationConfig> {
     if !settings.enabled {
         return None;
     }
@@ -120,9 +118,7 @@ pub fn quantization_config(
 }
 
 /// Map raw TOML quantization settings to the local engine's configuration.
-pub fn local_quantization_config(
-    local: &LocalVectorConfig,
-) -> Option<simvec::QuantizationConfig> {
+pub fn local_quantization_config(local: &LocalVectorConfig) -> Option<simvec::QuantizationConfig> {
     local.quantization.as_ref().and_then(quantization_config)
 }
 
@@ -205,10 +201,7 @@ pub struct CollectionDefaults {
 impl CollectionDefaults {
     /// Build the defaults described by `[vector.qdrant.collection]`, with
     /// `[vector.limits].default_max_points` as the fallback cap.
-    pub fn from_qdrant(
-        collection: &QdrantCollectionConfig,
-        default_max_points: u64,
-    ) -> Self {
+    pub fn from_qdrant(collection: &QdrantCollectionConfig, default_max_points: u64) -> Self {
         let hnsw = collection.hnsw.as_ref().map(|raw| {
             let mut hnsw =
                 simvec::HnswConfig::new(raw.m.unwrap_or(16), raw.ef_construct.unwrap_or(100));
@@ -244,7 +237,10 @@ impl CollectionDefaults {
 
         Self {
             hnsw,
-            quantization: collection.quantization.as_ref().and_then(quantization_config),
+            quantization: collection
+                .quantization
+                .as_ref()
+                .and_then(quantization_config),
             shard_number: collection.shard_number.map(|value| value as usize),
             replication_factor: collection.replication_factor.map(|value| value as usize),
             write_consistency_factor: collection
@@ -252,9 +248,9 @@ impl CollectionDefaults {
                 .map(|value| value as usize),
             on_disk_payload: collection.on_disk_payload,
             vectors_on_disk: collection.vectors_on_disk,
-            max_points: collection.max_points.or_else(|| {
-                (default_max_points > 0).then_some(default_max_points)
-            }),
+            max_points: collection
+                .max_points
+                .or_else(|| (default_max_points > 0).then_some(default_max_points)),
             storage_hints,
         }
     }

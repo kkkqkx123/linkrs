@@ -99,7 +99,7 @@ fn test_fold_007_explain_marks_filter_condition() {
         .assert_success()
         .exec_dml("INSERT VERTEX person(name, age) VALUES 1:('Alice', 30)")
         .assert_success()
-        .query("EXPLAIN MATCH (p:person) WHERE 1 = 1 RETURN p.name")
+        .query("EXPLAIN MATCH (p:person) WHERE p.age > (1 + 2) RETURN p.name")
         .assert_success()
         .get_plan_string()
         .expect("EXPLAIN should produce a plan");

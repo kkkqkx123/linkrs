@@ -606,7 +606,7 @@ fn explain_analyze_union_plan_contains_exchange() {
 }
 
 #[test]
-fn explain_analyze_4_workers_vertex_scan_uses_all_workers() {
+fn explain_analyze_4_worker_config_respects_two_bucket_bound() {
     let storage = setup_storage();
     let mut parallel = build_pipeline(&storage, 4);
 
@@ -623,8 +623,14 @@ fn explain_analyze_4_workers_vertex_scan_uses_all_workers() {
         .and_then(|s| s.parse::<usize>().ok())
         .unwrap_or(0);
     assert!(
-        actual >= 4,
-        "4-worker config should use at least 4 workers for full scan, got actual={actual}:\n{plan}"
+        actual >= 2,
+        "4-worker config must still partition the full scan, got actual={actual}:\n{plan}"
+    );
+    // The two-bucket economic bound caps a 2000-row table at 2 partitions
+    // (2000 / (2 * 400) = 2); asking for more workers cannot exceed it.
+    assert!(
+        actual <= 2,
+        "2000 rows at min 400 must not exceed the two-bucket bound, got actual={actual}:\n{plan}"
     );
 }
 

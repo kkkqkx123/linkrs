@@ -10,6 +10,7 @@
 
 use crate::binder::BoundStatement;
 use crate::planning::plan::core::next_node_id;
+use crate::planning::plan::core::nodes::operation::sort_node::LimitNode;
 use crate::planning::plan::core::nodes::traversal::path_algorithms::PathUniqueness;
 use crate::planning::plan::core::nodes::traversal::{AllPathsNode, ShortestPathNode};
 use crate::planning::plan::core::PlanNode;
@@ -17,9 +18,15 @@ use crate::planning::plan::logical::logical_nodes::access::LogicalStartNode;
 use crate::planning::plan::logical::logical_nodes::algorithm::{
     LogicalAllPathsNode, LogicalShortestPathNode,
 };
+use crate::planning::plan::logical::logical_nodes::operation::{
+    LogicalLimitNode, LogicalProjectNode,
+};
 use crate::planning::plan::logical::LogicalNodeEnum;
 use crate::planning::plan::SubPlan;
 use crate::planning::planner::{Planner, PlannerError};
+use crate::planning::statements::clauses::yield_planner::{
+    apply_bound_tail_logical, apply_bound_tail_physical,
+};
 use crate::planning::statements::plan_combiner::wrap_logical_filter;
 use linkrs_core::types::VertexId;
 use linkrs_core::Value;
@@ -175,10 +182,10 @@ impl Planner for PathPlanner {
         };
 
         // Apply the bound WHERE clause on top of the path result.
+        let expr_ctx = Arc::new(
+            linkrs_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
+        );
         if let Some(where_clause) = &find_path.where_clause {
-            let expr_ctx = Arc::new(
-                linkrs_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
-            );
             let condition = crate::binder::expr_converter::bound_expr_to_contextual(
                 &where_clause.condition,
                 &expr_ctx,
@@ -194,6 +201,66 @@ impl Planner for PathPlanner {
             let col_names = filter_node.col_names().to_vec();
             logical_root = wrap_logical_filter(logical_root, condition, col_names);
             root_node = PlanNodeEnum::Filter(filter_node);
+        }
+
+        // Embedded YIELD projects above the path result; the shared tail
+        // lowers row filter, dedup, sort, sample, and pagination.
+        if let Some(ref yield_clause) = find_path.yield_clause {
+            let yield_columns: Vec<linkrs_core::YieldColumn> = yield_clause
+                .items
+                .iter()
+                .map(|item| {
+                    crate::binder::expr_converter::bound_projection_to_yield_column(item, &expr_ctx)
+                        .map_err(PlannerError::PlanGenerationFailed)
+                })
+                .collect::<Result<Vec<_>, PlannerError>>()?;
+            let project_aliases: Vec<String> =
+                yield_columns.iter().map(|col| col.alias.clone()).collect();
+            let project_node =
+                ProjectNode::new(root_node.clone(), yield_columns.clone()).map_err(|e| {
+                    PlannerError::PlanGenerationFailed(format!(
+                        "Failed to create ProjectNode: {}",
+                        e
+                    ))
+                })?;
+            root_node = PlanNodeEnum::Project(project_node);
+            logical_root = LogicalNodeEnum::Project(LogicalProjectNode {
+                id: next_node_id(),
+                input: Some(Box::new(logical_root)),
+                columns: yield_columns,
+                subqueries: Vec::new(),
+                has_folded_expressions: false,
+                output_var: None,
+                col_names: project_aliases.clone(),
+                column_types: vec![],
+            });
+            root_node = apply_bound_tail_physical(root_node, yield_clause, &expr_ctx)?;
+            logical_root =
+                apply_bound_tail_logical(logical_root, yield_clause, &expr_ctx, &project_aliases)?;
+        }
+
+        // Statement-level SKIP / LIMIT (parsed as absent today) lowers above
+        // the yield tail in the same single-Limit encoding when present.
+        if find_path.skip.is_some() || find_path.limit.is_some() {
+            let offset = find_path.skip.as_ref().map(|s| s.count as i64).unwrap_or(0);
+            let count = find_path
+                .limit
+                .as_ref()
+                .map(|l| l.count as i64)
+                .unwrap_or(LimitNode::UNBOUNDED);
+            let limit_node = LimitNode::new(root_node.clone(), offset, count).map_err(|e| {
+                PlannerError::PlanGenerationFailed(format!("Failed to create LimitNode: {}", e))
+            })?;
+            root_node = PlanNodeEnum::Limit(limit_node);
+            logical_root = LogicalNodeEnum::Limit(LogicalLimitNode {
+                id: next_node_id(),
+                input: Some(Box::new(logical_root)),
+                offset,
+                count,
+                output_var: None,
+                col_names: root_node.col_names().to_vec(),
+                column_types: vec![],
+            });
         }
 
         let sub_plan =

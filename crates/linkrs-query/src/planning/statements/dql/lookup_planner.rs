@@ -195,18 +195,17 @@ impl LookupPlanner {
             ))
         });
 
-        // Build the logical tree only
-        let limit_from_yield = lookup
-            .yield_clause
-            .as_ref()
-            .and_then(|yc| yc.limit.as_ref().map(|limit| limit.count as i64));
+        // The scan never carries a pre-filled row cap: row limits lower to
+        // an explicit Limit node above the projection chain so filtering
+        // runs before truncation. The limit pushdown optimizer decides
+        // whether a trailing Limit folds back into the scan.
         let mut logical_root = if is_edge {
             LogicalNodeEnum::ScanEdges(LogicalScanEdgesNode {
                 id: next_node_id(),
                 space_id,
                 edge_type: Some(target_name.clone()),
                 expression: None,
-                limit: limit_from_yield,
+                limit: None,
                 projected_properties: vec![],
                 index_hint: index_hint.clone(),
                 estimated_cardinality: None,
@@ -221,7 +220,7 @@ impl LookupPlanner {
                 space_name: space_name.clone(),
                 tag: Some(target_name.clone()),
                 expression: None,
-                limit: limit_from_yield,
+                limit: None,
                 projected_properties: vec![],
                 index_hint,
                 estimated_cardinality: None,
@@ -231,34 +230,53 @@ impl LookupPlanner {
             })
         };
 
-        // Add filter node if WHERE clause present
+        // LOOKUP WHERE filters storage rows before projection.
         if let Some(ref condition) = where_ctx {
-            let logical_filter = LogicalFilterNode {
+            logical_root = LogicalNodeEnum::Filter(LogicalFilterNode {
                 id: next_node_id(),
                 input: Some(Box::new(logical_root)),
                 condition: condition.clone(),
                 output_var: None,
                 col_names: vec![],
                 column_types: vec![],
-            };
-            logical_root = LogicalNodeEnum::Filter(logical_filter);
+            });
         }
 
-        // Add project node if YIELD clause present
-        if lookup.yield_clause.is_some() {
+        // YIELD items project first; the embedded row filter lowers right
+        // above the projection (the statement-level LOOKUP WHERE stays
+        // below it), followed by DISTINCT / ORDER BY / SKIP / LIMIT.
+        // Sampling stays an explicit planning error.
+        if let Some(ref yield_clause) = lookup.yield_clause {
+            if yield_clause.sample.is_some() {
+                return Err(PlannerError::PlanGenerationFailed(
+                    "LOOKUP SAMPLE is not supported yet".to_string(),
+                ));
+            }
             let yield_columns = self.build_yield_columns_from_bound(lookup)?;
             let column_types = projection_util::project_column_types(&yield_columns);
-            let logical_project = LogicalProjectNode {
+            let col_names: Vec<String> =
+                yield_columns.iter().map(|col| col.alias.clone()).collect();
+            logical_root = LogicalNodeEnum::Project(LogicalProjectNode {
                 id: next_node_id(),
                 input: Some(Box::new(logical_root)),
-                columns: yield_columns.clone(),
+                columns: yield_columns,
                 subqueries: Vec::new(),
                 has_folded_expressions: false,
                 output_var: None,
-                col_names: yield_columns.iter().map(|col| col.alias.clone()).collect(),
+                col_names: col_names.clone(),
                 column_types,
-            };
-            logical_root = LogicalNodeEnum::Project(logical_project);
+            });
+
+            let expr_ctx = Arc::new(
+                linkrs_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
+            );
+            logical_root =
+                crate::planning::statements::clauses::yield_planner::apply_bound_tail_logical(
+                    logical_root,
+                    yield_clause,
+                    &expr_ctx,
+                    &col_names,
+                )?;
         }
 
         Ok(SubPlan::from_logical_root(logical_root))
@@ -463,5 +481,190 @@ impl LookupPlanner {
 impl Default for LookupPlanner {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::binder::bound::{BoundOrderByItem, BoundProjectionClause, BoundProjectionItem};
+    use crate::planning::context::PlanContext;
+
+    fn test_query_context() -> Arc<QueryContext> {
+        let rctx = Arc::new(crate::QueryRequestContext::new("LOOKUP".to_string()));
+        let space_info = linkrs_core::types::SpaceInfo {
+            space_id: 1,
+            space_name: "test".to_string(),
+            ..Default::default()
+        };
+        Arc::new(
+            crate::QueryContext::builder(rctx)
+                .with_space_info(space_info)
+                .build(),
+        )
+    }
+
+    fn var_expr(name: &str) -> crate::binder::bound::BoundExpression {
+        crate::binder::bound::BoundExpression::Variable(
+            name.to_string(),
+            linkrs_core::DataType::Unknown,
+        )
+    }
+
+    fn prop_expr(name: &str, property: &str) -> crate::binder::bound::BoundExpression {
+        crate::binder::bound::BoundExpression::Property {
+            object: Box::new(var_expr(name)),
+            property: property.to_string(),
+            value_type: linkrs_core::DataType::Unknown,
+        }
+    }
+
+    fn yield_clause(
+        distinct: bool,
+        order: bool,
+        skip: Option<usize>,
+        limit: Option<usize>,
+        sample: bool,
+    ) -> crate::binder::bound::BoundProjectionClause {
+        let order_by = if order {
+            Some(vec![BoundOrderByItem {
+                expression: prop_expr("Person", "name"),
+                direction: linkrs_core::types::OrderDirection::Asc,
+            }])
+        } else {
+            None
+        };
+        BoundProjectionClause {
+            items: vec![BoundProjectionItem {
+                expression: prop_expr("Person", "name"),
+                alias: Some("name".to_string()),
+            }],
+            distinct,
+            where_clause: None,
+            order_by,
+            limit: limit.map(|count| crate::parser::ast::LimitClause {
+                span: crate::parser::ast::Span::default(),
+                count,
+            }),
+            skip: skip.map(|count| crate::parser::ast::SkipClause {
+                span: crate::parser::ast::Span::default(),
+                count,
+            }),
+            sample: if sample {
+                Some(crate::parser::ast::SampleClause {
+                    span: crate::parser::ast::Span::default(),
+                    count: 1,
+                    percentage: None,
+                })
+            } else {
+                None
+            },
+            having: None,
+        }
+    }
+
+    use crate::planning::plan::core::nodes::operation::sort_node::LimitNode;
+
+    fn plan_lookup(yield_clause: Option<BoundProjectionClause>) -> Result<SubPlan, PlannerError> {
+        let bound = BoundStatement::Lookup(crate::binder::bound::BoundLookupStatement {
+            target: crate::binder::bound::BoundLookupTarget::Tag("Person".to_string()),
+            where_clause: None,
+            yield_clause,
+        });
+        let qctx = test_query_context();
+        let ctx = PlanContext::without_metadata(&bound, qctx);
+        LookupPlanner::new().plan_bound(&ctx)
+    }
+
+    #[test]
+    fn full_yield_chain_orders_limit_over_sort_over_dedup_over_project() {
+        let plan = plan_lookup(Some(yield_clause(true, true, Some(5), Some(10), false)))
+            .expect("lookup with full yield clause plans");
+        let root = plan.logical_root.expect("lookup carries a logical root");
+        let LogicalNodeEnum::Limit(limit) = root else {
+            panic!("root must be Limit, got {:?}", root);
+        };
+        assert_eq!(limit.offset, 5);
+        assert_eq!(limit.count, 10);
+        let LogicalNodeEnum::Sort(sort) = limit.input.as_deref().expect("limit has input") else {
+            panic!("limit input must be Sort");
+        };
+        assert_eq!(sort.sort_items.len(), 1);
+        let LogicalNodeEnum::Dedup(_) = sort.input.as_deref().expect("sort has input") else {
+            panic!("sort input must be Dedup");
+        };
+        // Walk through the dedup node to the projection below it.
+        let dedup_input = match sort.input.as_deref().expect("sort has input") {
+            LogicalNodeEnum::Dedup(dedup) => dedup.input.as_deref().expect("dedup has input"),
+            other => panic!("sort input must be Dedup, got {:?}", other),
+        };
+        let LogicalNodeEnum::Project(project) = dedup_input else {
+            panic!("dedup input must be Project");
+        };
+        assert_eq!(project.col_names, vec!["name".to_string()]);
+        let LogicalNodeEnum::ScanVertices(scan) =
+            project.input.as_deref().expect("project has input")
+        else {
+            panic!("project input must be ScanVertices");
+        };
+        assert!(
+            scan.limit.is_none(),
+            "scan must not pre-fill the yield limit"
+        );
+    }
+
+    #[test]
+    fn skip_only_uses_unbounded_count() {
+        let plan = plan_lookup(Some(yield_clause(false, false, Some(3), None, false)))
+            .expect("lookup with skip-only plans");
+        let root = plan.logical_root.expect("lookup carries a logical root");
+        let LogicalNodeEnum::Limit(limit) = root else {
+            panic!("root must be Limit, got {:?}", root);
+        };
+        assert_eq!(limit.offset, 3);
+        assert_eq!(limit.count, LimitNode::UNBOUNDED);
+    }
+
+    #[test]
+    fn sample_is_a_planning_error() {
+        let err = plan_lookup(Some(yield_clause(false, false, None, None, true)))
+            .expect_err("lookup sample must fail");
+        assert!(
+            matches!(err, PlannerError::PlanGenerationFailed(_)),
+            "sample must raise a planning error, got {:?}",
+            err
+        );
+    }
+
+    #[test]
+    fn row_filter_sits_between_project_and_dedup() {
+        use linkrs_core::types::operators::BinaryOperator;
+        let mut clause = yield_clause(true, false, None, None, false);
+        clause.where_clause = Some(crate::binder::bound::BoundExpression::BinaryOp {
+            left: Box::new(prop_expr("Person", "age")),
+            op: BinaryOperator::GreaterThan,
+            right: Box::new(crate::binder::bound::BoundExpression::Literal(
+                linkrs_core::Value::Int(18),
+                linkrs_core::DataType::Int,
+            )),
+            return_type: linkrs_core::DataType::Bool,
+        });
+        let plan = plan_lookup(Some(clause)).expect("lookup with row filter plans");
+        let root = plan.logical_root.expect("lookup carries a logical root");
+        let LogicalNodeEnum::Dedup(dedup) = root else {
+            panic!("root must be Dedup, got {:?}", root);
+        };
+        let LogicalNodeEnum::Filter(_) = dedup.input.as_deref().expect("dedup has input") else {
+            panic!("dedup input must be the row filter");
+        };
+        let filter_input = match dedup.input.as_deref().expect("dedup has input") {
+            LogicalNodeEnum::Filter(filter) => filter.input.as_deref().expect("filter has input"),
+            other => panic!("dedup input must be Filter, got {:?}", other),
+        };
+        assert!(
+            matches!(filter_input, LogicalNodeEnum::Project(_)),
+            "row filter input must be Project, got {:?}",
+            filter_input
+        );
     }
 }

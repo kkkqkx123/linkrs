@@ -428,12 +428,19 @@ impl Binder {
                 func,
                 args,
                 distinct,
-                filter: _filter,
+                filter,
             } => {
                 let args = args
                     .iter()
                     .map(|a| self.bind_inner_expr(a, None))
                     .collect::<DBResult<Vec<_>>>()?;
+                // The FILTER predicate sees the pre-grouping row scope,
+                // exactly like the aggregate arguments.
+                let filter = filter
+                    .as_ref()
+                    .map(|f| self.bind_inner_expr(f, None))
+                    .transpose()?
+                    .map(Box::new);
                 let arg_type = args
                     .first()
                     .map(|a| a.return_type())
@@ -449,6 +456,7 @@ impl Binder {
                     arguments: args,
                     distinct: *distinct,
                     alias: None,
+                    filter,
                     return_type,
                 }))
             }
@@ -865,6 +873,7 @@ impl Binder {
                 })
                 .collect::<Vec<_>>(),
             rc.distinct,
+            None,
             rc.order_by.as_ref(),
             rc.limit.clone(),
             rc.skip.clone(),
@@ -884,6 +893,7 @@ impl Binder {
                 .map(|item| (item.expression.clone(), item.alias.clone()))
                 .collect::<Vec<_>>(),
             yc.distinct,
+            yc.where_clause.clone(),
             yc.order_by.as_ref(),
             yc.limit.clone(),
             yc.skip.clone(),
@@ -897,14 +907,16 @@ impl Binder {
     ///
     /// Both clauses bind items, ordering, pagination, and sampling
     /// identically; only the undefined-variable check differs (RETURN
-    /// rejects eagerly, YIELD defers it to later stages). HAVING is bound
-    /// without the definedness check: it may reference SELECT aliases that
-    /// never enter the binder scope, mirroring the deferred YIELD rule.
+    /// rejects eagerly, YIELD defers it to later stages). The row filter
+    /// and HAVING bind without the definedness check: they may reference
+    /// SELECT aliases that never enter the binder scope, mirroring the
+    /// deferred YIELD rule.
     #[allow(clippy::too_many_arguments)]
     fn bind_projection_clause(
         &mut self,
         items: &[(ContextualExpression, Option<String>)],
         distinct: bool,
+        row_filter: Option<ContextualExpression>,
         order_by: Option<&crate::parser::ast::OrderByClause>,
         limit: Option<crate::parser::ast::LimitClause>,
         skip: Option<crate::parser::ast::SkipClause>,
@@ -919,6 +931,8 @@ impl Binder {
             })
             .collect::<DBResult<Vec<_>>>()?;
 
+        let where_clause = row_filter.as_ref().map(|w| self.bind_expr(w)).transpose()?;
+
         let order_by = self.bind_order_by_clause(order_by)?;
 
         let having = having.as_ref().map(|h| self.bind_expr(h)).transpose()?;
@@ -926,6 +940,7 @@ impl Binder {
         Ok(BoundProjectionClause {
             items,
             distinct,
+            where_clause,
             order_by,
             limit,
             skip,

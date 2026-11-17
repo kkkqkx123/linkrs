@@ -28,7 +28,9 @@ fn test_session_use_ddl_dml_dql_state_transfer() {
         .assert_result_count(1)
         .query("FETCH PROP ON Person 2 YIELD Person.name AS name")
         .assert_success()
-        .assert_vertex_or_edge_has_property("name", Value::string("Bob"))
+        .assert_result_columns(&["name"])
+        .assert_result_count(1)
+        .assert_result_contains(vec![Value::string("Bob")])
         .query("MATCH (n:Person) RETURN n.name AS name")
         .assert_success()
         .assert_result_count(2);

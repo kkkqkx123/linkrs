@@ -238,6 +238,109 @@ fn test_lookup_after_drop_index() {
         .assert_result_count(1);
 }
 
+// ==================== LOOKUP YIELD Pagination / Sort / Dedup ====================
+
+#[test]
+fn test_lookup_yield_limit_truncates_after_filter() {
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Person(id INT, name STRING, age INT)")
+        .exec_dml("INSERT VERTEX Person(name, age) VALUES 1:('Alice', 30), 2:('Bob', 20), 3:('Charlie', 35)")
+        .assert_success()
+        // LIMIT must apply after WHERE, not folded into the scan below it.
+        .query("LOOKUP ON Person WHERE Person.age > 25 YIELD Person.name AS name LIMIT 1")
+        .assert_success()
+        .assert_result_count(1);
+}
+
+#[test]
+fn test_lookup_yield_skip_limit() {
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Person(id INT, name STRING, age INT)")
+        .exec_dml("INSERT VERTEX Person(name, age) VALUES 1:('Alice', 30), 2:('Bob', 25), 3:('Charlie', 35)")
+        .assert_success()
+        .query("LOOKUP ON Person YIELD Person.name AS name LIMIT 1 SKIP 1")
+        .assert_success()
+        .assert_result_count(1);
+}
+
+#[test]
+fn test_lookup_yield_distinct_dedups_rows() {
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Person(id INT, name STRING, age INT)")
+        .exec_dml("INSERT VERTEX Person(name, age) VALUES 1:('Alice', 30), 2:('Alice', 31)")
+        .assert_success()
+        .query("LOOKUP ON Person YIELD DISTINCT Person.name AS name")
+        .assert_success()
+        .assert_result_count(1)
+        .assert_result_contains(vec![linkrs_core::Value::string("Alice")]);
+}
+
+#[test]
+fn test_lookup_yield_order_by_sorts_rows() {
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Person(id INT, name STRING, age INT)")
+        .exec_dml("INSERT VERTEX Person(name, age) VALUES 1:('Charlie', 35), 2:('Alice', 30)")
+        .assert_success()
+        .query("LOOKUP ON Person YIELD Person.name AS name ORDER BY name LIMIT 1")
+        .assert_success()
+        .assert_result_count(1)
+        .assert_result_contains(vec![linkrs_core::Value::string("Alice")]);
+}
+
+#[test]
+fn test_lookup_explain_shows_limit_over_project_chain() {
+    let scenario = TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Person(id INT, name STRING, age INT)")
+        .exec_dml("INSERT VERTEX Person(name, age) VALUES 1:('Alice', 30)")
+        .assert_success()
+        .query("EXPLAIN LOOKUP ON Person YIELD Person.name AS name ORDER BY name LIMIT 2")
+        .assert_success();
+
+    let plan_text = scenario.get_plan_string().unwrap_or_default();
+    for node in ["Limit", "Sort", "Project"] {
+        assert!(
+            plan_text.contains(node),
+            "EXPLAIN plan must contain {node}, got: {plan_text}"
+        );
+    }
+}
+
+#[test]
+fn test_lookup_as_pipe_tail_is_rejected() {
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Person(id INT, name STRING)")
+        .exec_ddl("CREATE EDGE KNOWS(since STRING)")
+        .exec_dml("INSERT VERTEX Person(name) VALUES 1:('Alice'), 2:('Bob')")
+        .exec_dml("INSERT EDGE KNOWS(since) VALUES 1 -> 2:('2024-01-01')")
+        .assert_success()
+        .query("GO FROM 1 OVER KNOWS | LOOKUP ON Person")
+        .assert_error_contains("first stage");
+}
+
+#[test]
+fn test_lookup_sample_is_rejected() {
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Person(id INT, name STRING)")
+        .exec_dml("INSERT VERTEX Person(name) VALUES 1:('Alice')")
+        .assert_success()
+        .query("LOOKUP ON Person YIELD Person.name AS name SAMPLE 1")
+        .assert_error();
+}
+
 // ==================== EXPLAIN Plan Tests ====================
 
 #[test]
@@ -289,5 +392,73 @@ fn test_lookup_explain_without_index_has_no_index_scan() {
         !plan_text.contains("IndexScan"),
         "Plan without an index should not contain IndexScan, got: {}",
         plan_text
+    );
+}
+
+#[test]
+fn test_lookup_yield_row_filter_and_limit() {
+    // Statement-level WHERE stays before the projection; the embedded YIELD
+    // WHERE filters projected rows, then LIMIT truncates.
+    let scenario = TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Person(id INT, name STRING, age INT)")
+        .exec_dml("INSERT VERTEX Person(name, age) VALUES 1:('Alice', 30), 2:('Bob', 25), 3:('Charlie', 35)")
+        .assert_success()
+        .query("LOOKUP ON Person YIELD Person.name AS name, Person.age AS age")
+        .assert_success()
+        .assert_result_count(3);
+    let _ = scenario;
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space_rowfilter")
+        .exec_ddl("CREATE TAG Person(id INT, name STRING, age INT)")
+        .exec_dml("INSERT VERTEX Person(name, age) VALUES 1:('Alice', 30), 2:('Bob', 25), 3:('Charlie', 35)")
+        .assert_success()
+        .query("LOOKUP ON Person WHERE Person.age > 20 YIELD Person.name AS name, Person.age AS age WHERE age > 26")
+        .assert_success()
+        .assert_result_count(2)
+        .query("LOOKUP ON Person WHERE Person.age > 20 YIELD Person.name AS name, Person.age AS age WHERE age > 26 LIMIT 1")
+        .assert_success()
+        .assert_result_count(1);
+}
+
+#[test]
+fn test_lookup_yield_tail_explain_chain() {
+    // The embedded tail lowers above the projection in row-filter,
+    // dedup, sort, limit order; the scan carries no row cap.
+    let scenario = TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Person(id INT, name STRING, age INT)")
+        .exec_dml("INSERT VERTEX Person(name, age) VALUES 1:('Alice', 30), 2:('Bob', 25)")
+        .assert_success()
+        .query("EXPLAIN LOOKUP ON Person WHERE Person.age > 20 YIELD DISTINCT Person.name AS name, Person.age AS age WHERE age > 26 ORDER BY age LIMIT 2")
+        .assert_success();
+
+    let plan_text = scenario.get_plan_string().unwrap_or_default();
+    let pos = |needles: &[&str]| {
+        needles
+            .iter()
+            .filter_map(|needle| plan_text.find(needle))
+            .next()
+            .unwrap_or_else(|| {
+                panic!("EXPLAIN plan must contain one of `{needles:?}`, got:\n{plan_text}")
+            })
+    };
+    let project = pos(&["Project"]);
+    // The dedup node renders as `Distinct` on the physical plan.
+    let dedup = pos(&["Dedup", "Distinct"]);
+    let sort = pos(&["Sort"]);
+    let limit = pos(&["Limit"]);
+    assert!(
+        project < dedup && dedup < sort && sort < limit,
+        "tail chain must read Project -> Dedup -> Sort -> Limit, got:\n{plan_text}"
+    );
+    // Two filters: the statement-level LOOKUP WHERE below the projection
+    // and the embedded row filter above it.
+    assert!(
+        plan_text.matches("Filter").count() >= 2,
+        "both WHERE filters must lower, got:\n{plan_text}"
     );
 }

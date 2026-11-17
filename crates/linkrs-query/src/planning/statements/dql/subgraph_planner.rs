@@ -23,6 +23,9 @@ use crate::planning::plan::logical::logical_nodes::traversal::LogicalExpandAllNo
 use crate::planning::plan::logical::LogicalNodeEnum;
 use crate::planning::plan::SubPlan;
 use crate::planning::planner::{Planner, PlannerError};
+use crate::planning::statements::clauses::yield_planner::{
+    apply_bound_tail_logical, apply_bound_tail_physical,
+};
 use crate::planning::statements::plan_combiner::logical_argument_root;
 use linkrs_core::types::expr::expression_context::ExpressionAnalysisContext;
 use linkrs_core::types::EdgeDirection;
@@ -132,24 +135,29 @@ impl Planner for SubgraphPlanner {
                 }
             }
 
-            let project_node = match Project::new(current_node.clone(), vec![]) {
-                Ok(node) => {
-                    let project_enum = PlanNodeEnum::Project(node);
-                    current_logical = LogicalNodeEnum::Project(LogicalProjectNode {
-                        id: next_node_id(),
-                        input: Some(Box::new(current_logical)),
-                        columns: vec![],
-                        subqueries: Vec::new(),
-                        has_folded_expressions: false,
-                        output_var: None,
-                        col_names: project_enum.col_names().to_vec(),
-                        column_types: vec![],
-                    });
-                    project_enum
-                }
-                Err(_) => current_node,
-            };
-            current_node = project_node;
+            if let Some(ref yield_clause) = subgraph.yield_clause {
+                (current_node, current_logical) =
+                    project_and_tail(current_node, current_logical, yield_clause, &expr_ctx)?;
+            } else {
+                let project_node = match Project::new(current_node.clone(), vec![]) {
+                    Ok(node) => {
+                        let project_enum = PlanNodeEnum::Project(node);
+                        current_logical = LogicalNodeEnum::Project(LogicalProjectNode {
+                            id: next_node_id(),
+                            input: Some(Box::new(current_logical)),
+                            columns: vec![],
+                            subqueries: Vec::new(),
+                            has_folded_expressions: false,
+                            output_var: None,
+                            col_names: project_enum.col_names().to_vec(),
+                            column_types: vec![],
+                        });
+                        project_enum
+                    }
+                    Err(_) => current_node,
+                };
+                current_node = project_node;
+            }
 
             let sub_plan = SubPlan::from_dual(
                 Some(current_node),
@@ -219,24 +227,29 @@ impl Planner for SubgraphPlanner {
             }
         }
 
-        let project_node = match Project::new(current_node.clone(), vec![]) {
-            Ok(node) => {
-                let project_enum = PlanNodeEnum::Project(node);
-                current_logical = LogicalNodeEnum::Project(LogicalProjectNode {
-                    id: next_node_id(),
-                    input: Some(Box::new(current_logical)),
-                    columns: vec![],
-                    subqueries: Vec::new(),
-                    has_folded_expressions: false,
-                    output_var: None,
-                    col_names: project_enum.col_names().to_vec(),
-                    column_types: vec![],
-                });
-                project_enum
-            }
-            Err(_) => current_node,
-        };
-        current_node = project_node;
+        if let Some(ref yield_clause) = subgraph.yield_clause {
+            (current_node, current_logical) =
+                project_and_tail(current_node, current_logical, yield_clause, &expr_ctx)?;
+        } else {
+            let project_node = match Project::new(current_node.clone(), vec![]) {
+                Ok(node) => {
+                    let project_enum = PlanNodeEnum::Project(node);
+                    current_logical = LogicalNodeEnum::Project(LogicalProjectNode {
+                        id: next_node_id(),
+                        input: Some(Box::new(current_logical)),
+                        columns: vec![],
+                        subqueries: Vec::new(),
+                        has_folded_expressions: false,
+                        output_var: None,
+                        col_names: project_enum.col_names().to_vec(),
+                        column_types: vec![],
+                    });
+                    project_enum
+                }
+                Err(_) => current_node,
+            };
+            current_node = project_node;
+        }
 
         let sub_plan = SubPlan::from_dual(
             Some(current_node),
@@ -380,4 +393,50 @@ mod tests {
         let from: Vec<BoundExpression> = vec![];
         assert_eq!(detect_pipe_input_from_bound(&from), None);
     }
+}
+
+/// Build the YIELD projection and append the shared embedded tail.
+///
+/// The caller owns the traversal output; this projects the bound YIELD
+/// items (an empty item list, i.e. `YIELD *`, stays a passthrough project)
+/// and lowers row filter, dedup, sort, sample, and pagination above it on
+/// both trees.
+fn project_and_tail(
+    current_node: PlanNodeEnum,
+    current_logical: LogicalNodeEnum,
+    yield_clause: &crate::binder::bound::BoundProjectionClause,
+    expr_ctx: &Arc<ExpressionAnalysisContext>,
+) -> Result<(PlanNodeEnum, LogicalNodeEnum), PlannerError> {
+    let yield_columns: Vec<linkrs_core::YieldColumn> = yield_clause
+        .items
+        .iter()
+        .map(|item| {
+            crate::binder::expr_converter::bound_projection_to_yield_column(item, expr_ctx)
+                .map_err(PlannerError::PlanGenerationFailed)
+        })
+        .collect::<Result<Vec<_>, PlannerError>>()?;
+    let project_enum = match Project::new(current_node.clone(), yield_columns.clone()) {
+        Ok(node) => PlanNodeEnum::Project(node),
+        Err(e) => {
+            return Err(PlannerError::PlanGenerationFailed(format!(
+                "Failed to create ProjectNode: {}",
+                e
+            )));
+        }
+    };
+    let project_aliases = project_enum.col_names().to_vec();
+    let current_logical = LogicalNodeEnum::Project(LogicalProjectNode {
+        id: next_node_id(),
+        input: Some(Box::new(current_logical)),
+        columns: yield_columns,
+        subqueries: Vec::new(),
+        has_folded_expressions: false,
+        output_var: None,
+        col_names: project_aliases.clone(),
+        column_types: vec![],
+    });
+    let current_node = apply_bound_tail_physical(project_enum, yield_clause, expr_ctx)?;
+    let current_logical =
+        apply_bound_tail_logical(current_logical, yield_clause, expr_ctx, &project_aliases)?;
+    Ok((current_node, current_logical))
 }

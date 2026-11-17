@@ -9,6 +9,7 @@
 use super::common;
 
 use common::test_scenario::TestScenario;
+use linkrs_core::Value;
 use linkrs_query::parser::Parser;
 
 // ==================== GO Parser Tests ====================
@@ -209,7 +210,9 @@ fn test_go_execution_basic_traversal() {
         .assert_result_count(2)
         .query("FETCH PROP ON Person 2 YIELD Person.name AS name")
         .assert_success()
-        .assert_vertex_or_edge_has_property("name", linkrs_core::Value::string("Bob"))
+        .assert_result_columns(&["name"])
+        .assert_result_count(1)
+        .assert_result_contains(vec![Value::string("Bob")])
         .query("GO 2 STEPS FROM 1 OVER KNOWS YIELD $$.Person.name AS friend_of_friend")
         .assert_success();
 }
@@ -267,4 +270,48 @@ fn test_go_nonexistent_edge() {
         .exec_dml("INSERT VERTEX Person(name) VALUES 1:('Alice')")
         .query("GO FROM 1 OVER NONEXISTENT_EDGE")
         .assert_error();
+}
+
+#[test]
+fn test_go_yield_row_filter_and_limit() {
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Person(id INT, name STRING, age INT)")
+        .exec_ddl("CREATE EDGE KNOWS(since DATE) FROM Person TO Person")
+        .exec_dml("INSERT VERTEX Person(name, age) VALUES 1:('Alice', 30), 2:('Bob', 25), 3:('Charlie', 35)")
+        .exec_dml("INSERT EDGE KNOWS(since) VALUES 1 -> 2:('2024-01-01'), 1 -> 3:('2024-01-02')")
+        .assert_success()
+        .query("GO FROM 1 OVER KNOWS YIELD dst AS d")
+        .assert_success()
+        .assert_result_count(2)
+        .query("GO FROM 1 OVER KNOWS YIELD dst AS d WHERE d.age > 26")
+        .assert_success()
+        .assert_result_count(1)
+        .query("GO FROM 1 OVER KNOWS YIELD dst AS d WHERE d.age > 20 LIMIT 1")
+        .assert_success()
+        .assert_result_count(1);
+}
+
+#[test]
+fn test_go_yield_row_filter_order_and_limit() {
+    // The embedded YIELD WHERE filters projected rows (property access on
+    // the projected vertex works); ORDER BY + LIMIT truncate above it.
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space_tail")
+        .exec_ddl("CREATE TAG Person(id INT, name STRING, age INT)")
+        .exec_ddl("CREATE EDGE KNOWS(since DATE) FROM Person TO Person")
+        .exec_dml("INSERT VERTEX Person(name, age) VALUES 1:('Alice', 30), 2:('Bob', 25), 3:('Charlie', 35)")
+        .exec_dml("INSERT EDGE KNOWS(since) VALUES 1 -> 2:('2024-01-01'), 1 -> 3:('2024-01-02')")
+        .assert_success()
+        .query("GO FROM 1 OVER KNOWS YIELD dst AS d")
+        .assert_success()
+        .assert_result_count(2)
+        .query("GO FROM 1 OVER KNOWS YIELD dst AS d WHERE d.age > 26")
+        .assert_success()
+        .assert_result_count(1)
+        .query("GO FROM 1 OVER KNOWS YIELD dst AS d WHERE d.age > 20 ORDER BY d.age DESC LIMIT 1")
+        .assert_success()
+        .assert_result_count(1);
 }

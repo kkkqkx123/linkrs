@@ -28,6 +28,9 @@ pub struct BoundOrderByItem {
 pub struct BoundProjectionClause {
     pub items: Vec<BoundProjectionItem>,
     pub distinct: bool,
+    /// Bound YIELD row filter (`YIELD ... WHERE ...`). Evaluated after
+    /// projection, mirroring the independent YIELD statement order.
+    pub where_clause: Option<BoundExpression>,
     pub order_by: Option<Vec<BoundOrderByItem>>,
     pub limit: Option<LimitClause>,
     pub skip: Option<SkipClause>,

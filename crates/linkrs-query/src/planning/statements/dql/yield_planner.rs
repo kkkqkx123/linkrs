@@ -43,6 +43,12 @@ impl Planner for YieldPlanner {
             }
         };
 
+        if yield_stmt.sample.is_some() {
+            return Err(PlannerError::PlanGenerationFailed(
+                "YIELD SAMPLE is not supported yet".to_string(),
+            ));
+        }
+
         let expr_ctx = Arc::new(
             linkrs_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
         );

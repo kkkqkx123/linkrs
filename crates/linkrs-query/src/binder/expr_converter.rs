@@ -106,12 +106,18 @@ fn convert_bound_to_expression(bound: &BoundExpression) -> Result<Expression, St
                 .iter()
                 .map(convert_bound_to_expression)
                 .collect::<Result<Vec<_>, _>>()?;
+            let filter = a
+                .filter
+                .as_ref()
+                .map(|f| convert_bound_to_expression(f))
+                .transpose()?
+                .map(Box::new);
             let func = function_name_to_aggregate(a)?;
             Ok(Expression::Aggregate {
                 func,
                 args,
                 distinct: a.distinct,
-                filter: None,
+                filter,
             })
         }
 

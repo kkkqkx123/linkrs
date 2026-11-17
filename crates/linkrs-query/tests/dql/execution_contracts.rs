@@ -159,6 +159,15 @@ fn test_standalone_yield_sample_parser() {
 }
 
 #[test]
+fn test_standalone_yield_sample_is_rejected() {
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("ec_yield_sample")
+        .query("YIELD 1 AS x SAMPLE 1")
+        .assert_error();
+}
+
+#[test]
 fn test_sample_clause_execution() {
     TestScenario::new()
         .expect("Failed to create test scenario")

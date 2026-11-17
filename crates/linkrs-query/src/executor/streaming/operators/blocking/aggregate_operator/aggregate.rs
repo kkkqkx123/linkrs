@@ -46,6 +46,7 @@ pub(crate) fn open_aggregate(state: &mut Option<AggregateState>, num_agg_funcs: 
 pub(crate) fn next_aggregate(
     group_by_expressions: &[Expression],
     aggregate_functions: &[(AggregateFunction, Vec<Expression>)],
+    aggregate_filters: &[Option<Expression>],
     memory_tracker: &mut MemoryTracker,
     state: &mut AggregateState,
     ctx: &BlockingContext<'_>,
@@ -54,6 +55,9 @@ pub(crate) fn next_aggregate(
     let num_group_keys = group_by_expressions.len();
     let has_group_keys = num_group_keys > 0;
     let group_overhead = state.accumulator_overhead;
+    // Any per-aggregate FILTER disables the row-counting shortcuts: the
+    // fast paths never evaluate predicates, so they must not run.
+    let has_filters = aggregate_filters.iter().any(|f| f.is_some());
 
     loop {
         // Output phase: serve slices from the result batch.
@@ -174,6 +178,7 @@ pub(crate) fn next_aggregate(
                         .map(|(func, func_args)| count_identity_arg(func, func_args, &chunk))
                         .collect();
                     if !has_group_keys
+                        && !has_filters
                         && !aggregate_functions.is_empty()
                         && aggregate_functions
                             .iter()
@@ -213,6 +218,7 @@ pub(crate) fn next_aggregate(
                     // the row access instead of silently dropping input.
                     let rowless_units: Option<usize> = if chunk.rows.is_empty()
                         && !has_group_keys
+                        && !has_filters
                         && aggregate_functions
                             .iter()
                             .enumerate()
@@ -224,7 +230,8 @@ pub(crate) fn next_aggregate(
                     } else {
                         None
                     };
-                    let batch_eval: BatchEvalResult = if chunk.selection.is_none()
+                    let batch_eval: BatchEvalResult = if !has_filters
+                        && chunk.selection.is_none()
                         && (!chunk.rows.is_empty() || rowless_units.is_some())
                     {
                         match chunk.evaluate_expressions(group_by_expressions, None) {
@@ -317,21 +324,41 @@ pub(crate) fn next_aggregate(
                                 values
                             }
                         };
-                        let partial_row_of =
-                            |group_key: &[Value], arg_values: &[Value]| -> Vec<Value> {
-                                let mut partial_row = group_key.to_vec();
-                                for (i, (func, args)) in aggregate_functions.iter().enumerate() {
+                        // Per-row FILTER verdicts, parallel to the aggregate
+                        // functions: a false entry skips accumulation for that
+                        // aggregate while the group itself still exists.
+                        let eval_row_filters = |row: &[Value]| -> Vec<bool> {
+                            aggregate_filters
+                                .iter()
+                                .map(|filter| {
+                                    super::shared::eval_aggregate_filter(
+                                        filter,
+                                        row,
+                                        &state.col_names,
+                                    )
+                                })
+                                .collect()
+                        };
+                        let partial_row_of = |group_key: &[Value],
+                                              arg_values: &[Value],
+                                              keep: &[bool]|
+                         -> Vec<Value> {
+                            let mut partial_row = group_key.to_vec();
+                            for (i, (func, args)) in aggregate_functions.iter().enumerate() {
+                                let mut acc = AggregateAccumulator::for_function(func, args)
+                                    .expect("every aggregate function has an accumulator");
+                                if keep[i] {
                                     let value = arg_values
                                         .get(i)
                                         .cloned()
                                         .unwrap_or_else(|| Value::Null(NullType::Null));
-                                    let mut acc = AggregateAccumulator::for_function(func, args)
-                                        .expect("every aggregate function has an accumulator");
                                     acc.accumulate(&value);
-                                    partial_row.push(accumulator_to_value(&acc));
                                 }
-                                partial_row
-                            };
+                                partial_row.push(accumulator_to_value(&acc));
+                            }
+                            partial_row
+                        };
+                        let keep = eval_row_filters(row);
                         if let Some(ref mut spiller) = state.partition_spiller {
                             let manager = sm.clone().ok_or_else(|| {
                                 QueryError::execution("Spill manager not available".to_string())
@@ -340,7 +367,7 @@ pub(crate) fn next_aggregate(
                                 &group_key,
                                 spiller.num_partitions(),
                             ) as usize;
-                            let partial_row = partial_row_of(&group_key, &arg_values);
+                            let partial_row = partial_row_of(&group_key, &arg_values, &keep);
                             spiller.insert_row_to_partition(&partial_row, p, &manager)?;
                             continue;
                         }
@@ -376,7 +403,8 @@ pub(crate) fn next_aggregate(
                                         &group_key,
                                         num_partitions,
                                     ) as usize;
-                                    let partial_row = partial_row_of(&group_key, &arg_values);
+                                    let partial_row =
+                                        partial_row_of(&group_key, &arg_values, &keep);
                                     spiller.insert_row_to_partition(&partial_row, p, &sm)?;
 
                                     state.partition_spiller = Some(spiller);
@@ -398,6 +426,9 @@ pub(crate) fn next_aggregate(
                                 .collect()
                         });
                         for (i, (_func, _expr)) in aggregate_functions.iter().enumerate() {
+                            if !keep[i] {
+                                continue;
+                            }
                             if let Some(acc) = accs.get_mut(i) {
                                 let value = arg_values
                                     .get(i)

@@ -27,6 +27,7 @@ use crate::optimizer::heuristic::context::RewriteContext;
 use crate::optimizer::heuristic::pattern::Pattern;
 use crate::optimizer::heuristic::result::{RewriteResult, TransformResult};
 use crate::optimizer::heuristic::rule::{EliminationRule, RewriteRule};
+use crate::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
 use crate::planning::plan::core::nodes::control_flow::start_node::StartNode;
 use crate::planning::plan::PlanNodeEnum;
 use linkrs_core::types::operators::BinaryOperator;
@@ -42,6 +43,15 @@ impl EliminateFilterRule {
     /// Create a rule instance
     pub fn new() -> Self {
         Self
+    }
+
+    /// Whether the expression is a boolean literal true.
+    ///
+    /// Strict precondition for the constant-true dual branch: only the
+    /// literal true qualifies, anything else (even a provable tautology)
+    /// stays untouched.
+    fn is_tautology(&self, expression: &Expression) -> bool {
+        matches!(expression, Expression::Literal(Value::Bool(true)))
     }
 
     /// Check whether the expression is a permanently false value (false or null).
@@ -121,17 +131,31 @@ impl RewriteRule for EliminateFilterRule {
         };
 
         // Check whether the condition is a permanently false statement.
-        if !self.is_contradiction(&expr) {
-            return Ok(None);
+        if self.is_contradiction(&expr) {
+            // Replace the current Filter node with the StartNode.
+            // Referencing the implementation of nebula-graph, return an empty set.
+            let mut result = TransformResult::new();
+            result.erase_curr = true;
+            result.add_new_node(PlanNodeEnum::Start(StartNode::new()));
+
+            return Ok(Some(result));
         }
 
-        // Replace the current Filter node with the StartNode.
-        // Referencing the implementation of nebula-graph, return an empty set.
-        let mut result = TransformResult::new();
-        result.erase_curr = true;
-        result.add_new_node(PlanNodeEnum::Start(StartNode::new()));
+        // Constant-true dual branch: a literal true without subqueries
+        // selects every row, so the filter is a pure passthrough and the
+        // input replaces it. Subquery-bearing filters stay opaque.
+        if self.is_tautology(&expr) {
+            if !filter_node.subqueries().is_empty() {
+                return Ok(None);
+            }
+            let mut result = TransformResult::new();
+            result.erase_curr = true;
+            result.add_new_node(filter_node.input().clone());
 
-        Ok(Some(result))
+            return Ok(Some(result));
+        }
+
+        Ok(None)
     }
 }
 
@@ -141,7 +165,13 @@ impl EliminationRule for EliminateFilterRule {
             PlanNodeEnum::Filter(n) => {
                 let condition = n.condition();
                 match condition.expression() {
-                    Some(meta) => self.is_contradiction(meta.inner()),
+                    Some(meta) => {
+                        let inner = meta.inner();
+                        if self.is_contradiction(inner) {
+                            return true;
+                        }
+                        self.is_tautology(inner) && n.subqueries().is_empty()
+                    }
                     None => false,
                 }
             }
@@ -204,5 +234,38 @@ mod tests {
             op: BinaryOperator::Equal,
             right: Box::new(Expression::Literal(Value::Int(1))),
         }));
+    }
+
+    #[test]
+    fn test_true_filter_eliminated_to_input() {
+        use crate::planning::plan::core::nodes::access::graph_scan_node::ScanVerticesNode;
+        use crate::planning::plan::core::nodes::operation::filter_node::FilterNode;
+        use linkrs_core::types::expr::{
+            ContextualExpression, ExpressionAnalysisContext, ExpressionMeta,
+        };
+        use std::sync::Arc;
+
+        let mut scan = ScanVerticesNode::new(1, "default");
+        scan.set_col_names(vec!["n".to_string()]);
+        let input = PlanNodeEnum::ScanVertices(scan);
+        let ctx = Arc::new(ExpressionAnalysisContext::new());
+        let id =
+            ctx.register_expression(ExpressionMeta::new(Expression::Literal(Value::Bool(true))));
+        let condition = ContextualExpression::new(id, ctx);
+        let filter =
+            PlanNodeEnum::Filter(FilterNode::new(input.clone(), condition).expect("filter"));
+
+        let rule = EliminateFilterRule::new();
+        assert!(rule.can_eliminate(&filter));
+        let mut rewrite_ctx = RewriteContext::new();
+        let result = rule
+            .apply(&mut rewrite_ctx, &filter)
+            .expect("apply")
+            .expect("eliminated");
+        assert!(result.erase_curr);
+        assert_eq!(
+            result.first_new_node().expect("replacement").col_names(),
+            input.col_names()
+        );
     }
 }

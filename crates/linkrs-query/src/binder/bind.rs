@@ -479,6 +479,57 @@ mod tests {
     }
 
     #[test]
+    fn test_bind_group_by_rollup_is_rejected() {
+        let err = bind_query("GROUP BY ROLLUP(city) YIELD city, count(*) AS c")
+            .expect_err("ROLLUP grouping must be rejected at bind time");
+        assert!(
+            err.to_string().contains("ROLLUP"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_bind_group_by_having() {
+        let bound = bind_query("GROUP BY city YIELD city, count(*) AS c HAVING c > 1")
+            .expect("GROUP BY with HAVING should bind");
+        let stmt = match bound {
+            BoundStatement::GroupBy(s) => s,
+            other => panic!("expected GroupBy, got {:?}", other.kind()),
+        };
+        assert!(stmt.having.is_some(), "HAVING condition must be bound");
+    }
+
+    #[test]
+    fn test_bind_group_by_aggregate_filter() {
+        let bound = bind_query("GROUP BY city YIELD city, count(*) FILTER (WHERE age > 30) AS c")
+            .expect("aggregate FILTER should bind");
+        let stmt = match bound {
+            BoundStatement::GroupBy(s) => s,
+            other => panic!("expected GroupBy, got {:?}", other.kind()),
+        };
+        assert_eq!(stmt.aggregates.len(), 1);
+        assert!(
+            stmt.aggregates[0].filter.is_some(),
+            "aggregate FILTER predicate must be bound"
+        );
+    }
+
+    #[test]
+    fn test_bind_lookup_yield_row_filter() {
+        let bound = bind_query("LOOKUP ON Person YIELD Person.name AS n WHERE n <> ''")
+            .expect("LOOKUP with YIELD WHERE should bind");
+        let stmt = match bound {
+            BoundStatement::Lookup(s) => s,
+            other => panic!("expected Lookup, got {:?}", other.kind()),
+        };
+        let yield_clause = stmt.yield_clause.expect("yield clause expected");
+        assert!(
+            yield_clause.where_clause.is_some(),
+            "embedded YIELD row filter must be bound"
+        );
+    }
+
+    #[test]
     fn test_bind_scalar_subquery() {
         let bound = bind_query(
             "MATCH (t:person) WHERE t.age > SUBQUERY { MATCH (p:person) RETURN p.age } RETURN t.name",

@@ -201,6 +201,9 @@ pub struct BoundAggregateCall {
     pub arguments: Vec<BoundExpression>,
     pub distinct: bool,
     pub alias: Option<String>,
+    /// Per-row `FILTER (WHERE ...)` predicate: only input rows evaluating
+    /// to true feed this aggregate. `None` aggregates every input row.
+    pub filter: Option<Box<BoundExpression>>,
     pub return_type: ValueType,
 }
 

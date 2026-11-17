@@ -618,7 +618,11 @@ impl HnswSettings {
     /// (`ef_construct >= max(2*m, 4)`). A zero value means "engine default"
     /// and is validated against the default it will resolve to.
     pub fn validate(&self) -> Result<(), String> {
-        let m = if self.m == 0 { default_hnsw_m() } else { self.m };
+        let m = if self.m == 0 {
+            default_hnsw_m()
+        } else {
+            self.m
+        };
         let ef = if self.ef_construct == 0 {
             default_hnsw_ef_construct()
         } else {

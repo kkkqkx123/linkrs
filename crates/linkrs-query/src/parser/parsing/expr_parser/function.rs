@@ -16,12 +16,25 @@ pub(crate) fn parse_function_call(
         ctx.expect_token(TokenKind::RParen)?;
 
         if name_upper == "COUNT" {
+            // COUNT(*) accepts the same FILTER (WHERE ...) suffix as the
+            // general aggregate path; dropping it here would silently
+            // unfilter the aggregation.
+            let filter = if ctx.match_token(TokenKind::Filter) {
+                ctx.expect_token(TokenKind::LParen)?;
+                ctx.expect_token(TokenKind::Where)?;
+                let filter_expr = parse_expression(ctx)?;
+                ctx.expect_token(TokenKind::RParen)?;
+                Some(Box::new(filter_expr.expr))
+            } else {
+                None
+            };
+            let span = ctx.merge_span(span.start, ctx.current_position());
             return Ok(ParseResult {
                 expr: Expression::Aggregate {
                     func: linkrs_core::types::operators::AggregateFunction::Count,
                     args: vec![Expression::Literal(linkrs_core::Value::string("*"))],
                     distinct: false,
-                    filter: None,
+                    filter,
                 },
                 span,
             });

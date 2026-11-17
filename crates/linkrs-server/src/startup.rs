@@ -158,10 +158,7 @@ pub async fn start_service_with_config_path(
                 .map_err(|error| {
                     linkrs_core::DBError::validation(format!("Vector subsystem: {error}"))
                 })?;
-                info!(
-                    "Local vector engine initialized at {}",
-                    data_dir.display()
-                );
+                info!("Local vector engine initialized at {}", data_dir.display());
                 (
                     Some(VectorBackend::from_local_arc_with_limit(
                         Arc::clone(&engine),

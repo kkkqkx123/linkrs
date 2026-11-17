@@ -150,6 +150,12 @@ fn scan_identity_eligible(
     if crate::cte::is_cte_scan_vertices(scan) {
         return false;
     }
+    // Root-output tightening: a bare entity variable reaching the client
+    // through transparent preservers still needs the boxed value, even when
+    // each intermediate step looks harmless in isolation.
+    if root_exposes_bare_entity(ancestors, var) {
+        return false;
+    }
     let projected: HashSet<&str> = scan
         .projected_properties()
         .iter()
@@ -159,6 +165,56 @@ fn scan_identity_eligible(
         .iter()
         .enumerate()
         .all(|(index, anc)| audit_ancestor(anc, var, &projected, index == 0))
+}
+
+/// Whether the plan root exposes the scan variable as a bare entity to the
+/// client: the root output still carries `var` and every node from the scan
+/// up through the root preserves it as a bare column (transparent row
+/// preservers plus same-name variable passthroughs). The client contract for
+/// a bare-entity return is the boxed value, so identity must stay off even
+/// when each intermediate step looks harmless in isolation.
+fn root_exposes_bare_entity(ancestors: &[&PlanNodeEnum], var: &str) -> bool {
+    let Some(root) = ancestors.first() else {
+        return false;
+    };
+    if !root.col_names().contains(&var.to_string()) {
+        return false;
+    }
+    let mut flows_bare = true;
+    for anc in ancestors.iter().rev() {
+        match anc {
+            PlanNodeEnum::Filter(_)
+            | PlanNodeEnum::Flatten(_)
+            | PlanNodeEnum::Limit(_)
+            | PlanNodeEnum::Dedup(_)
+            | PlanNodeEnum::Sort(_)
+            | PlanNodeEnum::TopN(_) => {}
+            PlanNodeEnum::Project(project) => {
+                if !project.subqueries().is_empty() {
+                    flows_bare = false;
+                    break;
+                }
+                let forwards = project.columns().iter().any(|col| {
+                    col.alias == var
+                        && col.expression.expression().is_some_and(|meta| {
+                            matches!(meta.inner(), Expression::Variable(name) if name == var)
+                        })
+                });
+                if !forwards {
+                    flows_bare = false;
+                    break;
+                }
+            }
+            _ => {
+                flows_bare = false;
+                break;
+            }
+        }
+        if !flows_bare {
+            break;
+        }
+    }
+    flows_bare
 }
 
 /// Whether the scan may additionally skip its row view: walk up from the
@@ -286,9 +342,15 @@ fn audit_ancestor(anc: &PlanNodeEnum, var: &str, projected: &HashSet<&str>, is_r
             if agg.group_keys().iter().any(|key| key == var) {
                 return false;
             }
+            if agg.grouping_sets().iter().flatten().any(|key| key == var) {
+                return false;
+            }
             // A bare-variable `count(var)` only observes null-ness, which
             // the identity reference preserves; every other aggregate needs
-            // real values. Mirrors the edge-scan audit.
+            // real values. Per-function filters are audited strictly: a
+            // filter evaluates per input row, so a bare entity reference
+            // needs the boxed value even under `count`. Mirrors the
+            // edge-scan audit.
             let funcs = agg.aggregation_functions();
             for (index, arg_list) in agg.aggregation_args().iter().enumerate() {
                 let is_count = funcs
@@ -303,7 +365,10 @@ fn audit_ancestor(anc: &PlanNodeEnum, var: &str, projected: &HashSet<&str>, is_r
                     }
                 }
             }
-            true
+            agg.aggregation_filters()
+                .iter()
+                .flatten()
+                .all(|expr| entity_use_safe(expr, var, projected))
         }
         PlanNodeEnum::InnerJoin(join) => {
             audit_join_keys(join.hash_keys(), join.probe_keys(), var, projected)
@@ -856,6 +921,63 @@ mod tests {
         assert!(!skip_flag(&annotated), "distinct keeps rows");
     }
 
+    #[test]
+    fn grouping_set_with_scan_variable_blocks_identity() {
+        // A grouping set over the whole entity needs the full value even
+        // when the flat group keys do not mention it.
+        use crate::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode;
+        use linkrs_core::types::operators::AggregateFunction;
+        let mut agg = AggregateNode::new(
+            flat_scan("a", &["name"]),
+            vec!["name".to_string()],
+            vec![AggregateFunction::Count],
+        )
+        .expect("agg builds");
+        agg.set_aggregation_args(vec![vec![prop_expr("a", "name")]]);
+        agg.set_grouping_sets(vec![vec!["a".to_string()]]);
+        let plan = PlanNodeEnum::Aggregate(agg);
+        let (annotated, changed) = annotate_scan_identity(&plan);
+        assert!(!changed, "grouping set over the entity must keep boxes");
+        assert!(!scan_flag(&annotated));
+    }
+
+    #[test]
+    fn aggregation_filter_with_bare_variable_blocks_identity() {
+        // The per-function filter evaluates per input row, so a bare `a`
+        // reference needs the boxed value even though `count(a)` alone
+        // only observes null-ness.
+        use crate::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode;
+        use linkrs_core::types::operators::AggregateFunction;
+        let mut agg =
+            AggregateNode::new(flat_scan("a", &[]), vec![], vec![AggregateFunction::Count])
+                .expect("agg builds");
+        agg.set_aggregation_args(vec![vec![Expression::Variable("a".to_string())]]);
+        agg.set_aggregation_filters(vec![Some(Expression::Variable("a".to_string()))]);
+        let plan = PlanNodeEnum::Aggregate(agg);
+        let (annotated, changed) = annotate_scan_identity(&plan);
+        assert!(!changed, "bare-variable filter must keep boxes");
+        assert!(!scan_flag(&annotated));
+    }
+
+    #[test]
+    fn aggregation_filter_with_flat_property_keeps_identity() {
+        // A filter served by the flat slots needs no boxed value.
+        use crate::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode;
+        use linkrs_core::types::operators::AggregateFunction;
+        let mut agg = AggregateNode::new(
+            flat_scan("a", &["name"]),
+            vec![],
+            vec![AggregateFunction::Count],
+        )
+        .expect("agg builds");
+        agg.set_aggregation_args(vec![vec![prop_expr("a", "name")]]);
+        agg.set_aggregation_filters(vec![Some(prop_expr("a", "name"))]);
+        let plan = PlanNodeEnum::Aggregate(agg);
+        let (annotated, changed) = annotate_scan_identity(&plan);
+        assert!(changed, "flat-served filter keeps identity");
+        assert!(scan_flag(&annotated));
+    }
+
     /// Mark-Join plan with a residual non-equi condition over both sides.
     fn mark_join(left_props: &[&str], right_props: &[&str]) -> PlanNodeEnum {
         use crate::planning::plan::core::nodes::join::join_node::SemiJoinNode;
@@ -895,5 +1017,32 @@ mod tests {
         let (annotated, changed) = annotate_scan_identity(&plan);
         assert!(changed, "flat-served condition keeps identity");
         assert!(scan_flags(&annotated).iter().all(|flag| *flag));
+    }
+
+    #[test]
+    fn root_limit_over_bare_passthrough_blocks_identity() {
+        // RETURN a LIMIT: the bare entity reaches the client through a
+        // row-preserving limit, so the boxed value must stay.
+        use crate::planning::plan::core::nodes::operation::sort_node::LimitNode;
+        let project = project_var(flat_scan("a", &["name"]), "a");
+        let limit = LimitNode::new(project, 0, 3).expect("limit builds");
+        let plan = PlanNodeEnum::Limit(limit);
+        let (annotated, changed) = annotate_scan_identity(&plan);
+        assert!(!changed, "root bare-entity output must keep boxes");
+        assert!(!scan_flag(&annotated));
+        assert!(!skip_flag(&annotated));
+    }
+
+    #[test]
+    fn root_limit_over_flat_projection_keeps_identity() {
+        // RETURN a.name LIMIT: only the flat column reaches the client, so
+        // the identity path stays valid through the limit.
+        use crate::planning::plan::core::nodes::operation::sort_node::LimitNode;
+        let project = project_prop(flat_scan("a", &["name"]), "a", "name");
+        let limit = LimitNode::new(project, 0, 3).expect("limit builds");
+        let plan = PlanNodeEnum::Limit(limit);
+        let (annotated, changed) = annotate_scan_identity(&plan);
+        assert!(changed, "flat limit output keeps identity");
+        assert!(scan_flag(&annotated));
     }
 }

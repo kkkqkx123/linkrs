@@ -8,9 +8,11 @@ use crate::parser::ast::Stmt;
 use crate::planning::plan::core::next_node_id;
 use crate::planning::plan::core::nodes::graph_operations::graph_operations_node::DedupNode;
 use crate::planning::plan::core::nodes::operation::sample_node::SampleNode;
+use crate::planning::plan::core::nodes::operation::sort_node::{SortItem, SortNode};
 use crate::planning::plan::core::nodes::{FilterNode, LimitNode, PlanNodeEnum, ProjectNode};
 use crate::planning::plan::logical::logical_nodes::operation::{
     LogicalDedupNode, LogicalFilterNode, LogicalLimitNode, LogicalProjectNode, LogicalSampleNode,
+    LogicalSortNode,
 };
 use crate::planning::plan::logical::LogicalNodeEnum;
 use crate::planning::plan::SubPlan;
@@ -579,4 +581,161 @@ mod tests {
         let result = planner.transform_clause(qctx, &yield_stmt, input_plan);
         assert!(result.is_err());
     }
+}
+
+/// Append the embedded-YIELD tail above an already-built projection.
+///
+/// Shared bound-form lowering for GO / LOOKUP / SUBGRAPH / FIND PATH /
+/// FETCH tails. The caller builds the `Project` node; this appends
+/// `Filter(row)? -> Dedup? -> Sort? -> Sample? -> Limit?` in that order,
+/// so the top-down chain reads Limit -> Sort -> Sample? -> Dedup ->
+/// Filter(row) -> Project. Pagination uses the single-Limit encoding
+/// `(offset = skip_or_0, count = limit_or_UNBOUNDED)`; no node is built
+/// when both SKIP and LIMIT are absent. `project_col_names` carries the
+/// projection output aliases for the logical mirrors.
+pub fn apply_bound_tail_logical(
+    root: LogicalNodeEnum,
+    clause: &crate::binder::bound::BoundProjectionClause,
+    expr_ctx: &Arc<linkrs_core::types::expr::expression_context::ExpressionAnalysisContext>,
+    project_col_names: &[String],
+) -> Result<LogicalNodeEnum, PlannerError> {
+    let mut root = root;
+    if let Some(ref row_filter) = clause.where_clause {
+        let condition =
+            crate::binder::expr_converter::bound_expr_to_contextual(row_filter, expr_ctx)
+                .map_err(PlannerError::PlanGenerationFailed)?;
+        root = LogicalNodeEnum::Filter(LogicalFilterNode {
+            id: next_node_id(),
+            input: Some(Box::new(root)),
+            condition,
+            output_var: None,
+            col_names: project_col_names.to_vec(),
+            column_types: vec![],
+        });
+    }
+    if clause.distinct {
+        root = LogicalNodeEnum::Dedup(LogicalDedupNode {
+            id: next_node_id(),
+            input: Some(Box::new(root)),
+            output_var: None,
+            col_names: project_col_names.to_vec(),
+            column_types: vec![],
+        });
+    }
+    if let Some(ref order_by) = clause.order_by {
+        let mut sort_items = Vec::with_capacity(order_by.len());
+        for item in order_by {
+            let ctx_expr =
+                crate::binder::expr_converter::bound_expr_to_contextual(&item.expression, expr_ctx)
+                    .map_err(PlannerError::PlanGenerationFailed)?;
+            let raw_expr = ctx_expr
+                .expression()
+                .map(|meta| meta.inner().clone())
+                .unwrap_or_else(|| {
+                    linkrs_core::Expression::Variable(ctx_expr.to_expression_string())
+                });
+            sort_items.push(SortItem::new(raw_expr, item.direction));
+        }
+        root = LogicalNodeEnum::Sort(LogicalSortNode {
+            id: next_node_id(),
+            input: Some(Box::new(root)),
+            sort_items,
+            limit: None,
+            output_var: None,
+            col_names: project_col_names.to_vec(),
+            column_types: vec![],
+        });
+    }
+    if let Some(ref sample) = clause.sample {
+        root = LogicalNodeEnum::Sample(LogicalSampleNode {
+            id: next_node_id(),
+            input: Some(Box::new(root)),
+            count: sample.count as i64,
+            output_var: None,
+            col_names: project_col_names.to_vec(),
+            column_types: vec![],
+        });
+    }
+    if clause.skip.is_some() || clause.limit.is_some() {
+        let offset = clause.skip.as_ref().map(|s| s.count as i64).unwrap_or(0);
+        let count = clause
+            .limit
+            .as_ref()
+            .map(|l| l.count as i64)
+            .unwrap_or(LimitNode::UNBOUNDED);
+        root = LogicalNodeEnum::Limit(LogicalLimitNode {
+            id: next_node_id(),
+            input: Some(Box::new(root)),
+            offset,
+            count,
+            output_var: None,
+            col_names: project_col_names.to_vec(),
+            column_types: vec![],
+        });
+    }
+    Ok(root)
+}
+
+/// Physical counterpart of [`apply_bound_tail_logical`] for dual-tree
+/// planners (SUBGRAPH / FIND PATH / FETCH): same node order on the
+/// physical tree.
+pub fn apply_bound_tail_physical(
+    root: PlanNodeEnum,
+    clause: &crate::binder::bound::BoundProjectionClause,
+    expr_ctx: &Arc<linkrs_core::types::expr::expression_context::ExpressionAnalysisContext>,
+) -> Result<PlanNodeEnum, PlannerError> {
+    let mut root = root;
+    if let Some(ref row_filter) = clause.where_clause {
+        let condition =
+            crate::binder::expr_converter::bound_expr_to_contextual(row_filter, expr_ctx)
+                .map_err(PlannerError::PlanGenerationFailed)?;
+        let filter_node = FilterNode::new(root.clone(), condition).map_err(|e| {
+            PlannerError::PlanGenerationFailed(format!("Failed to create FilterNode: {}", e))
+        })?;
+        root = PlanNodeEnum::Filter(filter_node);
+    }
+    if clause.distinct {
+        let dedup_node = DedupNode::new(root.clone()).map_err(|e| {
+            PlannerError::PlanGenerationFailed(format!("Failed to create DedupNode: {}", e))
+        })?;
+        root = PlanNodeEnum::Dedup(dedup_node);
+    }
+    if let Some(ref order_by) = clause.order_by {
+        let mut sort_items = Vec::with_capacity(order_by.len());
+        for item in order_by {
+            let ctx_expr =
+                crate::binder::expr_converter::bound_expr_to_contextual(&item.expression, expr_ctx)
+                    .map_err(PlannerError::PlanGenerationFailed)?;
+            let raw_expr = ctx_expr
+                .expression()
+                .map(|meta| meta.inner().clone())
+                .unwrap_or_else(|| {
+                    linkrs_core::Expression::Variable(ctx_expr.to_expression_string())
+                });
+            sort_items.push(SortItem::new(raw_expr, item.direction));
+        }
+        let sort_node = SortNode::new(root.clone(), sort_items).map_err(|e| {
+            PlannerError::PlanGenerationFailed(format!("Failed to create SortNode: {}", e))
+        })?;
+        root = PlanNodeEnum::Sort(sort_node);
+    }
+    if let Some(ref sample) = clause.sample {
+        let sample_node = SampleNode::new(root.clone(), sample.count as i64).map_err(|e| {
+            PlannerError::PlanGenerationFailed(format!("Failed to create SampleNode: {}", e))
+        })?;
+        root = PlanNodeEnum::Sample(sample_node);
+    }
+    if clause.skip.is_some() || clause.limit.is_some() {
+        let offset = clause.skip.as_ref().map(|s| s.count as i64).unwrap_or(0);
+        let count = clause
+            .limit
+            .as_ref()
+            .map(|l| l.count as i64)
+            .unwrap_or(LimitNode::UNBOUNDED);
+        let limit_node = LimitNode::new(root.clone(), offset, count).map_err(|e| {
+            PlannerError::PlanGenerationFailed(format!("Failed to create LimitNode: {}", e))
+        })?;
+        root = PlanNodeEnum::Limit(limit_node);
+    }
+    Ok(root)
 }

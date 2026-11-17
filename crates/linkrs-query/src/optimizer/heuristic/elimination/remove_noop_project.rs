@@ -66,7 +66,6 @@ impl RemoveNoopProjectRule {
         allowed_child_types.insert("Aggregate");
         allowed_child_types.insert("Assign");
         allowed_child_types.insert("InnerJoin");
-        allowed_child_types.insert("InnerJoin");
         allowed_child_types.insert("LeftJoin");
         allowed_child_types.insert("CrossJoin");
         allowed_child_types.insert("DataCollect");
@@ -80,6 +79,20 @@ impl RemoveNoopProjectRule {
     /// Check whether the type of the child node allows the removal of the Project.
     fn is_allowed_child_type(&self, node: &PlanNodeEnum) -> bool {
         self.allowed_child_types.contains(node.name())
+    }
+
+    /// Whether the child emits no row view, only typed columns.
+    ///
+    /// A rowless scan carries data solely in its typed layout. Its direct
+    /// passthrough/constant consumer rebuilds rows from that layout, so the
+    /// consumer is the chain's last row rebuilder: removing it deletes
+    /// output. Read-only check of existing flags, no new write-path state.
+    fn input_skips_rows(child: &PlanNodeEnum) -> bool {
+        match child {
+            PlanNodeEnum::ScanVertices(node) => node.skip_rows(),
+            PlanNodeEnum::ExpandAll(node) => node.skip_rows(),
+            _ => false,
+        }
     }
 
     /// Whether removing the Project would widen the physical output schema
@@ -190,6 +203,13 @@ impl RewriteRule for RemoveNoopProjectRule {
             return Ok(None);
         }
 
+        // A rowless child emits typed columns only; the noop project above it
+        // rebuilds rows from that layout, so it is the last rebuilder on the
+        // chain and must stay.
+        if Self::input_skips_rows(input) {
+            return Ok(None);
+        }
+
         // Obtain the column names of the child nodes
         let child_col_names = input.col_names();
 
@@ -216,6 +236,9 @@ impl EliminationRule for RemoveNoopProjectRule {
                     return false;
                 }
                 if Self::child_widens_layout(input) {
+                    return false;
+                }
+                if Self::input_skips_rows(input) {
                     return false;
                 }
                 self.is_noop_projection(n, input.col_names())
@@ -348,5 +371,25 @@ mod tests {
             result.is_none(),
             "project must survive a covering index scan"
         );
+    }
+
+    #[test]
+    fn test_project_kept_over_rowless_scan() {
+        // A rowless scan emits typed columns only; the noop project above it
+        // rebuilds rows from that layout, so it is the last rebuilder and
+        // must stay, otherwise the plan output loses every row.
+        let rule = RemoveNoopProjectRule::new();
+        let mut ctx = RewriteContext::new();
+
+        let mut scan_node = ScanVerticesNode::new(1, "default");
+        scan_node.set_col_names(vec!["p".to_string()]);
+        scan_node.set_skip_rows(true);
+        let project = noop_project(PlanNodeEnum::ScanVertices(scan_node));
+
+        let result = rule
+            .apply(&mut ctx, &project)
+            .expect("Failed to apply rule");
+        assert!(result.is_none(), "project must survive a rowless scan");
+        assert!(!rule.can_eliminate(&project));
     }
 }

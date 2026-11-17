@@ -456,9 +456,7 @@ pub(super) fn estimate_source_cardinality(
             // Partitioned copies enumerate only their slice, and pushed
             // predicates filter rows storage counts cannot see: both keep
             // the old limit-or-nothing heuristic instead of overstating.
-            let full = if predicate.is_empty()
-                && partition_range.is_none()
-                && shard_slice.is_none()
+            let full = if predicate.is_empty() && partition_range.is_none() && shard_slice.is_none()
             {
                 exec_ctx.and_then(|ctx| storage_vertex_estimate(ctx, space_name, tag.as_deref()))
             } else {
@@ -475,7 +473,8 @@ pub(super) fn estimate_source_cardinality(
             ..
         } => {
             let full = if predicate.is_empty() && shard_slice.is_none() {
-                exec_ctx.and_then(|ctx| storage_edge_estimate(ctx, space_name, edge_type.as_deref()))
+                exec_ctx
+                    .and_then(|ctx| storage_edge_estimate(ctx, space_name, edge_type.as_deref()))
             } else {
                 None
             };
@@ -519,7 +518,10 @@ fn storage_vertex_estimate(
     let storage = exec_ctx.storage.as_ref()?;
     let reader = storage.read();
     if let Some(tag) = tag {
-        reader.count_vertices_by_tag(space, tag).ok().map(|n| n as f64)
+        reader
+            .count_vertices_by_tag(space, tag)
+            .ok()
+            .map(|n| n as f64)
     } else {
         let tags = reader.list_tags(space).ok()?;
         let mut total = 0f64;
@@ -1236,10 +1238,8 @@ mod tests {
         let node = PlanNodeEnum::Aggregate(agg);
 
         let mut ctx = PhysicalPlanBuildContext::new();
-        let exec_ctx =
-            ExecutionContext::new(Arc::new(ExpressionAnalysisContext::new()));
-        let plan =
-            PhysicalPlanBuilder::build(&node, &mut ctx, &exec_ctx).expect("build");
+        let exec_ctx = ExecutionContext::new(Arc::new(ExpressionAnalysisContext::new()));
+        let plan = PhysicalPlanBuilder::build(&node, &mut ctx, &exec_ctx).expect("build");
         let aggregate = plan
             .operators
             .iter()

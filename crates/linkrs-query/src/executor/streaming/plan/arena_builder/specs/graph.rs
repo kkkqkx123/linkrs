@@ -93,13 +93,16 @@ pub(in crate::executor::streaming::plan::arena_builder) fn count_only_expand_bel
 }
 
 /// Whether the aggregate node is a simple count-only aggregate: no GROUP BY
-/// keys and all aggregate functions are COUNT.  This pattern allows the
-/// upstream ExpandAll to skip materializing output rows entirely.
+/// keys, no per-aggregate FILTERs, and all aggregate functions are COUNT.
+/// This pattern allows the upstream ExpandAll to skip materializing output
+/// rows entirely. Any FILTER keeps the normal plan so the predicate is
+/// evaluated per row instead of being folded away.
 pub(in crate::executor::streaming::plan::arena_builder) fn is_count_only_aggregate(
     agg: &crate::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode,
 ) -> bool {
     agg.group_keys().is_empty()
         && !agg.aggregation_functions().is_empty()
+        && agg.aggregation_filters().iter().all(|f| f.is_none())
         && agg
             .aggregation_functions()
             .iter()
@@ -487,6 +490,7 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_metadata_count_
     Ok(BlockingSpec::Aggregate {
         group_by_expressions: Vec::new(),
         aggregate_functions,
+        aggregate_filters: node.aggregation_filters().to_vec(),
         output_col_names: node.col_names().to_vec(),
     })
 }
@@ -678,6 +682,7 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_aggregate_spec(
     Ok(BlockingSpec::Aggregate {
         group_by_expressions,
         aggregate_functions,
+        aggregate_filters: node.aggregation_filters().to_vec(),
         output_col_names: node.col_names().to_vec(),
     })
 }

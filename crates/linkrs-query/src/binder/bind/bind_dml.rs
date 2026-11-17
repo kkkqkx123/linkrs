@@ -14,7 +14,38 @@ impl Binder {
     ) -> DBResult<BoundStatement> {
         let statements = vec![self.bind_stmt(&stmt.left)?, self.bind_stmt(&stmt.right)?];
 
+        // A sourceless LOOKUP plan carries no argument or start seed, so a
+        // downstream splice would silently drop the upstream plan. Only the
+        // head position is plannable; anything later is a hard error.
+        let mut flattened = Vec::new();
+        for stmt in &statements {
+            Self::flatten_pipe_statement(stmt, &mut flattened);
+        }
+        if flattened
+            .iter()
+            .skip(1)
+            .any(|stmt| matches!(stmt, BoundStatement::Lookup(_)))
+        {
+            return Err(crate::binder::error::invalid_query(
+                "LOOKUP is only allowed as the first stage of a pipe".to_string(),
+            ));
+        }
+
         Ok(BoundStatement::Pipe(BoundPipeStatement { statements }))
+    }
+
+    /// Flatten a bound pipe stage into source order.
+    ///
+    /// `bind_pipe` nests binary pipes (`Pipe(Pipe(a, b), c)`), so a positional
+    /// check must walk the nesting instead of only looking at the top level.
+    fn flatten_pipe_statement<'a>(stmt: &'a BoundStatement, out: &mut Vec<&'a BoundStatement>) {
+        if let BoundStatement::Pipe(pipe) = stmt {
+            for stmt in &pipe.statements {
+                Self::flatten_pipe_statement(stmt, out);
+            }
+        } else {
+            out.push(stmt);
+        }
     }
 
     pub(crate) fn bind_set_operation(
@@ -40,6 +71,14 @@ impl Binder {
         &mut self,
         stmt: &crate::parser::ast::GroupByStmt,
     ) -> DBResult<BoundStatement> {
+        if !matches!(
+            stmt.grouping_type,
+            crate::parser::ast::GroupingType::Standard
+        ) {
+            return Err(crate::binder::error::invalid_query(
+                "GROUP BY ROLLUP/CUBE/GROUPING SETS is not supported yet".to_string(),
+            ));
+        }
         let keys = stmt
             .group_items
             .iter()
@@ -52,9 +91,16 @@ impl Binder {
             Self::collect_bound_aggregates(&bound, item.alias.clone(), &mut aggregates);
         }
 
+        let having = stmt
+            .having_clause
+            .as_ref()
+            .map(|h| self.bind_expr(h))
+            .transpose()?;
+
         Ok(BoundStatement::GroupBy(BoundGroupByStatement {
             keys,
             aggregates,
+            having,
         }))
     }
 
@@ -627,6 +673,9 @@ fn normalize_target_alias_refs(expr: BoundExpression, alias: &str) -> BoundExpre
                 .into_iter()
                 .map(|arg| normalize_target_alias_refs(arg, alias))
                 .collect();
+            call.filter = call
+                .filter
+                .map(|f| Box::new(normalize_target_alias_refs(*f, alias)));
             BoundExpression::Aggregate(call)
         }
         BoundExpression::List(items, data_type) => BoundExpression::List(

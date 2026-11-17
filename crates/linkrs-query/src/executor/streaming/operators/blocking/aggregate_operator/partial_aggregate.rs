@@ -30,6 +30,7 @@ pub(crate) fn open_partial_aggregate(state: &mut Option<PartialAggregateState>) 
 pub(crate) fn next_partial_aggregate(
     group_by_expressions: &[Expression],
     aggregate_functions: &[(AggregateFunction, Vec<Expression>)],
+    aggregate_filters: &[Option<Expression>],
     memory_tracker: &mut MemoryTracker,
     state: &mut PartialAggregateState,
     ctx: &BlockingContext<'_>,
@@ -102,6 +103,11 @@ pub(crate) fn next_partial_aggregate(
             });
 
             for (i, (func, _args)) in aggregate_functions.iter().enumerate() {
+                // FILTER excludes the row from this aggregate only; the
+                // group itself still exists.
+                if !super::shared::eval_aggregate_filter(&aggregate_filters[i], row, &col_names) {
+                    continue;
+                }
                 if let Some(acc) = group_accs.get_mut(i) {
                     let value = match &field_indices[i] {
                         Some(j) => row

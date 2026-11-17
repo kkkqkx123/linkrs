@@ -212,3 +212,65 @@ fn identity_blocked_for_entity_function() {
     );
     let _ = scenario.assert_success();
 }
+
+#[test]
+fn pure_scan_chain_explain_has_no_residual_filter_with_exact_rows() {
+    // Regression lock for the constant-true root cause: the planner emits a
+    // tag-membership filter plus a constant-true adapter above a tagged
+    // scan; after tag elimination and true-filter elimination the pure
+    // chain must show no Filter node at all, while identity/rowless stays on
+    // and the values stay exact.
+    //
+    // The matcher targets the DOT node-label prefix (`[label="Filter`), so
+    // a future diagnostic note mentioning filters can never false-positive.
+    let scenario = setup();
+    let scenario = scenario.query("EXPLAIN FORMAT = DOT MATCH (a:person) RETURN a.name");
+    let plan = plan_of(&scenario);
+    assert!(
+        plan.contains("mode: identity"),
+        "flat-only scan must use identity mode, got:\n{plan}"
+    );
+    assert!(
+        !plan.contains("[label=\\\"Filter"),
+        "constant-true/tag filters must be eliminated, got:\n{plan}"
+    );
+    let scenario = scenario.assert_success();
+
+    let scenario = scenario.query("MATCH (a:person) RETURN a.name ORDER BY a.name");
+    let scenario = scenario.assert_success().assert_result_count(20);
+    assert_eq!(
+        first_string_cell(&scenario),
+        Some("String(\"0\")".to_string())
+    );
+}
+
+#[test]
+fn bare_entity_limit_returns_boxed_rows_not_zero() {
+    // Regression lock for the failure mode in the root-cause analysis:
+    // erasing the constant-true filter used to release noop-project
+    // elimination and limit pushdown, collapsing the plan to a rowless scan
+    // as output and turning `RETURN n LIMIT` from N rows into zero rows.
+    // With the row-rebuilder kept and root bare-entity identity blocked,
+    // the limit query must return boxed entities, never zero rows.
+    let scenario = setup();
+    let scenario = scenario.query("EXPLAIN FORMAT = DOT MATCH (a:person) RETURN a LIMIT 3");
+    assert!(
+        !plan_of(&scenario).contains("mode: identity"),
+        "root bare-entity output must keep boxed vertices"
+    );
+    let scenario = scenario.assert_success();
+
+    let scenario = scenario.query("MATCH (a:person) RETURN a LIMIT 3");
+    let scenario = scenario.assert_success().assert_result_count(3);
+    match scenario.last_result() {
+        Some(ExecutionResult::DataSet { data, .. }) => {
+            assert!(
+                data.rows
+                    .iter()
+                    .all(|row| matches!(row.first(), Some(Value::Vertex(_)))),
+                "entity column must hold boxed vertices"
+            );
+        }
+        other => panic!("expected a dataset, got {other:?}"),
+    }
+}

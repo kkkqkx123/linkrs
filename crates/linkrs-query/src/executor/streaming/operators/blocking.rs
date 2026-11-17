@@ -43,6 +43,7 @@ pub enum BlockingOperatorKind {
             linkrs_core::types::operators::AggregateFunction,
             Vec<linkrs_core::types::expr::Expression>,
         )>,
+        aggregate_filters: Vec<Option<linkrs_core::types::expr::Expression>>,
         output_col_names: Vec<String>,
         memory_tracker: MemoryTracker,
         state: Option<AggregateState>,
@@ -98,6 +99,7 @@ pub enum BlockingOperatorKind {
             linkrs_core::types::operators::AggregateFunction,
             Vec<linkrs_core::types::expr::Expression>,
         )>,
+        aggregate_filters: Vec<Option<linkrs_core::types::expr::Expression>>,
         output_col_names: Vec<String>,
         memory_tracker: MemoryTracker,
         state: Option<PartialAggregateState>,
@@ -141,10 +143,12 @@ impl BlockingOperator {
             super::spec::BlockingSpec::Aggregate {
                 group_by_expressions,
                 aggregate_functions,
+                aggregate_filters,
                 output_col_names,
             } => BlockingOperatorKind::Aggregate {
                 group_by_expressions: group_by_expressions.clone(),
                 aggregate_functions: aggregate_functions.clone(),
+                aggregate_filters: aggregate_filters.clone(),
                 output_col_names: output_col_names.clone(),
                 memory_tracker: crate::executor::base::MemoryTracker::new(memory_budget.clone()),
                 state: None,
@@ -217,10 +221,12 @@ impl BlockingOperator {
             super::spec::BlockingSpec::PartialAggregate {
                 group_by_expressions,
                 aggregate_functions,
+                aggregate_filters,
                 output_col_names,
             } => BlockingOperatorKind::PartialAggregate {
                 group_by_expressions: group_by_expressions.clone(),
                 aggregate_functions: aggregate_functions.clone(),
+                aggregate_filters: aggregate_filters.clone(),
                 output_col_names: output_col_names.clone(),
                 memory_tracker: crate::executor::base::MemoryTracker::new(memory_budget.clone()),
                 state: None,
@@ -349,12 +355,14 @@ impl BlockingOperator {
             BlockingOperatorKind::Aggregate {
                 group_by_expressions,
                 aggregate_functions,
+                aggregate_filters,
                 memory_tracker,
                 state,
                 ..
             } => aggregate_operator::next_aggregate(
                 group_by_expressions,
                 aggregate_functions,
+                aggregate_filters,
                 memory_tracker,
                 state.as_mut().unwrap(),
                 &ctx,
@@ -469,12 +477,14 @@ impl BlockingOperator {
             BlockingOperatorKind::PartialAggregate {
                 group_by_expressions,
                 aggregate_functions,
+                aggregate_filters,
                 memory_tracker,
                 state,
                 ..
             } => aggregate_operator::next_partial_aggregate(
                 group_by_expressions,
                 aggregate_functions,
+                aggregate_filters,
                 memory_tracker,
                 state.as_mut().unwrap(),
                 &ctx,

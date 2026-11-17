@@ -14,6 +14,13 @@
 //! require boxed edges (multi-hop/filtered expands, traversals,
 //! whole-entity consumers). Anything unauditable blocks the annotation.
 //!
+//! A non-root `Project` that forwards the variable under its own name is
+//! representation-preserving (headers stay headers, boxes stay boxes), so
+//! it is transparent and the ancestors above judge the actual uses. A bare
+//! variable that flows to the plan root through transparent preservers
+//! still blocks the annotation: the client contract for a bare-entity
+//! return is the boxed edge. This mirrors `ScanIdentityAnnotateRule`.
+//!
 //! The rule is a whole-plan pass mirroring `ScanIdentityAnnotateRule` and
 //! runs in the same batch, after it, so vertex identity flags are already
 //! final when edge eligibility is judged.
@@ -136,6 +143,13 @@ fn scan_edge_identity_eligible(
     if crate::cte::is_cte_scan_edges(scan) {
         return false;
     }
+    // Root-output tightening: a bare entity variable reaching the client
+    // through transparent preservers still needs the boxed edge, even when
+    // each intermediate step looks harmless in isolation. Mirrors the
+    // vertex-scan audit.
+    if root_exposes_bare_entity(ancestors, var) {
+        return false;
+    }
     // No minimum projection: with an empty projection every property read
     // fails the flat-service check below, so only plans with zero property
     // reads (pure edge counts) can pass the audit — all safe.
@@ -146,13 +160,72 @@ fn scan_edge_identity_eligible(
         .collect();
     ancestors
         .iter()
-        .all(|anc| audit_ancestor(anc, var, &projected))
+        .enumerate()
+        .all(|(index, anc)| audit_ancestor(anc, var, &projected, index == 0))
+}
+
+/// Whether the plan root exposes the scan variable as a bare entity to the
+/// client: the root output still carries `var` and every node from the scan
+/// up through the root preserves it as a bare column (transparent row
+/// preservers plus same-name variable passthroughs). The client contract for
+/// a bare-entity return is the boxed edge, so identity must stay off even
+/// when each intermediate step looks harmless in isolation. Mirrors the
+/// vertex-scan audit.
+fn root_exposes_bare_entity(ancestors: &[&PlanNodeEnum], var: &str) -> bool {
+    let Some(root) = ancestors.first() else {
+        return false;
+    };
+    if !root.col_names().contains(&var.to_string()) {
+        return false;
+    }
+    let mut flows_bare = true;
+    for anc in ancestors.iter().rev() {
+        match anc {
+            PlanNodeEnum::Filter(_)
+            | PlanNodeEnum::Flatten(_)
+            | PlanNodeEnum::Limit(_)
+            | PlanNodeEnum::Dedup(_)
+            | PlanNodeEnum::Sort(_)
+            | PlanNodeEnum::TopN(_) => {}
+            PlanNodeEnum::Project(project) => {
+                if !project.subqueries().is_empty() {
+                    flows_bare = false;
+                    break;
+                }
+                let forwards = project.columns().iter().any(|col| {
+                    col.alias == var
+                        && col.expression.expression().is_some_and(|meta| {
+                            matches!(meta.inner(), Expression::Variable(name) if name == var)
+                        })
+                });
+                if !forwards {
+                    flows_bare = false;
+                    break;
+                }
+            }
+            _ => {
+                flows_bare = false;
+                break;
+            }
+        }
+        if !flows_bare {
+            break;
+        }
+    }
+    flows_bare
 }
 
 /// Audit one ancestor against the scan variable: every expression reference
 /// must be a flat-served edge property access, and no structural consumer
 /// may require boxed edges.
-fn audit_ancestor(anc: &PlanNodeEnum, var: &str, projected: &HashSet<&str>) -> bool {
+///
+/// A non-root `Project` that passes the variable through under its own name
+/// is representation-preserving (headers stay headers, boxes stay boxes),
+/// so it is transparent and the ancestors above judge the actual uses. The
+/// root project still blocks whole-entity output: the client contract for a
+/// bare-entity return is the boxed edge. Renames also block: downstream
+/// references use the alias, which this variable-scoped audit cannot see.
+fn audit_ancestor(anc: &PlanNodeEnum, var: &str, projected: &HashSet<&str>, is_root: bool) -> bool {
     if !known_reference_ancestor(anc) {
         return false;
     }
@@ -172,6 +245,13 @@ fn audit_ancestor(anc: &PlanNodeEnum, var: &str, projected: &HashSet<&str>) -> b
                 return false;
             }
             project.columns().iter().all(|col| {
+                let pure_passthrough = col.alias == var
+                    && col.expression.expression().is_some_and(
+                        |meta| matches!(meta.inner(), Expression::Variable(name) if name == var),
+                    );
+                if pure_passthrough && !is_root {
+                    return true;
+                }
                 col.expression
                     .expression()
                     .map(|meta| entity_use_safe(meta.inner(), var, projected))
@@ -221,7 +301,15 @@ fn audit_ancestor(anc: &PlanNodeEnum, var: &str, projected: &HashSet<&str>) -> b
             audit_join_keys(join.hash_keys(), join.probe_keys(), var, projected)
         }
         PlanNodeEnum::SemiJoin(join) => {
+            // A Mark-Join carries its residual non-equi condition beside the
+            // keys; the condition reads the join's own variables, so it must
+            // be audited like the keys. Mirrors the vertex-scan audit.
             audit_join_keys(join.hash_keys(), join.probe_keys(), var, projected)
+                && join
+                    .join_condition()
+                    .and_then(|condition| condition.get_expression())
+                    .map(|expr| entity_use_safe(&expr, var, projected))
+                    .unwrap_or(true)
         }
         PlanNodeEnum::ExpandAll(expand) => {
             let filter_safe = expand
@@ -561,5 +649,129 @@ mod tests {
         let (annotated, changed) = annotate_scan_edge_identity(&plan);
         assert!(!changed);
         assert!(!scan_flag(&annotated));
+    }
+
+    fn scan_flags(root: &PlanNodeEnum) -> Vec<bool> {
+        let mut found = Vec::new();
+        fn walk(node: &PlanNodeEnum, out: &mut Vec<bool>) {
+            if let PlanNodeEnum::ScanEdges(scan) = node {
+                out.push(scan.identity_only());
+            }
+            for child in node.children() {
+                walk(child, out);
+            }
+        }
+        walk(root, &mut found);
+        found
+    }
+
+    #[test]
+    fn non_root_passthrough_project_is_transparent_for_identity() {
+        // An intermediate same-name passthrough forwards the representation
+        // untouched, so the count above judges the actual use: count(e)
+        // observes only null-ness and keeps identity. Mirrors the vertex audit.
+        use crate::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode;
+        use linkrs_core::types::operators::AggregateFunction;
+        let mut agg = AggregateNode::new(
+            project_var(flat_scan("e", &[]), "e"),
+            vec![],
+            vec![AggregateFunction::Count],
+        )
+        .expect("aggregate should build");
+        agg.set_aggregation_args(vec![vec![Expression::Variable("e".to_string())]]);
+        let plan = PlanNodeEnum::Aggregate(agg);
+        let (annotated, changed) = annotate_scan_edge_identity(&plan);
+        assert!(changed, "transparent passthrough must keep identity");
+        assert!(scan_flag(&annotated));
+    }
+
+    #[test]
+    fn renamed_passthrough_project_blocks_identity() {
+        // WITH e AS f hides downstream uses behind the alias, so the audit
+        // cannot see them: the box stays. Mirrors the vertex audit.
+        use crate::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode;
+        use linkrs_core::types::operators::AggregateFunction;
+        let renamed = linkrs_core::YieldColumn {
+            expression: ctx_expr(Expression::Variable("e".to_string())),
+            alias: "f".to_string(),
+        };
+        let mut agg = AggregateNode::new(
+            project_cols(flat_scan("e", &[]), vec![renamed]),
+            vec![],
+            vec![AggregateFunction::Count],
+        )
+        .expect("aggregate should build");
+        agg.set_aggregation_args(vec![vec![Expression::Variable("e".to_string())]]);
+        let plan = PlanNodeEnum::Aggregate(agg);
+        let (annotated, changed) = annotate_scan_edge_identity(&plan);
+        assert!(!changed, "renamed passthrough must keep boxes");
+        assert!(!scan_flag(&annotated));
+    }
+
+    #[test]
+    fn root_limit_over_bare_passthrough_blocks_identity() {
+        // YIELD e LIMIT: the bare edge reaches the client through a
+        // row-preserving limit, so the boxed edge must stay.
+        use crate::planning::plan::core::nodes::operation::sort_node::LimitNode;
+        let project = project_var(flat_scan("e", &["weight"]), "e");
+        let limit = LimitNode::new(project, 0, 3).expect("limit builds");
+        let plan = PlanNodeEnum::Limit(limit);
+        let (annotated, changed) = annotate_scan_edge_identity(&plan);
+        assert!(!changed, "root bare-edge output must keep boxes");
+        assert!(!scan_flag(&annotated));
+    }
+
+    #[test]
+    fn root_limit_over_flat_projection_keeps_identity() {
+        // YIELD e.weight LIMIT: only the flat column reaches the client, so
+        // the identity path stays valid through the limit.
+        use crate::planning::plan::core::nodes::operation::sort_node::LimitNode;
+        let project = project_edge_prop(flat_scan("e", &["weight"]), "e", "weight");
+        let limit = LimitNode::new(project, 0, 3).expect("limit builds");
+        let plan = PlanNodeEnum::Limit(limit);
+        let (annotated, changed) = annotate_scan_edge_identity(&plan);
+        assert!(changed, "flat limit output keeps identity");
+        assert!(scan_flag(&annotated));
+    }
+
+    /// Mark-Join plan with a residual non-equi condition over both sides.
+    fn mark_join(left_props: &[&str], right_props: &[&str]) -> PlanNodeEnum {
+        use crate::planning::plan::core::nodes::join::join_node::SemiJoinNode;
+        let condition = ctx_expr(Expression::Binary {
+            left: Box::new(edge_prop_expr("e", "weight")),
+            op: BinaryOperator::GreaterThan,
+            right: Box::new(edge_prop_expr("d", "weight")),
+        });
+        let join = SemiJoinNode::new_with_condition(
+            flat_scan("d", left_props),
+            flat_scan("e", right_props),
+            vec![],
+            vec![],
+            condition,
+            false,
+        )
+        .expect("semi join builds");
+        PlanNodeEnum::SemiJoin(join)
+    }
+
+    #[test]
+    fn mark_join_condition_blocks_identity() {
+        // The residual condition reads `e.weight` from the right side;
+        // without a flat slot the evaluator falls back to the boxed edge,
+        // so the identity annotation must stay off.
+        let plan = mark_join(&[], &[]);
+        let (annotated, changed) = annotate_scan_edge_identity(&plan);
+        assert!(!changed, "the residual condition needs the boxed edges");
+        assert!(scan_flags(&annotated).iter().all(|flag| !flag));
+    }
+
+    #[test]
+    fn flat_mark_join_condition_keeps_identity() {
+        // Both sides project the property, so the flat slots serve the
+        // residual condition and the identity annotation stays valid.
+        let plan = mark_join(&["weight"], &["weight"]);
+        let (annotated, changed) = annotate_scan_edge_identity(&plan);
+        assert!(changed, "flat-served condition keeps identity");
+        assert!(scan_flags(&annotated).iter().all(|flag| *flag));
     }
 }

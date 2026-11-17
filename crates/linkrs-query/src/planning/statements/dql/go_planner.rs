@@ -161,6 +161,10 @@ impl Planner for GoPlanner {
 
         let project_columns = self.build_yield_columns_from_bound(go_stmt, &expr_ctx)?;
         let column_types = projection_util::project_column_types(&project_columns);
+        let project_aliases: Vec<String> = project_columns
+            .iter()
+            .map(|col| col.alias.clone())
+            .collect();
         logical_root = LogicalNodeEnum::Project(LogicalProjectNode {
             id: next_node_id(),
             input: Some(Box::new(logical_root)),
@@ -168,20 +172,24 @@ impl Planner for GoPlanner {
             subqueries: Vec::new(),
             has_folded_expressions: false,
             output_var: None,
-            col_names: project_columns
-                .iter()
-                .map(|col| col.alias.clone())
-                .collect(),
+            col_names: project_aliases.clone(),
             column_types,
         });
 
         // `YIELD DISTINCT` and multi-step traversal both require collapsing
-        // duplicate rows; a single dedup node covers either case.
-        let yield_distinct = go_stmt
-            .yield_clause
-            .as_ref()
-            .is_some_and(|clause| clause.distinct);
-        if yield_distinct || step_limit > 1 {
+        // duplicate rows; folding the step demand into the effective
+        // DISTINCT flag keeps one shared tail lowering for both causes.
+        if let Some(ref yield_clause) = go_stmt.yield_clause {
+            let mut effective = yield_clause.clone();
+            effective.distinct = effective.distinct || step_limit > 1;
+            logical_root =
+                crate::planning::statements::clauses::yield_planner::apply_bound_tail_logical(
+                    logical_root,
+                    &effective,
+                    &expr_ctx,
+                    &project_aliases,
+                )?;
+        } else if step_limit > 1 {
             logical_root = LogicalNodeEnum::Dedup(LogicalDedupNode {
                 id: next_node_id(),
                 input: Some(Box::new(logical_root)),

@@ -647,6 +647,7 @@ fn partitioned_aggregate_runs_once_after_gathering_all_partitions() {
                         )],
                     ),
                 ],
+                aggregate_filters: vec![None, None],
                 output_col_names: vec!["COUNT".to_string(), "SUM".to_string()],
                 memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
                 state: None,

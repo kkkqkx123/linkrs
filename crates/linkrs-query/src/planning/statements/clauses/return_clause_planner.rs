@@ -270,7 +270,7 @@ impl ReturnClausePlanner {
             for col in &yield_columns {
                 if let Some(expr_meta) = col.expression.expression() {
                     let inner = expr_meta.inner();
-                    if let Expression::Aggregate { args, .. } = inner {
+                    if let Expression::Aggregate { args, filter, .. } = inner {
                         for arg in args {
                             let arg_expr_str = arg.to_expression_string();
                             // Only add if not already projected (avoid duplicates)
@@ -283,6 +283,26 @@ impl ReturnClausePlanner {
                                     expression: ctx_expr,
                                     alias: arg_expr_str,
                                 });
+                            }
+                        }
+                        // A FILTER predicate evaluates against the same
+                        // pre-aggregation rows, so every column it names
+                        // must survive this projection like the arguments.
+                        if let Some(filter) = filter {
+                            let mut leaves = Vec::new();
+                            collect_filter_column_exprs(filter, &mut leaves);
+                            for leaf in leaves {
+                                let leaf_str = leaf.to_expression_string();
+                                if projected_aliases.insert(leaf_str.clone()) {
+                                    let ctx = col.expression.context();
+                                    let meta = ExpressionMeta::new(leaf);
+                                    let id = ctx.register_expression(meta);
+                                    let ctx_expr = ContextualExpression::new(id, ctx.clone());
+                                    project_columns.push(YieldColumn {
+                                        expression: ctx_expr,
+                                        alias: leaf_str,
+                                    });
+                                }
                             }
                         }
                     }
@@ -704,6 +724,75 @@ fn extract_aggregate_info(
         agg_filters,
         agg_args,
     ))
+}
+
+/// Collect the column references named by an aggregate FILTER predicate.
+///
+/// Bare variables and property accesses are collected whole (the executor
+/// resolves `n.age` against a dotted column first); compound expressions
+/// are descended into. Anything else (literals, parameters, subqueries)
+/// needs no pre-aggregation projection.
+fn collect_filter_column_exprs(
+    expr: &linkrs_core::Expression,
+    out: &mut Vec<linkrs_core::Expression>,
+) {
+    use linkrs_core::Expression;
+    match expr {
+        Expression::Variable(_)
+        | Expression::Property { .. }
+        | Expression::TagProperty { .. }
+        | Expression::EdgeProperty { .. } => out.push(expr.clone()),
+        Expression::Binary { left, right, .. } => {
+            collect_filter_column_exprs(left, out);
+            collect_filter_column_exprs(right, out);
+        }
+        Expression::Unary { operand, .. } => collect_filter_column_exprs(operand, out),
+        Expression::Function { args, .. } => {
+            for arg in args {
+                collect_filter_column_exprs(arg.as_expr(), out);
+            }
+        }
+        Expression::Aggregate { args, filter, .. } => {
+            for arg in args {
+                collect_filter_column_exprs(arg, out);
+            }
+            if let Some(filter) = filter {
+                collect_filter_column_exprs(filter, out);
+            }
+        }
+        Expression::List(items) => {
+            for item in items {
+                collect_filter_column_exprs(item, out);
+            }
+        }
+        Expression::Map(pairs) => {
+            for (_, value) in pairs {
+                collect_filter_column_exprs(value, out);
+            }
+        }
+        Expression::Case {
+            test_expr,
+            conditions,
+            default,
+        } => {
+            if let Some(test) = test_expr {
+                collect_filter_column_exprs(test, out);
+            }
+            for (condition, value) in conditions {
+                collect_filter_column_exprs(condition, out);
+                collect_filter_column_exprs(value, out);
+            }
+            if let Some(default) = default {
+                collect_filter_column_exprs(default, out);
+            }
+        }
+        Expression::TypeCast { expression, .. } => collect_filter_column_exprs(expression, out),
+        Expression::Subscript { collection, index } => {
+            collect_filter_column_exprs(collection, out);
+            collect_filter_column_exprs(index, out);
+        }
+        _ => {}
+    }
 }
 
 fn extract_aggregate_function(

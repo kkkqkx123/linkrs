@@ -174,10 +174,9 @@ pub fn build_collection_config(
     if options.write_consistency_factor == Some(0) {
         return Err("write_consistency_factor must be >= 1 when set".to_string());
     }
-    if let (Some(write), Some(replication)) = (
-        options.write_consistency_factor,
-        options.replication_factor,
-    ) {
+    if let (Some(write), Some(replication)) =
+        (options.write_consistency_factor, options.replication_factor)
+    {
         if write > replication {
             return Err(format!(
                 "write_consistency_factor {write} must not exceed replication_factor {replication}"

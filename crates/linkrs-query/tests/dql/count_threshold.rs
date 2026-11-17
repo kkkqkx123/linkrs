@@ -19,11 +19,16 @@ fn setup() -> TestScenario {
         .exec_ddl("CREATE EDGE Link(weight DOUBLE) FROM Node TO Node")
         .assert_success();
     for i in 0..6 {
-        scenario = scenario.exec_dml(&format!("INSERT VERTEX Node(name, age) VALUES {i}:(\"{i}\", {i})"));
+        scenario = scenario.exec_dml(&format!(
+            "INSERT VERTEX Node(name, age) VALUES {i}:(\"{i}\", {i})"
+        ));
     }
     scenario = scenario.assert_success();
     for i in 0..5 {
-        scenario = scenario.exec_dml(&format!("INSERT EDGE Link(weight) VALUES {i} -> {}:(1.0)", i + 1));
+        scenario = scenario.exec_dml(&format!(
+            "INSERT EDGE Link(weight) VALUES {i} -> {}:(1.0)",
+            i + 1
+        ));
     }
     scenario.assert_success()
 }
@@ -90,7 +95,7 @@ fn grouped_count_pins_groups_and_null_semantics() {
             for row in &data.rows {
                 assert_eq!(row.len(), 2);
                 match row.get(1) {
-                    Some(Value::BigInt(1)) | Some(Value::Int(1)) => {},
+                    Some(Value::BigInt(1)) | Some(Value::Int(1)) => {}
                     other => panic!("each age group counts once, got {other:?}"),
                 }
             }

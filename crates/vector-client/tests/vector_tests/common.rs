@@ -708,9 +708,7 @@ fn matches_condition(condition: &FilterCondition, point: &VectorPoint) -> bool {
             }
             false
         }
-        ConditionType::Not {
-            condition: nested,
-        } => !matches_condition(nested, point),
+        ConditionType::Not { condition: nested } => !matches_condition(nested, point),
     }
 }
 

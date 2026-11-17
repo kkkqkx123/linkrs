@@ -381,10 +381,14 @@ fn split_aggregate(node: &AggregateNode) -> (BlockingSpec, BlockingSpec) {
         })
         .collect();
     let output_col_names = node.col_names().to_vec();
+    // Partial aggregates evaluate FILTER per input row; the final merge
+    // combines already-filtered partials and carries no predicate.
+    let aggregate_filters = node.aggregation_filters().to_vec();
     (
         BlockingSpec::PartialAggregate {
             group_by_expressions: group_by_expressions.clone(),
             aggregate_functions: aggregate_functions.clone(),
+            aggregate_filters,
             output_col_names: output_col_names.clone(),
         },
         BlockingSpec::FinalAggregate {
