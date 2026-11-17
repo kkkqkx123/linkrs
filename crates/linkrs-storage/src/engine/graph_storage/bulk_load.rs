@@ -179,4 +179,29 @@ mod tests {
         assert!(!session.active());
         session.abandon();
     }
+
+    #[test]
+    fn file_backed_storage_opens_engaged_session_through_group_trait() {
+        use crate::AutoCommitGroupOps;
+        let dir = TempDir::new().expect("temp dir");
+        let storage = crate::GraphStorage::open_with_persistence(
+            dir.path().to_path_buf(),
+            false,
+            None,
+        )
+        .expect("file-backed storage opens");
+        // The COPY path reaches the session through the group trait on a
+        // trait object; an engaged session here proves the wiring, while a
+        // missing coordinator would silently keep the old behavior.
+        let session = crate::AutoCommitGroupOps::begin_bulk_load_session(&storage)
+            .expect("bulk-load session opens");
+        let Some(session) = session else {
+            panic!("file-backed storage must provide a bulk-load session");
+        };
+        assert!(
+            session.active(),
+            "file-backed session must suspend checkpoint triggers"
+        );
+        session.abandon();
+    }
 }

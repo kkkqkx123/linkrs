@@ -261,6 +261,15 @@ impl QueryResult {
 #[derive(Debug, Clone, Default)]
 pub struct ExecutionMetadata {
     pub execution_time_ms: u64,
+    /// Parse, validate, plan, and optimize stages (compile side), in
+    /// microseconds. Together with `execute_time_us` this splits the Ladybug
+    /// compiling/executing reporting pair; `execution_time_ms` stays the
+    /// total wall clock. Microsecond resolution because the fast paths this
+    /// pair measures are routinely sub-millisecond.
+    pub compile_time_us: u64,
+    /// Execute stage only (execute side of the compiling/executing pair),
+    /// in microseconds.
+    pub execute_time_us: u64,
     pub rows_scanned: u64,
     pub rows_returned: u64,
     pub cache_hit: bool,

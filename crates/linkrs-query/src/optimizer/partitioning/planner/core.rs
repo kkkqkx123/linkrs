@@ -5,7 +5,9 @@ use crate::optimizer::cost::SelectivityEstimator;
 use crate::optimizer::stats::feedback::selectivity::SelectivitySnapshot;
 use crate::optimizer::stats::StatsView;
 use crate::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
+use crate::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode;
 use crate::planning::plan::{PartitionSource, PartitionSpec, PartitionStrategy, PlanNodeEnum};
+use linkrs_core::types::operators::AggregateFunction;
 
 use super::anchored::decide_anchored_traversal;
 use super::edge::{collect_vertex_scans, decide_edge_scan};
@@ -199,7 +201,7 @@ impl PartitioningPlanner {
         statistics: &StatsView,
         layout: &PartitioningLayoutInfo,
     ) -> PartitioningDecision {
-        if !self.config.enabled {
+        if !self.config.enabled && !self.shape_allowlisted(root) {
             return fallback("partitioning is disabled");
         }
         if self.config.max_partitions < 2 {
@@ -397,6 +399,53 @@ pub(crate) fn fallback(reason: impl Into<String>) -> PartitioningDecision {
     PartitioningDecision {
         partition_spec: None,
         reason: reason.into(),
+    }
+}
+
+/// Whether the plan root is a pure-count chain: one global aggregate with
+/// no group keys, no grouping sets, every function a plain count, no
+/// distinct flags, and no per-function filters. Such chains carry no
+/// grouping state, so they are the first shape the gray-release allowlist
+/// admits.
+fn is_pure_count_chain(agg: &AggregateNode) -> bool {
+    if !agg.group_keys().is_empty() {
+        return false;
+    }
+    if agg.grouping_sets().iter().any(|set| !set.is_empty()) {
+        return false;
+    }
+    if agg.aggregation_functions().is_empty() {
+        return false;
+    }
+    if !agg
+        .aggregation_functions()
+        .iter()
+        .all(|func| matches!(func, AggregateFunction::Count))
+    {
+        return false;
+    }
+    if agg.aggregation_distinct().iter().any(|distinct| *distinct) {
+        return false;
+    }
+    if agg.aggregation_filters().iter().any(|filter| filter.is_some()) {
+        return false;
+    }
+    true
+}
+
+impl PartitioningPlanner {
+    /// Gray-release allowlist: with the master switch off, only shapes
+    /// whose flag is set pass the disabled gate. Pure-count chains are
+    /// admitted first; any other aggregate root needs the global flag.
+    /// Non-aggregate roots never match, so their behavior is unchanged.
+    fn shape_allowlisted(&self, root: &PlanNodeEnum) -> bool {
+        let PlanNodeEnum::Aggregate(agg) = root else {
+            return false;
+        };
+        if is_pure_count_chain(agg) {
+            return self.config.allow_pure_count_chain;
+        }
+        self.config.allow_global_aggregate
     }
 }
 

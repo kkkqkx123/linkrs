@@ -413,9 +413,11 @@ fn batch_insert_vertices_body(
             if outcome.is_err() {
                 break;
             }
-            outcome = super::index_maintenance::check_vertex_unique_indexes(
+            // Unique checks reuse the batch-level index list instead of
+            // re-listing tag indexes per row.
+            outcome = super::index_maintenance::check_vertex_unique_indexes_with_list(
                 ctx,
-                ctx.index_metadata_manager(),
+                batch_ctx.tag_indexes,
                 space_info.space_id,
                 &row.vertex_id,
                 &row.tag_name,

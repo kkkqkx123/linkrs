@@ -5,7 +5,10 @@ use crate::engine::{
 };
 use crate::index::types::EdgeIdentity;
 use crate::types::PropertyRowList;
-use linkrs_core::types::{EdgeIdentifier, Index, LabelId, TagInfo, Timestamp, VertexId};
+use linkrs_core::metadata::IndexMetadataManager;
+use linkrs_core::types::{
+    EdgeIdentifier, EdgeTypeInfo, Index, LabelId, TagInfo, Timestamp, VertexId,
+};
 use linkrs_core::wal::redo::{DeleteEdgeRedo, InsertEdgeRedo};
 use linkrs_core::wal::types::WalOpType;
 use linkrs_core::{DataType, Edge, EdgeDeleteKey, StorageError, StorageResult, Value};
@@ -56,6 +59,16 @@ pub(super) struct InsertedEdgeRecord {
     pub(super) edge_type: String,
     pub(super) rank: i64,
     pub(super) redo_entry: linkrs_transaction::wal::TransactionWalEntry,
+}
+
+/// Edge-type schema resolved once per batch: the definition plus the source
+/// and destination label ids every row of that type shares. Batch entries
+/// resolve each distinct edge type a single time; row loops reuse the
+/// resolved value instead of repeating schema lookups per row.
+struct ResolvedEdgeType {
+    edge_type: EdgeTypeInfo,
+    src_label_id: LabelId,
+    dst_label_id: LabelId,
 }
 
 /// Batch-local SERIAL validation state: one committed-column snapshot per
@@ -143,12 +156,19 @@ pub(crate) fn batch_insert_edges(
         .get_space(space)?
         .ok_or_else(|| StorageError::not_found(format!("Space {} not found", space)))?;
 
-    validate_edge_batch(ctx, space, &edges)?;
+    let resolved = resolve_edge_batch_types(ctx, space, &edges)?;
 
     let ts = ctx.get_write_timestamp()?;
     let mut rollback = Vec::new();
-    if let Err(e) = batch_insert_grouped(ctx, space, space_info.space_id, &edges, ts, &mut rollback)
-    {
+    if let Err(e) = batch_insert_grouped(
+        ctx,
+        space,
+        space_info.space_id,
+        &edges,
+        &resolved,
+        ts,
+        &mut rollback,
+    ) {
         super::edge::rollback_edges(ctx, space_info.space_id, &rollback, ts);
         ctx.abort_write_timestamp(ts);
         return Err(e);
@@ -184,16 +204,18 @@ pub(crate) fn batch_insert_edges(
 
 /// Insert a batch grouped by edge type in first-seen order.
 ///
-/// Each type resolves its schema once, appends one redo per edge in group
-/// order, commits the whole type through a single staging batch, then runs
-/// the per-edge index updates in the same order. A failure rolls back every
-/// previously applied edge through the shared rollback path, matching the
-/// visible-state effects of the sequential loop this replaces.
+/// Each type's schema comes from the batch pre-resolution, then the type
+/// appends one redo per edge in group order, commits the whole type through
+/// a single staging batch, then runs the per-edge index updates in the same
+/// order. A failure rolls back every previously applied edge through the
+/// shared rollback path, matching the visible-state effects of the
+/// sequential loop this replaces.
 fn batch_insert_grouped(
     ctx: &GraphStorageContext,
     space: &str,
     space_id: u64,
     edges: &[Edge],
+    resolved: &HashMap<String, ResolvedEdgeType>,
     ts: Timestamp,
     rollback: &mut Vec<InsertedEdgeRecord>,
 ) -> StorageResult<()> {
@@ -213,34 +235,42 @@ fn batch_insert_grouped(
         let positions = by_type
             .get(edge_type_name)
             .ok_or_else(|| StorageError::db_error("batch type group missing".to_string()))?;
-        insert_one_type_batch(ctx, space, space_id, edges, positions, ts, rollback)?;
+        let schema = resolved.get(edge_type_name).ok_or_else(|| {
+            StorageError::db_error("batch resolved type missing".to_string())
+        })?;
+        insert_one_type_batch(
+            ctx, space_id, edges, positions, schema, ts, rollback,
+        )?;
     }
     Ok(())
 }
 
 fn insert_one_type_batch(
     ctx: &GraphStorageContext,
-    space: &str,
     space_id: u64,
     edges: &[Edge],
     positions: &[usize],
+    schema: &ResolvedEdgeType,
     ts: Timestamp,
     rollback: &mut Vec<InsertedEdgeRecord>,
 ) -> StorageResult<()> {
-    let first = &edges[positions[0]];
-    let edge_type = super::edge::resolve_edge_type(ctx, space, &first.edge_type)?;
+    let edge_type = &schema.edge_type;
     let edge_label_id = edge_type.edge_type_id;
-    let src_label_id =
-        endpoint_label_id(ctx, space, &edge_type.src_tag_name)?.ok_or_else(|| {
-            StorageError::not_found(format!("Source tag {} not found", edge_type.src_tag_name))
-        })?;
-    let dst_label_id =
-        endpoint_label_id(ctx, space, &edge_type.dst_tag_name)?.ok_or_else(|| {
-            StorageError::not_found(format!(
-                "Destination tag {} not found",
-                edge_type.dst_tag_name
-            ))
-        })?;
+    let src_label_id = schema.src_label_id;
+    let dst_label_id = schema.dst_label_id;
+
+    // Index names matching this type, listed once per batch: rows below
+    // only touch these indexes, and skip index work entirely when empty.
+    // The group key (every row's own type string) drives the filter, exactly
+    // like the per-row listing this replaces.
+    let group_type = &edges[positions[0]].edge_type;
+    let matching_indexes: Vec<String> = ctx
+        .index_metadata_manager()
+        .list_edge_indexes(space_id)?
+        .into_iter()
+        .filter(|index| index.schema_name == *group_type)
+        .map(|index| index.name)
+        .collect();
 
     let mut prepared: Vec<(PropertyRowList, usize)> = Vec::with_capacity(positions.len());
     for &index in positions {
@@ -250,8 +280,13 @@ fn insert_one_type_batch(
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
-        let props =
-            super::constraints::apply_edge_type_constraints(ctx, space, &edge.edge_type, props)?;
+        let props = super::constraints::apply_edge_type_constraints_resolved(
+            ctx,
+            space_id,
+            &edge.edge_type,
+            edge_type,
+            props,
+        )?;
         prepared.push((props, index));
     }
 
@@ -315,33 +350,62 @@ fn insert_one_type_batch(
             &edge.edge_type,
             edge.ranking,
         );
-        ctx.update_all_edge_indexes_mvcc(&edge_identity, props, ts)?;
+        for index_name in &matching_indexes {
+            ctx.update_edge_indexes_mvcc(&edge_identity, index_name, props, ts)?;
+        }
     }
 
     Ok(())
 }
 
-fn validate_edge_batch(
+/// Resolve one edge type plus the source and destination label ids its rows
+/// share. Missing types or endpoint tags fail exactly like the former
+/// per-row validation did.
+fn resolve_one_edge_type(
+    ctx: &GraphStorageContext,
+    space: &str,
+    edge_type_name: &str,
+) -> StorageResult<ResolvedEdgeType> {
+    let edge_type = super::edge::resolve_edge_type(ctx, space, edge_type_name)?;
+    let src_label_id =
+        endpoint_label_id(ctx, space, &edge_type.src_tag_name)?.ok_or_else(|| {
+            StorageError::not_found(format!(
+                "Source tag {} not found",
+                edge_type.src_tag_name
+            ))
+        })?;
+    let dst_label_id =
+        endpoint_label_id(ctx, space, &edge_type.dst_tag_name)?.ok_or_else(|| {
+            StorageError::not_found(format!(
+                "Destination tag {} not found",
+                edge_type.dst_tag_name
+            ))
+        })?;
+    Ok(ResolvedEdgeType {
+        edge_type,
+        src_label_id,
+        dst_label_id,
+    })
+}
+
+/// Resolve every distinct edge type of a batch exactly once: the type
+/// definition plus the source and destination label ids its rows share.
+/// Runs before the write timestamp is taken, so missing types or endpoint
+/// tags fail the batch the same way the former per-row validation did.
+fn resolve_edge_batch_types(
     ctx: &GraphStorageContext,
     space: &str,
     edges: &[Edge],
-) -> StorageResult<()> {
+) -> StorageResult<HashMap<String, ResolvedEdgeType>> {
+    let mut resolved: HashMap<String, ResolvedEdgeType> = HashMap::new();
     for edge in edges {
-        let edge_type = super::edge::resolve_edge_type(ctx, space, &edge.edge_type)?;
-        if endpoint_label_id(ctx, space, &edge_type.src_tag_name)?.is_none() {
-            return Err(StorageError::not_found(format!(
-                "Source tag {} not found",
-                edge_type.src_tag_name
-            )));
+        if resolved.contains_key(&edge.edge_type) {
+            continue;
         }
-        if endpoint_label_id(ctx, space, &edge_type.dst_tag_name)?.is_none() {
-            return Err(StorageError::not_found(format!(
-                "Destination tag {} not found",
-                edge_type.dst_tag_name
-            )));
-        }
+        let schema = resolve_one_edge_type(ctx, space, &edge.edge_type)?;
+        resolved.insert(edge.edge_type.clone(), schema);
     }
-    Ok(())
+    Ok(resolved)
 }
 
 /// Delete a batch of edges by key under one write timestamp.
@@ -364,20 +428,14 @@ pub(crate) fn batch_delete_edges(
         return Ok(0);
     }
     let space_id = ctx.schema_manager().get_space_id(space)?;
+    // Distinct types validate once up front; the per-key prefetch below
+    // still reads each key's previous state for the undo records.
+    let mut seen_delete_types: HashSet<&str> = HashSet::new();
     for key in deletes {
-        let edge_type = super::edge::resolve_edge_type(ctx, space, &key.edge_type)?;
-        if endpoint_label_id(ctx, space, &edge_type.src_tag_name)?.is_none() {
-            return Err(StorageError::not_found(format!(
-                "Source tag {} not found",
-                edge_type.src_tag_name
-            )));
+        if !seen_delete_types.insert(key.edge_type.as_str()) {
+            continue;
         }
-        if endpoint_label_id(ctx, space, &edge_type.dst_tag_name)?.is_none() {
-            return Err(StorageError::not_found(format!(
-                "Destination tag {} not found",
-                edge_type.dst_tag_name
-            )));
-        }
+        resolve_one_edge_type(ctx, space, &key.edge_type)?;
     }
     // Prefetch previous properties for the undo records, mirroring the
     // single-delete pre-delete read. Missing edges prefetch to `None` and

@@ -166,12 +166,16 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
         });
 
         // Execute the query (using the new execute_query_with_request method).
-        let execution_result = match self.pipeline_manager.execute_query_with_request_scope(
-            query,
-            rctx,
-            space_info,
-            ctx.transaction_id,
-        ) {
+        // The profiled variant reports stage timings so the API metadata
+        // can split compile (parse/validate/plan/optimize) from execute.
+        let (execution_result, profile) = match self
+            .pipeline_manager
+            .execute_query_with_request_scope_profiled(
+                query,
+                rctx,
+                space_info,
+                ctx.transaction_id,
+            ) {
             Ok(result) => result,
             Err(error) => {
                 if auto_commit {
@@ -186,7 +190,7 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
         }
 
         // Wrap the engine execution result with API-layer metadata.
-        let mut result = Self::attach_metadata(execution_result)?;
+        let mut result = Self::attach_metadata(execution_result, &profile)?;
         result.metadata.execution_time_ms = start_time.elapsed().as_millis() as u64;
 
         Ok(result)
@@ -326,17 +330,31 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
     /// is surfaced as an internal error, all other variants pass through.
     /// Scanned rows stay zero here because the true scan volume is owned by
     /// executor statistics, not by the returned row count.
-    fn attach_metadata(execution: ExecutionResult) -> CoreResult<QueryResult> {
+    ///
+    /// The stage profile splits the Ladybug compiling/executing pair:
+    /// parse, validate, plan, and optimize accumulate to `compile_time_ms`,
+    /// the execute stage to `execute_time_ms`.
+    fn attach_metadata(
+        execution: ExecutionResult,
+        profile: &linkrs_metrics::QueryProfile,
+    ) -> CoreResult<QueryResult> {
         let rows_returned = match &execution {
             ExecutionResult::DataSet { data, .. } => data.row_count(),
             _ => 0,
         };
+        let compile_us = profile.stages.parse_us
+            .saturating_add(profile.stages.validate_us)
+            .saturating_add(profile.stages.plan_us)
+            .saturating_add(profile.stages.optimize_us)
+            .saturating_add(profile.stages.statistics_us);
         match execution {
             ExecutionResult::Error(msg) => Err(CoreError::Internal(msg)),
             other => Ok(QueryResult::new(
                 other,
                 ExecutionMetadata {
                     execution_time_ms: 0,
+                    compile_time_us: compile_us,
+                    execute_time_us: profile.stages.execute_us,
                     rows_scanned: 0,
                     rows_returned: rows_returned as u64,
                     cache_hit: false,

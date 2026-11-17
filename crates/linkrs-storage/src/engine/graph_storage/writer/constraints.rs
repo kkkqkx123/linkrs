@@ -1,4 +1,4 @@
-use linkrs_core::types::{LabelId, TagInfo};
+use linkrs_core::types::{EdgeTypeInfo, LabelId, TagInfo};
 use linkrs_core::{StorageError, StorageResult, Value};
 use std::sync::Arc;
 
@@ -123,6 +123,20 @@ pub(super) fn apply_edge_type_constraints(
         .get_space(space)?
         .map(|space| space.space_id)
         .unwrap_or(0);
+    apply_edge_type_constraints_resolved(ctx, space_id, edge_type, &et, props)
+}
+
+/// Batch variant of [`apply_edge_type_constraints`] operating on an already
+/// resolved edge-type definition. The batch entry resolves the definition
+/// once per distinct edge type; every row of the batch reuses it instead of
+/// repeating the schema lookups.
+pub(super) fn apply_edge_type_constraints_resolved(
+    ctx: &GraphStorageContext,
+    space_id: u64,
+    edge_type: &str,
+    et: &EdgeTypeInfo,
+    props: Vec<(std::sync::Arc<str>, Value)>,
+) -> StorageResult<Vec<(std::sync::Arc<str>, Value)>> {
     let mut result = props;
     for prop_def in &et.properties {
         if let Some((_, value)) = result

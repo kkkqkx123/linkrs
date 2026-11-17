@@ -27,6 +27,14 @@ pub struct ParallelConfig {
     pub vertex_id_start: Option<i64>,
     /// Optional trusted upper bound (exclusive) of the vertex-id range.
     pub vertex_id_end: Option<i64>,
+    /// Gray-release allowlist: admit pure-count chains through the disabled
+    /// gate without enabling partitioning globally. Defaults to false.
+    #[serde(default)]
+    pub allow_pure_count_chain: bool,
+    /// Gray-release allowlist: admit other aggregate-rooted plans through
+    /// the disabled gate. Defaults to false.
+    #[serde(default)]
+    pub allow_global_aggregate: bool,
 }
 
 impl Default for ParallelConfig {
@@ -39,6 +47,8 @@ impl Default for ParallelConfig {
             max_buffered_chunks: 10,
             vertex_id_start: None,
             vertex_id_end: None,
+            allow_pure_count_chain: false,
+            allow_global_aggregate: false,
         }
     }
 }

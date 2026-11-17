@@ -101,7 +101,7 @@ pub(super) fn check_vertex_unique_indexes(
     check_vertex_unique_indexes_with_list(ctx, &indexes, space_id, vertex_id, tag_name, props)
 }
 
-fn check_vertex_unique_indexes_with_list(
+pub(super) fn check_vertex_unique_indexes_with_list(
     ctx: &GraphStorageContext,
     indexes: &[Index],
     space_id: u64,

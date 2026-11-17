@@ -174,6 +174,8 @@ fn build_pipeline(
             fixed_overhead_rows: 2_048,
             per_partition_rows: 256,
             exchange_row_per_mille: 50,
+            allow_pure_count_chain: false,
+            allow_global_aggregate: false,
         });
     } else {
         engine.set_partitioning_config(PartitioningConfig {

@@ -78,11 +78,117 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         space_info: Option<SpaceInfo>,
         transaction_id: Option<TransactionId>,
     ) -> DBResult<ExecutionResult> {
-        let request = self.prepare_request(query_text, rctx, space_info)?;
-        match self.execute_prepared(&request, transaction_id, ResultSink::Materialize)? {
-            (super::prepared::PreparedOutcome::Materialized(result), _) => Ok(result),
-            _ => unreachable!("materialize sink cannot stream"),
+        Ok(self
+            .execute_query_with_request_scope_profiled(
+                query_text,
+                rctx,
+                space_info,
+                transaction_id,
+            )?
+            .0)
+    }
+
+    /// Request-scoped variant of [`execute_query_with_profile`](Self::execute_query_with_profile).
+    ///
+    /// Uses the caller-bound request preparation (no auto-commit binding;
+    /// the API layer passes its operation storage through `rctx`) so the
+    /// embedded and server paths share one profile assembly. The only
+    /// profile producer stays [`execute_query_with_profile`](Self::execute_query_with_profile)
+    /// for the auto-commit path; this method mirrors its stage accounting
+    /// for the request-scoped path instead of duplicating it elsewhere.
+    pub fn execute_query_with_request_scope_profiled(
+        &mut self,
+        query_text: &str,
+        rctx: Arc<QueryRequestContext>,
+        space_info: Option<SpaceInfo>,
+        transaction_id: Option<TransactionId>,
+    ) -> DBResult<(ExecutionResult, QueryProfile)> {
+        self.stats_manager.add_value(MetricType::NumActiveQueries);
+
+        struct ActiveQueryGuard {
+            stats_manager: Arc<StatsManager>,
         }
+        impl Drop for ActiveQueryGuard {
+            fn drop(&mut self) {
+                self.stats_manager.dec_value(MetricType::NumActiveQueries);
+            }
+        }
+        let _guard = ActiveQueryGuard {
+            stats_manager: self.stats_manager.clone(),
+        };
+
+        let total_start = Instant::now();
+        let mut metrics = QueryMetrics::new();
+        let mut profile = QueryProfile::new(
+            rctx.session_id.unwrap_or(0),
+            query_text.to_string(),
+        );
+
+        let prepare_start = Instant::now();
+        let request = match self.prepare_request(query_text, rctx, space_info) {
+            Ok(req) => {
+                profile.stages.parse_us = prepare_start.elapsed().as_micros() as u64;
+                profile.stages.validate_us = 0;
+                metrics.record_parse_time(prepare_start.elapsed());
+                req
+            }
+            Err(e) => {
+                profile.stages.parse_us = prepare_start.elapsed().as_micros() as u64;
+                let error_info =
+                    ErrorInfo::new(ErrorType::ParseError, QueryPhase::Parse, e.to_string());
+                profile.mark_failed_with_info(error_info.clone());
+                profile.total_duration_us = total_start.elapsed().as_micros() as u64;
+                self.stats_manager
+                    .record_failed_query(profile.clone(), error_info);
+                return Err(e);
+            }
+        };
+
+        self.record_query_type_counter(&request.stmt);
+
+        let execute_start = Instant::now();
+        let (result, times) =
+            match self.execute_prepared(&request, transaction_id, ResultSink::Materialize) {
+                Ok((super::prepared::PreparedOutcome::Materialized(result), times)) => {
+                    (result, times)
+                }
+                Ok(_) => unreachable!("materialize sink cannot stream"),
+                Err(e) => {
+                    profile.stages.execute_us = execute_start.elapsed().as_micros() as u64;
+                    profile.stages.statistics_us = 0;
+                    profile.stages.plan_us = 0;
+                    profile.stages.optimize_us = 0;
+                    let error_info = ErrorInfo::new(
+                        ErrorType::ExecutionError,
+                        QueryPhase::Execute,
+                        e.to_string(),
+                    );
+                    profile.mark_failed_with_info(error_info.clone());
+                    profile.total_duration_us = total_start.elapsed().as_micros() as u64;
+                    self.stats_manager
+                        .record_failed_query(profile.clone(), error_info);
+                    return Err(e);
+                }
+            };
+
+        profile.stages.execute_us = execute_start.elapsed().as_micros() as u64;
+        profile.stages.statistics_us = times.statistics_us;
+        profile.stages.plan_us = times.plan_us;
+        profile.stages.optimize_us = times.optimize_us;
+        profile.result_count = result.count();
+        metrics.set_result_row_count(result.count());
+        metrics.record_execute_time(execute_start.elapsed());
+        metrics.statistics_time_us = times.statistics_us;
+        metrics.record_plan_time(std::time::Duration::from_micros(times.plan_us));
+        metrics.record_optimize_time(std::time::Duration::from_micros(times.optimize_us));
+
+        profile.total_duration_us = total_start.elapsed().as_micros() as u64;
+        metrics.record_total_time(total_start.elapsed());
+
+        self.stats_manager.record_query_metrics(&metrics);
+        self.stats_manager.record_query_profile(profile.clone());
+
+        Ok((result, profile))
     }
 
     /// Execute a statement end to end and report its stage profile.

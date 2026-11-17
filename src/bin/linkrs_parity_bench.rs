@@ -7,10 +7,12 @@
 //!   `dst`, bare property names) via sidecar files.
 //! - `run`: execute `.benchmark` files (warmup + N timed runs) against a
 //!   serialized database and write JSON results comparable with Ladybug logs.
+//!   Per-run compile/execute split comes from result metadata; `--skip-file`
+//!   takes a skip list (`dataset/group/name` per line, `#` comments).
 //!
 //! See `docs/release/guides/parity-benchmark.md` for the full methodology.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fmt::Write as _;
 use std::fs;
 use std::io::{BufRead, BufReader, Write as _};
@@ -31,7 +33,7 @@ fn main() {
                 "usage:\n  linkrs-parity-bench copy --dataset <name> --csv-dir <dir> \
                  --script <file.cypher> --db <path> [--force]\n  \
                  linkrs-parity-bench run --db <path> --space <name> --benchmark-dir <dir> \
-                 [--warmup N] [--run N] [--out <dir>] [--threads N]"
+                 [--warmup N] [--run N] [--out <dir>] [--threads N] [--skip-file <path>]"
             );
             std::process::exit(2);
         }
@@ -147,6 +149,29 @@ fn cmd_copy(args: &[String]) {
     // Persist the final checkpoint before recording the version; the next
     // open replays from a complete image instead of a half-written WAL.
     database.close();
+    // Import-side bottleneck report: total wall, slowest single statement,
+    // and process RSS peak for the memory-model comparison.
+    let total_ms: f64 = stats.iter().map(|s| s.elapsed_ms).sum();
+    println!(
+        "[copy] {dataset} total {total_ms:.1} ms over {} statement(s)",
+        stats.len()
+    );
+    if let Some(slowest) = stats
+        .iter()
+        .max_by(|a, b| {
+            a.elapsed_ms
+                .partial_cmp(&b.elapsed_ms)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+    {
+        println!(
+            "[copy] slowest: {} ({:.1} ms)",
+            slowest.kind, slowest.elapsed_ms
+        );
+    }
+    if let Some(kb) = rss_peak_kb() {
+        println!("[copy] VmHWM peak: {kb} kB");
+    }
     fs::write(&version_file, format!("{head}\n"))
         .unwrap_or_else(|e| die(format!("write version.txt: {e}")));
     println!(
@@ -480,6 +505,11 @@ fn cmd_run(args: &[String]) {
                 .map(|n| n.get() as u32)
                 .unwrap_or(1)
         });
+    let skip_file = opt_value(args, "--skip-file");
+    let skip_set = skip_file
+        .as_deref()
+        .map(load_skip_file)
+        .unwrap_or_default();
 
     let database = GraphDatabase::<GraphStorage>::open(&db)
         .unwrap_or_else(|e| die(format!("open db {}: {e}", db.display())));
@@ -500,12 +530,21 @@ fn cmd_run(args: &[String]) {
     files.sort();
 
     println!(
-        "[run] db={} space={space} warmup={warmup} run={runs} threads={threads}",
-        db.display()
+        "[run] db={} space={space} warmup={warmup} run={runs} threads={threads} skipped={}",
+        db.display(),
+        skip_set.len()
     );
+    if let Some(kb) = rss_peak_kb() {
+        println!("[run] VmHWM peak at start: {kb} kB");
+    }
 
     for path in &files {
         let bench = parse_benchmark_file(path);
+        if is_skipped(&skip_set, &bench.name) {
+            println!("[run] {} skipped by skip file", bench.name);
+            write_run_result(&out_dir, &bench, None, None, None, "skipped", threads);
+            continue;
+        }
         let mut warmup_failed = false;
         for _ in 0..warmup {
             if let Err(e) = session.execute(&bench.query) {
@@ -513,6 +552,8 @@ fn cmd_run(args: &[String]) {
                 write_run_result(
                     &out_dir,
                     &bench,
+                    None,
+                    None,
                     None,
                     &format!("warmup error: {e}"),
                     threads,
@@ -525,6 +566,8 @@ fn cmd_run(args: &[String]) {
             continue;
         }
         let mut times_ms: Vec<f64> = Vec::with_capacity(runs);
+        let mut compile_ms: Vec<f64> = Vec::with_capacity(runs);
+        let mut execute_ms: Vec<f64> = Vec::with_capacity(runs);
         let mut rows_seen = 0usize;
         let mut got_lines: Vec<String> = Vec::new();
         let mut error: Option<String> = None;
@@ -535,6 +578,12 @@ fn cmd_run(args: &[String]) {
                     rows_seen = result.len();
                     got_lines = format_rows(&result);
                     times_ms.push(start.elapsed().as_secs_f64() * 1000.0);
+                    // Compiling/executing split per the Ladybug reporting
+                    // pair: compile covers parse through optimize, execute
+                    // covers the execution stage only.
+                    let meta = result.metadata();
+                    compile_ms.push(meta.compile_time.as_secs_f64() * 1000.0);
+                    execute_ms.push(meta.execute_time.as_secs_f64() * 1000.0);
                 }
                 Err(e) => {
                     error = Some(e.to_string());
@@ -544,7 +593,7 @@ fn cmd_run(args: &[String]) {
         }
         if let Some(err) = &error {
             eprintln!("[run] {} FAILED: {err}", bench.name);
-            write_run_result(&out_dir, &bench, None, err, threads);
+            write_run_result(&out_dir, &bench, None, None, None, err, threads);
             continue;
         }
         let mut status = "ok";
@@ -559,13 +608,31 @@ fn cmd_run(args: &[String]) {
             }
         }
         let exec_ms = trimmed_mean(&times_ms);
-        let median = median(&times_ms);
+        let median_ms = median(&times_ms);
+        let compile_mean = trimmed_mean(&compile_ms);
+        let compile_median = median(&compile_ms);
+        let execute_mean = trimmed_mean(&execute_ms);
+        let execute_median = median(&execute_ms);
         println!(
-            "[run] {}: {} run(s), exec {exec_ms:.2} ms (drop-max mean, median {median:.2}), {rows_seen} row(s), status {status}",
+            "[run] {}: {} run(s), exec {exec_ms:.2} ms (drop-max mean, median {median_ms:.2}), \
+             compile {compile_mean:.2} ms (median {compile_median:.2}), \
+             execute-stage {execute_mean:.2} ms (median {execute_median:.2}), \
+             {rows_seen} row(s), status {status}",
             bench.name,
             times_ms.len()
         );
-        write_run_result(&out_dir, &bench, Some(&times_ms), status, threads);
+        write_run_result(
+            &out_dir,
+            &bench,
+            Some(&times_ms),
+            Some(&compile_ms),
+            Some(&execute_ms),
+            status,
+            threads,
+        );
+    }
+    if let Some(kb) = rss_peak_kb() {
+        println!("[run] VmHWM peak at end: {kb} kB");
     }
 }
 
@@ -593,6 +660,36 @@ fn median(values: &[f64]) -> f64 {
     sorted[sorted.len() / 2]
 }
 
+/// Load a skip list (`dataset/group/name` per line, `#` comments, blank
+/// lines ignored) as used by `benches/parity/skip.txt`.
+fn load_skip_file(path: &str) -> HashSet<String> {
+    let text = fs::read_to_string(path).unwrap_or_else(|e| die(format!("read {path}: {e}")));
+    text.lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .map(str::to_string)
+        .collect()
+}
+
+/// Whether a benchmark name is covered by the skip list: exact match, or
+/// the entry ends with `/name` so group-qualified entries match plain names.
+fn is_skipped(skip_set: &HashSet<String>, name: &str) -> bool {
+    skip_set.contains(name)
+        || skip_set
+            .iter()
+            .any(|e| e.ends_with(&format!("/{name}")))
+}
+
+/// Process RSS peak (VmHWM) in kB from `/proc/self/status`.
+/// Linux-only; anything else reports nothing instead of failing the run.
+fn rss_peak_kb() -> Option<u64> {
+    let text = fs::read_to_string("/proc/self/status").ok()?;
+    text.lines().find_map(|line| {
+        let rest = line.strip_prefix("VmHWM:")?;
+        rest.split_whitespace().next()?.parse::<u64>().ok()
+    })
+}
+
 /// LSQB sample processing (docs/release/benchmark/parity-benchmark.md §6):
 /// drop the slowest run and average the rest; a single run degenerates to it.
 fn trimmed_mean(values: &[f64]) -> f64 {
@@ -612,6 +709,8 @@ fn write_run_result(
     out_dir: &Path,
     bench: &Benchmark,
     times: Option<&[f64]>,
+    compile: Option<&[f64]>,
+    execute: Option<&[f64]>,
     status: &str,
     threads: u32,
 ) {
@@ -634,6 +733,44 @@ fn write_run_result(
             json.push_str("  \"execution_times_ms\": [],\n");
             json.push_str("  \"execution_ms\": 0,\n");
             json.push_str("  \"median_ms\": 0,\n");
+        }
+    }
+    match compile {
+        Some(values) => {
+            let list = values
+                .iter()
+                .map(|t| format!("{t:.3}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let _ = writeln!(json, "  \"compile_times_ms\": [{list}],");
+            let _ = writeln!(json, "  \"compile_ms\": {:.3},", trimmed_mean(values));
+            let _ = writeln!(json, "  \"compile_median_ms\": {:.3},", median(values));
+        }
+        None => {
+            json.push_str("  \"compile_times_ms\": [],\n");
+            json.push_str("  \"compile_ms\": 0,\n");
+            json.push_str("  \"compile_median_ms\": 0,\n");
+        }
+    }
+    match execute {
+        Some(values) => {
+            let list = values
+                .iter()
+                .map(|t| format!("{t:.3}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let _ = writeln!(json, "  \"execute_times_ms\": [{list}],");
+            let _ = writeln!(json, "  \"execute_ms\": {:.3},", trimmed_mean(values));
+            let _ = writeln!(
+                json,
+                "  \"execute_median_ms\": {:.3},",
+                median(values)
+            );
+        }
+        None => {
+            json.push_str("  \"execute_times_ms\": [],\n");
+            json.push_str("  \"execute_ms\": 0,\n");
+            json.push_str("  \"execute_median_ms\": 0,\n");
         }
     }
     let _ = writeln!(json, "  \"query\": {}", json_escape(&bench.query));

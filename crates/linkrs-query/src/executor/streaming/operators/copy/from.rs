@@ -15,7 +15,12 @@ use linkrs_core::Value;
 use super::source::MergedCsvSource;
 
 /// Default batch size when the statement does not specify one.
-const DEFAULT_BATCH_SIZE: usize = 1000;
+///
+/// Sized to the storage engine's recommended per-commit edge chunk: bigger
+/// batches amortize the per-batch setup (writer binding, partition staging)
+/// while the vertex path still auto-splits past its scope limit and the edge
+/// path commits one chunk atomically.
+const DEFAULT_BATCH_SIZE: usize = 10_000;
 
 /// Execute a COPY FROM statement and return the number of rows inserted.
 #[allow(clippy::too_many_arguments)]
@@ -176,10 +181,30 @@ fn run_import(
     let window = storage.begin_auto_commit_group().map_err(|e| {
         QueryError::execution(format!("COPY FROM failed to open write window: {e}"))
     })?;
+    // Bulk-load session around the group window: threshold/time-based
+    // checkpoints and flushes stay suspended for the import's duration
+    // (the hard max-WAL-size valve stays active), and one final checkpoint
+    // anchors the ingest after the group commit. Engines without a
+    // persistence layer report no session and keep current behavior.
+    let bulk_session = storage.begin_bulk_load_session().map_err(|e| {
+        QueryError::execution(format!("COPY FROM failed to open bulk-load session: {e}"))
+    })?;
+    log::debug!(
+        "COPY FROM '{}': bulk-load session engaged: {}",
+        file_paths.join(", "),
+        bulk_session.as_ref().is_some_and(|session| session.active()),
+    );
 
     let result = (|| -> Result<u64, QueryError> {
         let mut total: u64 = 0;
         let mut skipped = 0u64;
+
+        // One writer for the whole import: every batch joins the same group
+        // window (shared timestamp and transaction), so rebinding per batch
+        // only repeats the bind setup without changing semantics.
+        let mut writer = storage.bind_auto_commit_writer(&window).map_err(|e| {
+            QueryError::execution(format!("COPY FROM failed to bind writer: {e}"))
+        })?;
 
         while !merged.is_eof() {
             if let Some(rt) = &runtime {
@@ -191,17 +216,12 @@ fn run_import(
                 continue;
             }
 
-            let inserted = {
-                let mut writer = storage.bind_auto_commit_writer(&window).map_err(|e| {
-                    QueryError::execution(format!("COPY FROM failed to bind writer: {e}"))
-                })?;
-                match plan {
-                    ImportPlan::Vertices { tag, .. } => {
-                        flush_vertices(&mut *writer, space_name, tag, &mapping, &records)?
-                    }
-                    ImportPlan::Edges { edge_type, .. } => {
-                        flush_edges(&mut *writer, space_name, edge_type, &mapping, &records)?
-                    }
+            let inserted = match plan {
+                ImportPlan::Vertices { tag, .. } => {
+                    flush_vertices(&mut *writer, space_name, tag, &mapping, &records)?
+                }
+                ImportPlan::Edges { edge_type, .. } => {
+                    flush_edges(&mut *writer, space_name, edge_type, &mapping, &records)?
                 }
             };
             total += inserted;
@@ -222,12 +242,21 @@ fn run_import(
             storage
                 .finalize_auto_commit_group(&window, linkrs_core::types::DurabilityLevel::Sync)
                 .map_err(|e| QueryError::execution(format!("COPY FROM commit failed: {e}")))?;
+            if let Some(session) = bulk_session {
+                session.finish().map_err(|e| {
+                    QueryError::execution(format!("COPY FROM final checkpoint failed: {e}"))
+                })?;
+            }
             Ok(total)
         }
         Err(error) => {
             if let Err(rollback_error) = storage.rollback_auto_commit_group(&window) {
                 log::error!("COPY FROM rollback failed: {rollback_error}");
             }
+            // Dropping the session without finishing lifts the suspension
+            // without a final checkpoint; staged data stays recoverable
+            // through WAL replay.
+            drop(bulk_session);
             Err(error)
         }
     }

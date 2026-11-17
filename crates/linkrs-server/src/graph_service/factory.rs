@@ -438,6 +438,8 @@ impl<
             fixed_overhead_rows: 0,
             per_partition_rows: 0,
             exchange_row_per_mille: 0,
+            allow_pure_count_chain: parallel.allow_pure_count_chain,
+            allow_global_aggregate: parallel.allow_global_aggregate,
         }
     }
 

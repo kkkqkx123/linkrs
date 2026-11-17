@@ -25,6 +25,7 @@ use super::profile::QueryProfile;
 /// Pre-compiled regex patterns (lazy initialization)
 static STRING_REGEX: OnceLock<regex::Regex> = OnceLock::new();
 static NUMBER_REGEX: OnceLock<regex::Regex> = OnceLock::new();
+static LABEL_REGEX: OnceLock<regex::Regex> = OnceLock::new();
 
 fn get_string_regex() -> &'static regex::Regex {
     STRING_REGEX.get_or_init(|| regex::Regex::new(r#"'[^']*'"#).unwrap())
@@ -32,6 +33,10 @@ fn get_string_regex() -> &'static regex::Regex {
 
 fn get_number_regex() -> &'static regex::Regex {
     NUMBER_REGEX.get_or_init(|| regex::Regex::new(r"\b\d+\.?\d*\b").unwrap())
+}
+
+fn get_label_regex() -> &'static regex::Regex {
+    LABEL_REGEX.get_or_init(|| regex::Regex::new(r":(\w+)").unwrap())
 }
 
 /// Query pattern (normalized/parameterized query)
@@ -652,7 +657,7 @@ fn extract_labels(query: &str) -> Vec<String> {
     let mut labels = std::collections::HashSet::new();
 
     // Match pattern: :LabelName
-    let re_label = regex::Regex::new(r":(\w+)").unwrap();
+    let re_label = get_label_regex();
     for cap in re_label.captures_iter(query) {
         if let Some(label) = cap.get(1) {
             labels.insert(label.as_str().to_string());

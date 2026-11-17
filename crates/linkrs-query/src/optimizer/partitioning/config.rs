@@ -17,6 +17,18 @@ pub struct PartitioningConfig {
     pub max_workers: usize,
     /// Maximum queued chunks per partition worker for backpressure.
     pub max_buffered_chunks: usize,
+    /// Gray-release allowlist for aggregate-rooted shapes.
+    ///
+    /// The master `enabled` switch stays default-off; turning on one of
+    /// these flags additionally admits that shape through the disabled
+    /// gate so a single query class can be partitioned without enabling
+    /// partitioning globally. Every other gate (storage self-proven
+    /// domain, row thresholds, structural rejects) still applies.
+    /// Pure-count chains go first because they carry no grouping state;
+    /// global aggregates follow once per-partition aggregation is proven.
+    /// Both default to false, so default behavior is unchanged.
+    pub allow_pure_count_chain: bool,
+    pub allow_global_aggregate: bool,
     /// Parallel fixed startup overhead in row-equivalents (fragment startup,
     /// exchange coordination). All-zero cost params disable the economic
     /// gate and leave the row-count threshold as the only gate.
@@ -37,6 +49,8 @@ impl Default for PartitioningConfig {
             vertex_id_range: None,
             max_workers: 1,
             max_buffered_chunks: 10,
+            allow_pure_count_chain: false,
+            allow_global_aggregate: false,
             fixed_overhead_rows: 0,
             per_partition_rows: 0,
             exchange_row_per_mille: 0,

@@ -145,6 +145,17 @@ impl<S: StorageClient + crate::AutoCommitGroupOps> crate::AutoCommitGroupOps for
     ) -> StorageResult<()> {
         self.inner.finalize_auto_commit_group(window, durability)
     }
+
+    fn rollback_auto_commit_group(
+        &self,
+        window: &crate::AutoCommitBatchWindow,
+    ) -> StorageResult<()> {
+        self.inner.rollback_auto_commit_group(window)
+    }
+
+    fn begin_bulk_load_session(&self) -> StorageResult<Option<crate::BulkLoadSession>> {
+        self.inner.begin_bulk_load_session()
+    }
 }
 
 impl<S: StorageClient> StorageReader for MetricsStorage<S> {

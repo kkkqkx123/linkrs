@@ -83,8 +83,12 @@ impl<'de> Deserialize<'de> for Row {
 /// Results metadata
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResultMetadata {
-    /// execution time
+    /// execution time (total wall clock)
     pub execution_time: Duration,
+    /// compile time (parse/validate/plan/optimize stages)
+    pub compile_time: Duration,
+    /// execute stage time
+    pub execute_time: Duration,
     /// Returns the number of rows
     pub rows_returned: usize,
     /// scanning line
@@ -107,6 +111,8 @@ impl QueryResult {
             rows,
             metadata: ResultMetadata {
                 execution_time: Duration::from_millis(result.metadata.execution_time_ms),
+                compile_time: Duration::from_micros(result.metadata.compile_time_us),
+                execute_time: Duration::from_micros(result.metadata.execute_time_us),
                 rows_returned,
                 rows_scanned: result.metadata.rows_scanned,
             },
@@ -340,6 +346,8 @@ impl Default for ResultMetadata {
     fn default() -> Self {
         Self {
             execution_time: Duration::from_millis(0),
+            compile_time: Duration::from_millis(0),
+            execute_time: Duration::from_millis(0),
             rows_returned: 0,
             rows_scanned: 0,
         }

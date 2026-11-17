@@ -4,7 +4,7 @@
 //! this trait so batch loaders can acquire the auto-commit write gate and
 //! register MVCC snapshots once for a run of statements.
 
-use crate::engine::graph_storage::AutoCommitBatchWindow;
+use crate::engine::graph_storage::{AutoCommitBatchWindow, BulkLoadSession};
 use linkrs_core::{StorageError, StorageResult};
 use std::sync::Arc;
 
@@ -60,5 +60,13 @@ pub trait AutoCommitGroupOps: Send + Sync {
         Err(StorageError::not_supported(
             "rollback_auto_commit_group is not supported by this storage implementation",
         ))
+    }
+    /// Open a bulk-load session suspending threshold/time-based checkpoint
+    /// and flush triggers for the group's duration. The caller finishes the
+    /// session after the group commit so the ingest anchors in one final
+    /// checkpoint instead of O(n²) mid-load full rewrites. Default: no
+    /// session (engines without a persistence layer keep current behavior).
+    fn begin_bulk_load_session(&self) -> StorageResult<Option<BulkLoadSession>> {
+        Ok(None)
     }
 }

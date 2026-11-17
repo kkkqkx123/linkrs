@@ -34,6 +34,8 @@ fn selects_only_with_trusted_range_and_sufficient_statistics() {
         fixed_overhead_rows: 0,
         per_partition_rows: 0,
         exchange_row_per_mille: 0,
+        allow_pure_count_chain: false,
+        allow_global_aggregate: false,
     });
 
     let decision = planner.decide(&tagged_scan(), &view_of(&stats));
@@ -152,6 +154,8 @@ fn storage_self_proven_domain_overrides_config_range() {
         fixed_overhead_rows: 0,
         per_partition_rows: 0,
         exchange_row_per_mille: 0,
+        allow_pure_count_chain: false,
+        allow_global_aggregate: false,
     });
 
     // A narrower proven domain must be used (not the config range).
@@ -239,6 +243,8 @@ fn make_planner() -> PartitioningPlanner {
         fixed_overhead_rows: 0,
         per_partition_rows: 0,
         exchange_row_per_mille: 0,
+        allow_pure_count_chain: false,
+        allow_global_aggregate: false,
     })
 }
 
@@ -293,6 +299,8 @@ fn planner_with_min_rows(min_rows: u64) -> PartitioningPlanner {
         fixed_overhead_rows: 0,
         per_partition_rows: 0,
         exchange_row_per_mille: 0,
+        allow_pure_count_chain: false,
+        allow_global_aggregate: false,
     })
 }
 
@@ -736,6 +744,8 @@ fn partition_count_is_capped_by_available_workers() {
         fixed_overhead_rows: 0,
         per_partition_rows: 0,
         exchange_row_per_mille: 0,
+        allow_pure_count_chain: false,
+        allow_global_aggregate: false,
     });
 
     let decision = planner.decide(&tagged_scan(), &view_of(&stats));
@@ -761,6 +771,8 @@ fn partition_count_is_capped_by_economic_worker_bound() {
         fixed_overhead_rows: 0,
         per_partition_rows: 0,
         exchange_row_per_mille: 0,
+        allow_pure_count_chain: false,
+        allow_global_aggregate: false,
     });
 
     let decision = planner.decide(&tagged_scan(), &view_of(&stats));
@@ -785,6 +797,8 @@ fn partition_count_is_capped_by_max_partitions() {
         fixed_overhead_rows: 0,
         per_partition_rows: 0,
         exchange_row_per_mille: 0,
+        allow_pure_count_chain: false,
+        allow_global_aggregate: false,
     });
 
     let decision = planner.decide(&tagged_scan(), &view_of(&stats));
@@ -1171,6 +1185,8 @@ fn costed_planner(fixed: u64, per_partition: u64, per_mille: u32) -> Partitionin
         fixed_overhead_rows: fixed,
         per_partition_rows: per_partition,
         exchange_row_per_mille: per_mille,
+        allow_pure_count_chain: false,
+        allow_global_aggregate: false,
     })
 }
 
@@ -1214,4 +1230,93 @@ fn keeps_table_total_behavior_without_selectivity_estimator() {
         "without an estimator the old table-total decision must stand, got: {}",
         decision.reason
     );
+}
+
+#[test]
+fn allowlisted_pure_count_passes_disabled_gate() {
+    use crate::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode;
+    use linkrs_core::types::operators::AggregateFunction;
+    let scan = tagged_scan();
+    let agg = AggregateNode::new(scan, Vec::new(), vec![AggregateFunction::Count])
+        .expect("global count plan should build");
+    let plan = PlanNodeEnum::Aggregate(agg);
+    let stats = make_stats();
+    let planner = PartitioningPlanner::new(PartitioningConfig {
+        enabled: false,
+        allow_pure_count_chain: true,
+        ..make_planner().config().clone()
+    });
+    let decision = planner.decide(&plan, &view_of(&stats));
+    assert!(
+        decision.partition_spec.is_some(),
+        "allowlisted pure count must pass the disabled gate, got: {}",
+        decision.reason
+    );
+}
+
+#[test]
+fn pure_count_without_flag_stays_disabled() {
+    use crate::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode;
+    use linkrs_core::types::operators::AggregateFunction;
+    let scan = tagged_scan();
+    let agg = AggregateNode::new(scan, Vec::new(), vec![AggregateFunction::Count])
+        .expect("global count plan should build");
+    let plan = PlanNodeEnum::Aggregate(agg);
+    let stats = make_stats();
+    let planner = PartitioningPlanner::new(PartitioningConfig {
+        enabled: false,
+        ..make_planner().config().clone()
+    });
+    let decision = planner.decide(&plan, &view_of(&stats));
+    assert!(decision.partition_spec.is_none());
+    assert!(decision.reason.contains("disabled"));
+}
+
+#[test]
+fn grouped_aggregate_needs_global_flag() {
+    use crate::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode;
+    use linkrs_core::types::operators::AggregateFunction;
+    let stats = make_stats();
+    let grouped = || {
+        let scan = tagged_scan();
+        let agg = AggregateNode::new(scan, vec!["city".to_string()], vec![AggregateFunction::Count])
+            .expect("grouped plan should build");
+        PlanNodeEnum::Aggregate(agg)
+    };
+    let pure_only = PartitioningPlanner::new(PartitioningConfig {
+        enabled: false,
+        allow_pure_count_chain: true,
+        ..make_planner().config().clone()
+    });
+    let decision = pure_only.decide(&grouped(), &view_of(&stats));
+    assert!(
+        decision.partition_spec.is_none(),
+        "grouped aggregate must not ride the pure-count flag, got: {}",
+        decision.reason
+    );
+    let global = PartitioningPlanner::new(PartitioningConfig {
+        enabled: false,
+        allow_global_aggregate: true,
+        ..make_planner().config().clone()
+    });
+    let decision = global.decide(&grouped(), &view_of(&stats));
+    assert!(
+        decision.partition_spec.is_some(),
+        "global flag must admit grouped aggregates, got: {}",
+        decision.reason
+    );
+}
+
+#[test]
+fn allowlist_does_not_leak_to_non_aggregate_roots() {
+    let stats = make_stats();
+    let planner = PartitioningPlanner::new(PartitioningConfig {
+        enabled: false,
+        allow_pure_count_chain: true,
+        allow_global_aggregate: true,
+        ..make_planner().config().clone()
+    });
+    let decision = planner.decide(&tagged_scan(), &view_of(&stats));
+    assert!(decision.partition_spec.is_none());
+    assert!(decision.reason.contains("disabled"));
 }

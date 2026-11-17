@@ -555,6 +555,10 @@ impl crate::AutoCommitGroupOps for GraphStorage {
     ) -> StorageResult<()> {
         window.rollback_group()
     }
+
+    fn begin_bulk_load_session(&self) -> StorageResult<Option<bulk_load::BulkLoadSession>> {
+        self.begin_bulk_load().map(Some)
+    }
 }
 
 impl StorageAuthOps for GraphStorage {
