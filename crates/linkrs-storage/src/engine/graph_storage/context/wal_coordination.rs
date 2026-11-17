@@ -60,6 +60,50 @@ impl GraphStorageContext {
         })
     }
 
+    /// Batch-path WAL append reusing a caller-owned serialization buffer.
+    ///
+    /// [`append_wal_redo`](Self::append_wal_redo) allocates a fresh vector
+    /// per row; hot batch loops pass one scratch buffer per batch so the
+    /// serializer writes into reused capacity and only the staged entry
+    /// itself allocates. Behavior is identical: the staged and direct
+    /// (non-transactional) paths run the same branches as the unbuffered
+    /// variant, which keeps delegating here with a throwaway buffer.
+    pub(crate) fn append_wal_redo_buffered<T: serde::Serialize>(
+        &self,
+        op_type: linkrs_core::wal::types::WalOpType,
+        timestamp: Timestamp,
+        redo: &T,
+        scratch: &mut Vec<u8>,
+    ) -> linkrs_core::StorageResult<linkrs_transaction::wal::TransactionWalEntry> {
+        scratch.clear();
+        let taken = std::mem::take(scratch);
+        *scratch = postcard::to_extend(redo, taken).map_err(|error| {
+            linkrs_core::StorageError::serialize_error(format!(
+                "Failed to serialize WAL redo: {error}"
+            ))
+        })?;
+        if let Some(transaction_id) = self
+            .operation_context
+            .as_ref()
+            .and_then(|operation| operation.transaction_id)
+        {
+            let entry = linkrs_transaction::wal::TransactionWalEntry {
+                op_type,
+                timestamp,
+                payload: scratch.clone(),
+                transaction_id: Some(transaction_id),
+                mutation_sequence: None,
+            };
+            self.persistent
+                .staged_wal
+                .entry(transaction_id)
+                .or_default()
+                .push(entry.clone());
+            return Ok(entry);
+        }
+        self.append_wal_redo(op_type, timestamp, redo)
+    }
+
     pub(crate) fn commit_staged_writes(
         &self,
         transaction_id: linkrs_core::types::TransactionId,

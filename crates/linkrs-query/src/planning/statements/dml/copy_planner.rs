@@ -51,7 +51,10 @@ impl Planner for CopyPlanner {
             AstCopyTarget::Edge(edge) => CopyTarget::Edge(edge.clone()),
         };
 
-        let batch_size = copy.batch_size.unwrap_or(1000);
+        // Default batch matches the storage engine's recommended per-commit
+        // edge chunk: bigger batches amortize per-batch setup while the
+        // vertex path still auto-splits past its scope limit.
+        let batch_size = copy.batch_size.unwrap_or(10_000);
         if batch_size == 0 {
             return Err(PlannerError::PlanGenerationFailed(
                 "COPY batch_size must be > 0".to_string(),

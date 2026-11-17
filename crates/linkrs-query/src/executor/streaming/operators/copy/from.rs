@@ -1,5 +1,7 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Instant;
 
 use parking_lot::RwLock;
 use rayon::prelude::*;
@@ -195,9 +197,14 @@ fn run_import(
         bulk_session.as_ref().is_some_and(|session| session.active()),
     );
 
-    let result = (|| -> Result<u64, QueryError> {
+    // Phase timing for import diagnosis: enabled only through the
+    // environment gate so default runs stay byte-identical on output.
+    let phases_on = std::env::var_os("LINKRS_COPY_PHASES").is_some();
+    let result = (|| -> Result<(u64, u128, u128), QueryError> {
         let mut total: u64 = 0;
         let mut skipped = 0u64;
+        let mut read_us: u128 = 0;
+        let mut write_us: u128 = 0;
 
         // One writer for the whole import: every batch joins the same group
         // window (shared timestamp and transaction), so rebinding per batch
@@ -211,11 +218,16 @@ fn run_import(
                 rt.ensure_not_cancelled()
                     .map_err(|e| QueryError::execution(e.to_string()))?;
             }
+            let read_start = phases_on.then(Instant::now);
             let records = merged.next_batch(batch_size, &mapping, &mut skipped)?;
+            if let Some(start) = read_start {
+                read_us += start.elapsed().as_micros();
+            }
             if records.is_empty() {
                 continue;
             }
 
+            let write_start = phases_on.then(Instant::now);
             let inserted = match plan {
                 ImportPlan::Vertices { tag, .. } => {
                     flush_vertices(&mut *writer, space_name, tag, &mapping, &records)?
@@ -224,6 +236,9 @@ fn run_import(
                     flush_edges(&mut *writer, space_name, edge_type, &mapping, &records)?
                 }
             };
+            if let Some(start) = write_start {
+                write_us += start.elapsed().as_micros();
+            }
             total += inserted;
         }
 
@@ -234,18 +249,32 @@ fn run_import(
                 file_paths.join(", ")
             );
         }
-        Ok(total)
+        Ok((total, read_us, write_us))
     })();
 
     match result {
-        Ok(total) => {
+        Ok((total, read_us, write_us)) => {
+            let commit_start = phases_on.then(Instant::now);
             storage
                 .finalize_auto_commit_group(&window, linkrs_core::types::DurabilityLevel::Sync)
                 .map_err(|e| QueryError::execution(format!("COPY FROM commit failed: {e}")))?;
+            let commit_us = commit_start.map(|s| s.elapsed().as_micros());
+            let checkpoint_start = phases_on.then(Instant::now);
             if let Some(session) = bulk_session {
                 session.finish().map_err(|e| {
                     QueryError::execution(format!("COPY FROM final checkpoint failed: {e}"))
                 })?;
+            }
+            if phases_on {
+                eprintln!(
+                    "COPY phases '{}': read={:.1}ms write={:.1}ms commit={:.1}ms checkpoint={:.1}ms rows={total}",
+                    file_paths.join(", "),
+                    read_us as f64 / 1000.0,
+                    write_us as f64 / 1000.0,
+                    commit_us.unwrap_or(0) as f64 / 1000.0,
+                    checkpoint_start.map(|s| s.elapsed().as_micros()).unwrap_or(0) as f64
+                        / 1000.0,
+                );
             }
             Ok(total)
         }
@@ -282,7 +311,7 @@ fn flush_vertices(
         .par_iter()
         .map(|rec| {
             let vid_str = rec[mapping.vid_index].trim();
-            let vid = parse_vid(vid_str)?;
+            let vid = parse_vid_cached(vid_str)?;
             let props = collect_properties(mapping, rec);
             Ok(Vertex::new(vid, Tag::new(tag.to_string(), props)))
         })
@@ -303,8 +332,8 @@ fn flush_edges(
     let edges: Vec<Edge> = records
         .par_iter()
         .map(|rec| {
-            let src = parse_vid(rec[mapping.src_index].trim())?;
-            let dst = parse_vid(rec[mapping.dst_index].trim())?;
+            let src = parse_vid_cached(rec[mapping.src_index].trim())?;
+            let dst = parse_vid_cached(rec[mapping.dst_index].trim())?;
             let props = collect_properties(mapping, rec);
             Ok(Edge {
                 src,
@@ -327,6 +356,31 @@ fn collect_properties(mapping: &ColumnMapping, rec: &[String]) -> HashMap<Arc<st
         props.insert(name.as_str().into(), parse_copy_value(rec[idx].trim()));
     }
     props
+}
+
+/// Thread-local memoization of endpoint string parsing. Parsing is a pure
+/// function of the cell text, so cached values never go stale; the bound
+/// keeps long-lived import processes from accumulating distinct ids without
+/// limit. Thread-local rather than shared so the parallel record build below
+/// pays no locking.
+thread_local! {
+    static VID_PARSE_CACHE: RefCell<HashMap<String, VertexId>> =
+        RefCell::new(HashMap::new());
+}
+
+fn parse_vid_cached(s: &str) -> Result<VertexId, QueryError> {
+    VID_PARSE_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if cache.len() > 65_536 {
+            cache.clear();
+        }
+        if let Some(vid) = cache.get(s) {
+            return Ok(*vid);
+        }
+        let vid = parse_vid(s)?;
+        cache.insert(s.to_string(), vid);
+        Ok(vid)
+    })
 }
 
 /// Parse a vertex id from a COPY cell. Numeric cells map to the integer id

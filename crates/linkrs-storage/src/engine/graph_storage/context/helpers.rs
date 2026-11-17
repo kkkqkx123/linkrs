@@ -67,6 +67,55 @@ pub fn resolve_internal_id(
     }
 }
 
+/// Batch-scoped memoization of [`resolve_internal_id`].
+///
+/// Staged checks run first on every call and are never cached: same-timestamp
+/// staged rows must stay visible even as staging grows through the batch.
+/// Only committed-table resolutions are memoized, keyed by the full
+/// `(label, id)` pair under the batch's single timestamp. A concurrent
+/// commit landing mid-batch can at worst turn a hit into a miss on retry:
+/// unique ids make a stale hit resolve as missing, so the batch fails loud
+/// instead of wiring a wrong endpoint.
+pub fn resolve_internal_id_cached(
+    ctx: &GraphStorageContext,
+    vertex_tables: &HashMap<LabelId, Arc<ShardedVertexTable>>,
+    label: LabelId,
+    id: VertexId,
+    ts: Timestamp,
+    cache: &mut HashMap<(LabelId, VertexId), u32>,
+) -> Option<u32> {
+    let key = id_key_of(&id);
+    if let Some(key) = &key {
+        if label == 0 {
+            if vertex_tables
+                .keys()
+                .any(|lbl| ctx.staged_delete_vetoes(*lbl, key))
+            {
+                return None;
+            }
+        } else if ctx.staged_delete_vetoes(label, key) {
+            return None;
+        }
+        if let Some((_, reserved)) = staged_insert_binding(ctx, vertex_tables, label, key) {
+            return Some(reserved);
+        }
+    }
+    if let Some(hit) = cache.get(&(label, id)) {
+        return Some(*hit);
+    }
+    let resolved = if let Some(int_id) = id.as_int64() {
+        resolve_internal_id_from_i64(vertex_tables, label, int_id, ts)
+    } else if let Some(str_id) = id.as_str() {
+        resolve_internal_id_from_str(vertex_tables, label, str_id, ts)
+    } else {
+        None
+    };
+    if let Some(internal) = resolved {
+        cache.insert((label, id), internal);
+    }
+    resolved
+}
+
 pub fn resolve_internal_id_any(
     ctx: &GraphStorageContext,
     vertex_tables: &HashMap<LabelId, Arc<ShardedVertexTable>>,

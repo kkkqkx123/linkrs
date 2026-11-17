@@ -96,7 +96,12 @@ fn stage_vertex_row(
         vid,
         properties: props.clone(),
     };
-    let redo_entry = ctx.append_wal_redo(WalOpType::InsertVertex, ts, &redo)?;
+    let redo_entry = ctx.append_wal_redo_buffered(
+        WalOpType::InsertVertex,
+        ts,
+        &redo,
+        &mut batch.wal_scratch,
+    )?;
     let key = match route_vertex_id(&vid)? {
         RoutedVertexId::Int(vid_int) => IdKey::Int(vid_int),
         RoutedVertexId::Text(id_str) => IdKey::Text(id_str),
@@ -269,6 +274,7 @@ fn batch_insert_vertices_body(
         tag_indexes: &tag_indexes,
         serial_state: &mut serial_state,
         vid_type: &space_info.vid_type,
+        wal_scratch: Vec::new(),
     };
 
     // Phase A (stage): validate, constrain, and WAL-append every row in
@@ -684,6 +690,7 @@ fn batch_insert_vertices_online_chunked(
         tag_indexes: &tag_indexes,
         serial_state: &mut serial_state,
         vid_type: &space_info.vid_type,
+        wal_scratch: Vec::new(),
     };
     let chunk = crate::vertex::MAX_WRITE_SCOPE_KEYS;
     let mut staged_all: Vec<StagedVertexRow> = Vec::with_capacity(vertices.len());

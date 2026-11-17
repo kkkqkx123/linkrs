@@ -171,21 +171,28 @@ impl GraphStorageContext {
             self.persistent.data_store.with_vertex_tables(
                 |vertex_tables| -> StorageResult<Vec<(u32, u32, LabelId, LabelId)>> {
                     let mut resolved = Vec::with_capacity(params.edges.len());
+                    // Endpoints repeat heavily inside one import batch while
+                    // the underlying tables never change under the batch's
+                    // single timestamp; memoize committed resolutions only.
+                    let mut resolve_cache: HashMap<(LabelId, VertexId), u32> =
+                        HashMap::new();
                     for edge in params.edges {
-                        let src_internal = helpers::resolve_internal_id(
+                        let src_internal = helpers::resolve_internal_id_cached(
                             self,
                             vertex_tables,
                             params.src_label,
                             edge.src_id,
                             params.ts,
+                            &mut resolve_cache,
                         )
                         .ok_or(StorageError::vertex_not_found())?;
-                        let dst_internal = helpers::resolve_internal_id(
+                        let dst_internal = helpers::resolve_internal_id_cached(
                             self,
                             vertex_tables,
                             params.dst_label,
                             edge.dst_id,
                             params.ts,
+                            &mut resolve_cache,
                         )
                         .ok_or(StorageError::vertex_not_found())?;
                         let actual_src_label = if params.src_label == 0 {

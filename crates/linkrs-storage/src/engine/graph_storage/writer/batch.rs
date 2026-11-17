@@ -47,6 +47,9 @@ pub(super) struct PrecheckedBatchContext<'a> {
     pub(super) tag_indexes: &'a [Index],
     pub(super) serial_state: &'a mut SerialBatchState,
     pub(super) vid_type: &'a DataType,
+    /// Scratch serialization buffer reused by every WAL append of the batch,
+    /// so postcard writes into stable capacity instead of allocating per row.
+    pub(super) wal_scratch: Vec<u8>,
 }
 
 #[derive(Debug)]
@@ -58,7 +61,10 @@ pub(super) struct InsertedEdgeRecord {
     pub(super) dst: VertexId,
     pub(super) edge_type: String,
     pub(super) rank: i64,
-    pub(super) redo_entry: linkrs_transaction::wal::TransactionWalEntry,
+    /// Staged WAL entry moved into the mutation record on success. Stored
+    /// optional so the record loop can take it without cloning the payload;
+    /// the rollback path never reads it, only edge identity.
+    pub(super) redo_entry: Option<linkrs_transaction::wal::TransactionWalEntry>,
 }
 
 /// Edge-type schema resolved once per batch: the definition plus the source
@@ -174,7 +180,7 @@ pub(crate) fn batch_insert_edges(
         return Err(e);
     }
 
-    for item in &rollback {
+    for item in rollback.iter_mut() {
         if let Err(e) = super::edge::record_edge_insert(
             ctx,
             EdgeIdentifier::new(
@@ -185,7 +191,7 @@ pub(crate) fn batch_insert_edges(
                 item.edge_label_id,
                 item.rank,
             ),
-            Some(item.redo_entry.clone()),
+            item.redo_entry.take(),
         ) {
             super::edge::rollback_edges(ctx, space_info.space_id, &rollback, ts);
             ctx.abort_write_timestamp(ts);
@@ -290,7 +296,7 @@ fn insert_one_type_batch(
         prepared.push((props, index));
     }
 
-    let mut redo_entries = Vec::with_capacity(prepared.len());
+    let mut wal_scratch = Vec::new();
     for (props, index) in &prepared {
         let edge = &edges[*index];
         let redo = InsertEdgeRedo {
@@ -302,7 +308,21 @@ fn insert_one_type_batch(
             rank: edge.ranking,
             properties: props.clone(),
         };
-        redo_entries.push(ctx.append_wal_redo(WalOpType::InsertEdge, ts, &redo)?);
+        // WAL first, insert second: on failure nothing is staged yet and
+        // the timestamp aborts; the entry moves into the rollback record
+        // so the success path below can take it instead of cloning.
+        let redo_entry =
+            ctx.append_wal_redo_buffered(WalOpType::InsertEdge, ts, &redo, &mut wal_scratch)?;
+        rollback.push(InsertedEdgeRecord {
+            edge_label_id,
+            src_label_id,
+            dst_label_id,
+            src: edge.src,
+            dst: edge.dst,
+            edge_type: edge.edge_type.clone(),
+            rank: edge.ranking,
+            redo_entry: Some(redo_entry),
+        });
     }
 
     let batch_params: Vec<BatchEdgeInsert> = prepared
@@ -324,20 +344,6 @@ fn insert_one_type_batch(
         edges: &batch_params,
         ts,
     })?;
-
-    for (position, index) in prepared.iter().map(|(_, index)| index).enumerate() {
-        let edge = &edges[*index];
-        rollback.push(InsertedEdgeRecord {
-            edge_label_id,
-            src_label_id,
-            dst_label_id,
-            src: edge.src,
-            dst: edge.dst,
-            edge_type: edge.edge_type.clone(),
-            rank: edge.ranking,
-            redo_entry: redo_entries[position].clone(),
-        });
-    }
 
     for (props, index) in &prepared {
         let edge = &edges[*index];

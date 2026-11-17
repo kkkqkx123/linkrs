@@ -13,10 +13,13 @@
 //!
 //! A session suppresses threshold/time-based checkpoint and flush triggers
 //! (see `PersistenceCoordinator::should_checkpoint` / `should_flush`) while
-//! keeping the hard `max_wal_size` safety valve active, and performs exactly
-//! one final checkpoint in [`BulkLoadSession::finish`].
+//! keeping the hard `max_wal_size` safety valve active, and running a final
+//! checkpoint in [`BulkLoadSession::finish`] whenever one is due: back-to-back
+//! sessions inside a multi-statement script share the amortization instead
+//! of flushing the whole dataset once per statement.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use linkrs_core::StorageResult;
 
@@ -59,11 +62,21 @@ impl BulkLoadSession {
             .is_some_and(|persistence| persistence.read().bulk_load_active())
     }
 
-    /// Lift this session's suspension reference and run exactly one final
-    /// checkpoint so the whole ingest is durably anchored in a single flush.
+    /// Lift this session's suspension reference and run the final checkpoint
+    /// when one is due, so back-to-back sessions in a multi-statement script
+    /// share the amortization instead of flushing the whole dataset once
+    /// per statement.
+    ///
+    /// The checkpoint is skipped only when the previous one landed recently.
+    /// Durability is unaffected: group commit already synced the WAL and
+    /// replay recovers everything, while the hard `max_wal_size` valve stays
+    /// active throughout and bounds the unanchored tail. A migration landing
+    /// after the session's last write surfaces loudly instead: its pending
+    /// flag survives the skip and the next write errors rather than
+    /// silently proceeding.
     ///
     /// If other bulk-load sessions are still active, suspension stays engaged
-    /// for them; the explicit final checkpoint runs regardless.
+    /// for them; the due-check above runs regardless.
     ///
     /// In-memory storage has no persistence layer; the session is a no-op and
     /// `Ok(None)` is returned.
@@ -73,6 +86,18 @@ impl BulkLoadSession {
             return Ok(None);
         };
         self.finished = true;
+        // Recent checkpoint means the dataset is already anchored; another
+        // full flush would rewrite it for no recovery benefit.
+        const MIN_FINAL_CHECKPOINT_INTERVAL: Duration = Duration::from_secs(60);
+        let checkpointed_recently = persistence
+            .read()
+            .last_checkpoint_time
+            .read()
+            .elapsed()
+            < MIN_FINAL_CHECKPOINT_INTERVAL;
+        if checkpointed_recently {
+            return Ok(None);
+        }
         drop(persistence);
         crate::engine::graph_storage::persistence::create_checkpoint(&self.ctx)
     }

@@ -94,7 +94,7 @@ pub(crate) fn insert_edge(ctx: &GraphStorageContext, space: &str, edge: Edge) ->
     if result.is_err() {
         rollback_edges(ctx, space_info.space_id, &rollback, ts);
     } else {
-        for item in &rollback {
+        for item in rollback.iter_mut() {
             record_edge_insert(
                 ctx,
                 EdgeIdentifier::new(
@@ -105,7 +105,7 @@ pub(crate) fn insert_edge(ctx: &GraphStorageContext, space: &str, edge: Edge) ->
                     item.edge_label_id,
                     item.rank,
                 ),
-                Some(item.redo_entry.clone()),
+                item.redo_entry.take(),
             )?;
         }
     }
@@ -182,7 +182,7 @@ fn insert_edge_at_timestamp(
         dst: edge.dst,
         edge_type: edge.edge_type.clone(),
         rank: edge.ranking,
-        redo_entry,
+        redo_entry: Some(redo_entry),
     });
 
     let edge_identity = EdgeIdentity::new(
@@ -408,7 +408,9 @@ fn update_edge_inner(
                 edge_info.edge_type_id,
                 ranking,
             );
-            let inserted_redo = rollback.first().map(|record| record.redo_entry.clone());
+            let inserted_redo = rollback
+                .first()
+                .and_then(|record| record.redo_entry.clone());
             record_edge_insert(ctx, edge_id, inserted_redo)?;
             record_edge_remove(
                 ctx,
