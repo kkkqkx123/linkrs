@@ -141,11 +141,14 @@ impl GraphStorageContext {
         } else {
             self.apply_txn_staging(transaction_id)?
         };
+        // Take ownership instead of cloning: on append failure the caller
+        // undoes applied state and aborts staged state, so the staged copy
+        // has no second reader.
         let entries = self
             .persistent
             .staged_wal
-            .get(&transaction_id)
-            .map(|entries| entries.clone())
+            .remove(&transaction_id)
+            .map(|(_, entries)| entries)
             .unwrap_or_default();
         let commit_lsn = if let Some(persistence) = self.persistent.persistence.as_ref() {
             let wal_manager = persistence.read().wal_manager().ok_or_else(|| {
@@ -199,11 +202,15 @@ impl GraphStorageContext {
         transaction_id: linkrs_core::types::TransactionId,
         intents: &[linkrs_core::wal::OutboxIntent],
     ) -> linkrs_core::StorageResult<linkrs_core::types::CommitLsn> {
+        // Take ownership instead of cloning: on append failure the group
+        // rolls back and drops staged state anyway, so the staged copy has
+        // no second reader. DashMap remove returns the owned vector and
+        // makes the trailing cleanup below a no-op.
         let entries = self
             .persistent
             .staged_wal
-            .get(&transaction_id)
-            .map(|entries| entries.clone())
+            .remove(&transaction_id)
+            .map(|(_, entries)| entries)
             .unwrap_or_default();
         let commit_lsn = if let Some(persistence) = self.persistent.persistence.as_ref() {
             let guard = persistence.read();
@@ -221,7 +228,7 @@ impl GraphStorageContext {
             linkrs_core::types::CommitLsn::ZERO
         };
         // Deliberately no advance_barriers: deferred to finalize_group.
-        self.persistent.staged_wal.remove(&transaction_id);
+        // The staged copy was already taken above; nothing left to drop.
         Ok(commit_lsn)
     }
 

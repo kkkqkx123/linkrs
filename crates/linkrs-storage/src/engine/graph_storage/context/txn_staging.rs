@@ -1122,12 +1122,21 @@ impl super::GraphStorageContext {
                     return Err(error);
                 }
             };
+            // The record cache is write-only inside a bulk window: endpoint
+            // resolution, uniqueness checks and invalidation all bypass it,
+            // and later queries warm it themselves. Skip the per-row format
+            // and insert; domain evidence stays because planning reads it.
+            let bulk_window = self.persistent.persistence.as_ref().is_some_and(
+                |coordinator| coordinator.read().bulk_load_active(),
+            );
             for (key, id) in &commit.mapping {
-                let external = match key {
-                    IdKey::Text(name) => name.as_str().to_string(),
-                    IdKey::Int(n) => n.to_string(),
-                };
-                self.cache_inserted_vertex_id(label, &external, *id, ts);
+                if !bulk_window {
+                    let external = match key {
+                        IdKey::Text(name) => name.as_str().to_string(),
+                        IdKey::Int(n) => n.to_string(),
+                    };
+                    self.cache_inserted_vertex_id(label, &external, *id, ts);
+                }
                 match key {
                     IdKey::Int(n) => self.observe_vertex_id_i64(label, *n),
                     IdKey::Text(_) => self.observe_vertex_id_string(label),
