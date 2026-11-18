@@ -524,3 +524,46 @@ fn test_match_return_aggregate_filter() {
         .assert_result_count(1)
         .assert_result_contains(vec![Value::BigInt(2)]);
 }
+
+#[test]
+fn test_filtered_count_matches_where_count_on_nonempty_input() {
+    // The filtered aggregate keeps the original row set and evaluates the
+    // predicate per aggregate; the same predicate pushed into WHERE must
+    // produce the same count. Both shapes are acceptance anchors for the
+    // future vectorized filtered-count path.
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("filtered_count_equivalence")
+        .exec_ddl("CREATE TAG Item(id INT, score INT)")
+        .exec_dml("INSERT VERTEX Item(score) VALUES 1:(10), 2:(20), 3:(30)")
+        .assert_success()
+        .query("MATCH (n:Item) RETURN count(n) FILTER (WHERE n.score > 15) AS c")
+        .assert_success()
+        .assert_result_count(1)
+        .assert_result_contains(vec![Value::BigInt(2)])
+        .query("MATCH (n:Item) WHERE n.score > 15 RETURN count(n) AS c")
+        .assert_success()
+        .assert_result_count(1)
+        .assert_result_contains(vec![Value::BigInt(2)])
+        .query("MATCH (n:Item) RETURN count(n) FILTER (WHERE n.score > 100) AS c")
+        .assert_success()
+        .assert_result_count(1)
+        .assert_result_contains(vec![Value::BigInt(0)]);
+}
+
+#[test]
+fn test_global_count_over_empty_scan_returns_one_zero_row() {
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("empty_filtered_count")
+        .exec_ddl("CREATE TAG EmptyItem(id INT, score INT)")
+        .assert_success()
+        .query("MATCH (n:EmptyItem) RETURN count(n) AS c")
+        .assert_success()
+        .assert_result_count(1)
+        .assert_result_contains(vec![Value::BigInt(0)])
+        .query("MATCH (n:EmptyItem) RETURN count(n) FILTER (WHERE n.score > 0) AS c")
+        .assert_success()
+        .assert_result_count(1)
+        .assert_result_contains(vec![Value::BigInt(0)]);
+}

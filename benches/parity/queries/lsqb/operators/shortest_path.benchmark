@@ -1,0 +1,4 @@
+----name
+lsqb/operators/shortest_path
+----query
+FIND SHORTEST PATH FROM 17592186045004 TO 8796093023616 OVER KNOWS

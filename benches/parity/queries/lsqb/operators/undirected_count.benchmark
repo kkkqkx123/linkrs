@@ -1,0 +1,4 @@
+----name
+lsqb/operators/undirected_count
+----query
+MATCH (a:Person)-[k:KNOWS]-(b:Person) RETURN count(k)

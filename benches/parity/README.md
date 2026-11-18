@@ -41,3 +41,10 @@ MATCH (n:Person) RETURN count(n)
 ```
 
 `----expected` 缺省时只记录可执行与行数；存在时逐行比对，不一致记 `mismatch`。
+
+runner 递归扫描 `--benchmark-dir` 下的子目录，因此查询可按数据集与算子组归档。
+查询文件还支持 `----prerun`（分号分隔的会话语句）和 `----compare`，后者取
+`exact`、`float`（浮点相对误差 1e-3）或 `unordered`（先排序再逐行比对）。
+上游 Ladybug 的 `-NAME` / `-QUERY` / `-PRERUN` 标记与 `---- <行数>` 期望块
+也可直接解析。`--skip-file` 每行只取第一个 token 作为名称，后续内容可写原因与
+解禁条件。

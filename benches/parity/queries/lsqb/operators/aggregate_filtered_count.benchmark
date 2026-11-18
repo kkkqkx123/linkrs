@@ -1,0 +1,4 @@
+----name
+lsqb/operators/aggregate_filtered_count
+----query
+MATCH (n:Person) RETURN count(n) FILTER (WHERE n.id > 0) AS c

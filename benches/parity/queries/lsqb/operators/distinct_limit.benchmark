@@ -1,0 +1,4 @@
+----name
+lsqb/operators/distinct_limit
+----query
+MATCH (:Comment_)-[h:HASCREATOR_COMMENT]->(p:Person) RETURN DISTINCT p.id ORDER BY p.id LIMIT 10

@@ -429,23 +429,86 @@ fn json_escape(s: &str) -> String {
 // run
 // ---------------------------------------------------------------------------
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CompareMode {
+    Exact,
+    Float,
+    Unordered,
+}
+
+impl CompareMode {
+    fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "exact" => Some(Self::Exact),
+            "float" => Some(Self::Float),
+            "unordered" => Some(Self::Unordered),
+            _ => None,
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Exact => "exact",
+            Self::Float => "float",
+            Self::Unordered => "unordered",
+        }
+    }
+}
+
 struct Benchmark {
     name: String,
     query: String,
+    prerun: String,
     expected: Option<String>,
+    compare: CompareMode,
 }
 
-/// Parse a Ladybug-style `.benchmark` file:
-/// `----name` / `----query` / optional `----expected` blocks.
+fn benchmark_marker(line: &str) -> Option<(&str, Option<&str>)> {
+    let trimmed = line.trim_start();
+    if let Some(rest) = trimmed.strip_prefix("----") {
+        let key = rest.trim();
+        if key.parse::<usize>().is_ok() {
+            return Some(("EXPECTED", None));
+        }
+        return Some((key, None));
+    }
+    for key in ["NAME", "QUERY", "PRERUN", "EXPECTED", "COMPARE"] {
+        let upper = format!("-{key}");
+        let lower = upper.to_ascii_lowercase();
+        if let Some(rest) = trimmed
+            .strip_prefix(&upper)
+            .or_else(|| trimmed.strip_prefix(&lower))
+        {
+            let value = rest.trim_start();
+            return Some((key, if value.is_empty() { None } else { Some(value) }));
+        }
+    }
+    None
+}
+
+/// Parse a Ladybug-style `.benchmark` file. Both the local `----key`
+/// blocks and the upstream `-KEY value` markers are accepted.
 fn parse_benchmark_file(path: &Path) -> Benchmark {
     let text = fs::read_to_string(path).unwrap_or_else(|e| die(format!("read {path:?}: {e}")));
+    parse_benchmark_text(&text, path)
+}
+
+fn parse_benchmark_text(text: &str, path: &Path) -> Benchmark {
     let mut blocks: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut current: Option<String> = None;
     for line in text.lines() {
-        if let Some(key) = line.strip_prefix("----") {
-            let key = key.trim().to_string();
+        if let Some((key, inline)) = benchmark_marker(line) {
+            let key = key.to_ascii_lowercase();
             current = Some(key.clone());
-            blocks.entry(key).or_default();
+            let block = blocks.entry(key).or_default();
+            if let Some(value) = inline {
+                block.push(value.to_string());
+            }
+            continue;
+        }
+        let trimmed = line.trim_start();
+        if trimmed.starts_with('-') && !trimmed.starts_with("--") {
+            current = None;
             continue;
         }
         if let Some(key) = &current {
@@ -459,7 +522,7 @@ fn parse_benchmark_file(path: &Path) -> Benchmark {
         .get("query")
         .map(|lines| lines.join("\n").trim().to_string())
         .filter(|q| !q.is_empty())
-        .unwrap_or_else(|| die(format!("{} has no ----query block", path.display())));
+        .unwrap_or_else(|| die(format!("{} has no query block", path.display())));
     let expected = blocks.get("expected").map(|lines| {
         let kept: Vec<&str> = lines
             .iter()
@@ -469,6 +532,15 @@ fn parse_benchmark_file(path: &Path) -> Benchmark {
         kept.join("\n")
     });
     let expected = expected.filter(|e| !e.is_empty());
+    let prerun = blocks
+        .get("prerun")
+        .map(|lines| lines.join("\n").trim().to_string())
+        .unwrap_or_default();
+    let compare = blocks
+        .get("compare")
+        .and_then(|lines| lines.first())
+        .and_then(|value| CompareMode::parse(value))
+        .unwrap_or(CompareMode::Exact);
     let name = blocks
         .get("name")
         .map(|lines| lines.join(" ").trim().to_string())
@@ -481,8 +553,74 @@ fn parse_benchmark_file(path: &Path) -> Benchmark {
     Benchmark {
         name,
         query,
+        prerun,
         expected,
+        compare,
     }
+}
+
+fn collect_benchmark_files(dir: &Path) -> Vec<PathBuf> {
+    let mut entries: Vec<PathBuf> = fs::read_dir(dir)
+        .unwrap_or_else(|e| die(format!("read {dir:?}: {e}")))
+        .filter_map(|entry| entry.ok().map(|e| e.path()))
+        .collect();
+    entries.sort();
+    let mut files = Vec::new();
+    for path in entries {
+        if path.is_dir() {
+            files.extend(collect_benchmark_files(&path));
+        } else if path.extension().is_some_and(|ext| ext == "benchmark") {
+            files.push(path);
+        }
+    }
+    files
+}
+
+fn results_match(expected: &str, got: &str, mode: CompareMode) -> bool {
+    match mode {
+        CompareMode::Exact => expected == got,
+        CompareMode::Unordered => {
+            let mut expected_lines: Vec<&str> = expected.lines().map(str::trim).collect();
+            let mut got_lines: Vec<&str> = got.lines().map(str::trim).collect();
+            expected_lines.sort_unstable();
+            got_lines.sort_unstable();
+            expected_lines == got_lines
+        }
+        CompareMode::Float => {
+            let expected_lines: Vec<&str> = expected.lines().map(str::trim).collect();
+            let got_lines: Vec<&str> = got.lines().map(str::trim).collect();
+            expected_lines.len() == got_lines.len()
+                && expected_lines
+                    .iter()
+                    .zip(got_lines.iter())
+                    .all(|(e, g)| cell_matches(e, g))
+        }
+    }
+}
+
+fn cell_matches(expected: &str, got: &str) -> bool {
+    let expected_cells: Vec<&str> = expected.split('|').collect();
+    let got_cells: Vec<&str> = got.split('|').collect();
+    if expected_cells.len() != got_cells.len() {
+        return false;
+    }
+    expected_cells.iter().zip(got_cells.iter()).all(|(e, g)| {
+        if e == g {
+            return true;
+        }
+        let expected_cell = e.trim();
+        let got_cell = g.trim();
+        if expected_cell.parse::<i64>().is_ok() && got_cell.parse::<i64>().is_ok() {
+            return false;
+        }
+        match (expected_cell.parse::<f64>(), got_cell.parse::<f64>()) {
+            (Ok(expected), Ok(got)) => {
+                let scale = expected.abs().max(got.abs()).max(1.0);
+                (expected - got).abs() <= 1e-3 * scale
+            }
+            _ => false,
+        }
+    })
 }
 
 fn cmd_run(args: &[String]) {
@@ -522,12 +660,7 @@ fn cmd_run(args: &[String]) {
 
     fs::create_dir_all(&out_dir).unwrap_or_else(|e| die(format!("create out dir: {e}")));
 
-    let mut files: Vec<PathBuf> = fs::read_dir(&bench_dir)
-        .unwrap_or_else(|e| die(format!("read {bench_dir:?}: {e}")))
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| p.extension().map(|e| e == "benchmark").unwrap_or(false))
-        .collect();
-    files.sort();
+    let files = collect_benchmark_files(&bench_dir);
 
     println!(
         "[run] db={} space={space} warmup={warmup} run={runs} threads={threads} skipped={}",
@@ -546,6 +679,22 @@ fn cmd_run(args: &[String]) {
             continue;
         }
         let mut warmup_failed = false;
+        for statement in split_statements(&bench.prerun) {
+            if let Err(e) = session.execute(&statement) {
+                eprintln!("[run] {} prerun failed: {e}", bench.name);
+                write_run_result(
+                    &out_dir,
+                    &bench,
+                    None,
+                    None,
+                    None,
+                    &format!("prerun error: {e}"),
+                    threads,
+                );
+                warmup_failed = true;
+                break;
+            }
+        }
         for _ in 0..warmup {
             if let Err(e) = session.execute(&bench.query) {
                 eprintln!("[run] {} warmup failed: {e}", bench.name);
@@ -599,7 +748,7 @@ fn cmd_run(args: &[String]) {
         let mut status = "ok";
         if let Some(expected) = &bench.expected {
             let got = got_lines.join("\n");
-            if got != *expected {
+            if !results_match(expected, &got, bench.compare) {
                 status = "mismatch";
                 eprintln!(
                     "[run] {} result mismatch\n  expected: {expected:?}\n  got: {got:?}",
@@ -662,13 +811,17 @@ fn median(values: &[f64]) -> f64 {
 
 /// Load a skip list (`dataset/group/name` per line, `#` comments, blank
 /// lines ignored) as used by `benches/parity/skip.txt`.
+fn skip_entry(line: &str) -> Option<String> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() || trimmed.starts_with('#') {
+        return None;
+    }
+    trimmed.split_whitespace().next().map(str::to_string)
+}
+
 fn load_skip_file(path: &str) -> HashSet<String> {
     let text = fs::read_to_string(path).unwrap_or_else(|e| die(format!("read {path}: {e}")));
-    text.lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty() && !l.starts_with('#'))
-        .map(str::to_string)
-        .collect()
+    text.lines().filter_map(skip_entry).collect()
 }
 
 /// Whether a benchmark name is covered by the skip list: exact match, or
@@ -718,6 +871,11 @@ fn write_run_result(
     let _ = writeln!(json, "  \"name\": {},", json_escape(&bench.name));
     let _ = writeln!(json, "  \"status\": {},", json_escape(status));
     let _ = writeln!(json, "  \"threads\": {threads},");
+    let _ = writeln!(
+        json,
+        "  \"compare_mode\": {},",
+        json_escape(bench.compare.as_str())
+    );
     match times {
         Some(times) => {
             let list = times
@@ -777,4 +935,81 @@ fn write_run_result(
     json.push_str("}\n");
     let path = out_dir.join(format!("{}.json", bench.name.replace('/', "_")));
     fs::write(&path, json).ok();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn benchmark_path(name: &str) -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("benches/parity/queries/lsqb")
+            .join(name)
+    }
+
+    #[test]
+    fn parses_nested_benchmark_files() {
+        let path = benchmark_path("operators/filter_id_range.benchmark");
+        let bench = parse_benchmark_file(&path);
+        assert_eq!(bench.name, "lsqb/operators/filter_id_range");
+        assert!(bench.query.contains("MATCH (n:Person)"));
+        assert!(bench.prerun.is_empty());
+        assert_eq!(bench.compare, CompareMode::Exact);
+    }
+
+    #[test]
+    fn parses_upstream_markers_and_expected_row_count() {
+        let text = [
+            "-NAME upstream/q1",
+            "-PRERUN USE lsqb;",
+            "-QUERY MATCH (n:Person) RETURN count(n)",
+            "---- 1",
+            "1700",
+        ]
+        .join("\n");
+        let bench = parse_benchmark_text(&text, Path::new("upstream/q1.benchmark"));
+        assert_eq!(bench.name, "upstream/q1");
+        assert_eq!(bench.prerun, "USE lsqb;");
+        assert_eq!(bench.expected.as_deref(), Some("1700"));
+    }
+
+    #[test]
+    fn discovers_benchmark_files_in_nested_groups() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("benches/parity/queries/lsqb");
+        let files = collect_benchmark_files(&root);
+        assert!(
+            files
+                .iter()
+                .any(|p| p.ends_with("operators/filter_id_range.benchmark")),
+            "nested operator benchmark must be discovered, got {} file(s)",
+            files.len()
+        );
+    }
+
+    #[test]
+    fn skip_entries_use_only_the_first_token() {
+        assert_eq!(skip_entry("# reason"), None);
+        assert_eq!(skip_entry("  "), None);
+        assert_eq!(
+            skip_entry("lsqb/operators/shortest_path unsupported syntax | unlock with fix"),
+            Some("lsqb/operators/shortest_path".to_string())
+        );
+    }
+
+    #[test]
+    fn compare_modes_cover_exact_float_and_unordered_results() {
+        assert!(results_match("1|2", "1|2", CompareMode::Exact));
+        assert!(!results_match("1|2", "2|1", CompareMode::Exact));
+        assert!(results_match("1\n2", "2\n1", CompareMode::Unordered));
+        assert!(results_match(
+            "8737|0.000138",
+            "8737|0.0001381",
+            CompareMode::Float
+        ));
+        assert!(!results_match(
+            "8737|0.000138",
+            "8738|0.000138",
+            CompareMode::Float
+        ));
+    }
 }

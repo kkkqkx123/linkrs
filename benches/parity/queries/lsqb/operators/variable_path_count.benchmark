@@ -1,0 +1,4 @@
+----name
+lsqb/operators/variable_path_count
+----query
+MATCH (a:Person)-[k:KNOWS*1..2]->(b:Person) RETURN count(k)

@@ -1,0 +1,4 @@
+----name
+lsqb/operators/filter_or
+----query
+MATCH (n:Person) WHERE n.id < 0 OR n.id > 100000000 RETURN count(n)

@@ -1,3 +1,4 @@
-# dataset/group/name  reason
-# None yet. Add queries that cannot be semantically aligned with Ladybug
-# (see docs/release/benchmark/parity-benchmark.md section on the skip list).
+# dataset/group/name reason | unlock condition
+# Only the first token is the benchmark name. The rest is documentation.
+lsqb/operators/aggregate_filtered_count Linkrs-only aggregate FILTER syntax is rejected by Ladybug and Neug | add a shared dialect form or keep as Linkrs-only micro benchmark
+lsqb/operators/shortest_path Linkrs-only FIND SHORTEST PATH syntax is rejected by Ladybug and Neug | map to the common SHORTEST path form or keep as Linkrs-only micro benchmark

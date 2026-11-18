@@ -1,0 +1,4 @@
+----name
+lsqb/operators/aggregate_min_max
+----query
+MATCH (n:Person) RETURN min(n.id) AS min_id, max(n.id) AS max_id

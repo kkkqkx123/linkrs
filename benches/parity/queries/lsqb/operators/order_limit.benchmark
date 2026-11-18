@@ -1,0 +1,4 @@
+----name
+lsqb/operators/order_limit
+----query
+MATCH (n:Person) RETURN n.id ORDER BY n.id LIMIT 10

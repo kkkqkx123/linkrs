@@ -1,0 +1,4 @@
+----name
+lsqb/operators/join_two_hop
+----query
+MATCH (a:Person)-[k1:KNOWS]->(b:Person)-[k2:KNOWS]->(c:Person) RETURN count(k2)

@@ -1,0 +1,4 @@
+----name
+lsqb/operators/group_by_count
+----query
+MATCH (:Comment_)-[h:HASCREATOR_COMMENT]->(p:Person) RETURN p.id, count(h) ORDER BY p.id LIMIT 10

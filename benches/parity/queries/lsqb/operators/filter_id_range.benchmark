@@ -1,0 +1,4 @@
+----name
+lsqb/operators/filter_id_range
+----query
+MATCH (n:Person) WHERE n.id > 0 RETURN count(n)
