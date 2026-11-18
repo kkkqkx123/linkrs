@@ -11,6 +11,7 @@
 use super::common;
 
 use common::test_scenario::TestScenario;
+use linkrs_core::value::NullType;
 use linkrs_core::Value;
 use linkrs_query::parser::Parser;
 
@@ -549,6 +550,73 @@ fn test_filtered_count_matches_where_count_on_nonempty_input() {
         .assert_success()
         .assert_result_count(1)
         .assert_result_contains(vec![Value::BigInt(0)]);
+}
+
+#[test]
+fn test_typed_group_count_numeric_keys() {
+    // The numeric group key takes the typed path; the assertion locks the
+    // exact group/count pairs against the generic aggregation path.
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("typed_group_count")
+        .exec_ddl("CREATE TAG Item(id INT, bucket INT, score INT)")
+        .exec_dml(
+            "INSERT VERTEX Item(bucket, score) VALUES 1:(1, 10), 2:(2, 20), 3:(1, NULL), 4:(2, 30), 5:(1, 40)",
+        )
+        .assert_success()
+        .query("GROUP BY bucket YIELD bucket, count(*) AS total")
+        .assert_success()
+        .assert_result_count(2)
+        .assert_result_contains(vec![Value::Int(1), Value::BigInt(3)])
+        .assert_result_contains(vec![Value::Int(2), Value::BigInt(2)]);
+}
+
+#[test]
+fn test_typed_group_count_null_key_keeps_generic_semantics() {
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("typed_group_null_key")
+        .exec_ddl("CREATE TAG Item(id INT, bucket INT)")
+        .exec_dml("INSERT VERTEX Item(bucket) VALUES 1:(1), 2:(NULL), 3:(1), 4:(NULL)")
+        .assert_success()
+        .query("GROUP BY bucket YIELD bucket, count(*) AS total")
+        .assert_success()
+        .assert_result_count(2)
+        .assert_result_contains(vec![Value::Int(1), Value::BigInt(2)])
+        .assert_result_contains(vec![Value::Null(NullType::Null), Value::BigInt(2)]);
+}
+
+#[test]
+fn test_typed_group_count_empty_input_has_no_groups() {
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("typed_group_empty")
+        .exec_ddl("CREATE TAG Item(id INT, bucket INT)")
+        .assert_success()
+        .query("GROUP BY bucket YIELD bucket, count(*) AS total")
+        .assert_success()
+        .assert_result_empty();
+}
+
+#[test]
+fn test_typed_group_count_fallback_shapes() {
+    // Multi-key grouping and aggregate FILTER must stay on the generic path.
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("typed_group_fallback")
+        .exec_ddl("CREATE TAG Item(id INT, bucket INT, label STRING, score INT)")
+        .exec_dml(
+            "INSERT VERTEX Item(bucket, label, score) VALUES 1:(1, 'a', 10), 2:(1, 'b', 20), 3:(2, 'a', 30)",
+        )
+        .assert_success()
+        .query("GROUP BY bucket, label YIELD bucket, label, count(*) AS total")
+        .assert_success()
+        .assert_result_count(3)
+        .query("GROUP BY bucket YIELD bucket, count(*) FILTER (WHERE score > 15) AS total")
+        .assert_success()
+        .assert_result_count(2)
+        .assert_result_contains(vec![Value::Int(1), Value::BigInt(1)])
+        .assert_result_contains(vec![Value::Int(2), Value::BigInt(1)]);
 }
 
 #[test]

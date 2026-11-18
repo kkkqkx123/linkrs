@@ -15,6 +15,43 @@ use linkrs_core::Value;
 /// accounted for beyond the group key itself.
 pub const ACCUMULATOR_OVERHEAD_BYTES: usize = 64;
 
+/// Fixed-size group keys that can be accumulated without building one
+/// `Vec<Value>` per input row. Nullable and heap-backed typed columns are
+/// deliberately absent: their equality needs decoding and stays on the
+/// generic path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TypedGroupKey {
+    I64(i64),
+    I32(i32),
+    Bool(bool),
+}
+
+impl TypedGroupKey {
+    pub fn into_value(self) -> Value {
+        match self {
+            Self::I64(v) => Value::BigInt(v),
+            Self::I32(v) => Value::Int(v),
+            Self::Bool(v) => Value::Bool(v),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TypedGroupKeyKind {
+    I64,
+    I32,
+    Bool,
+}
+
+#[derive(Debug)]
+pub struct TypedGroupCount {
+    pub counts: HashMap<TypedGroupKey, u64>,
+    pub key_kind: TypedGroupKeyKind,
+    /// One reservation per distinct group, matching the generic path's
+    /// key-plus-accumulator accounting.
+    pub bytes_per_group: usize,
+}
+
 #[derive(Debug)]
 pub struct AggregateState {
     /// Accumulator state per group key (computed key values, already minimal;
@@ -33,6 +70,7 @@ pub struct AggregateState {
     /// True once the final aggregate result has been fully emitted.
     pub output_complete: bool,
     pub col_names: Vec<String>,
+    pub typed_group_count: Option<TypedGroupCount>,
 }
 
 #[derive(Debug)]

@@ -55,6 +55,21 @@ impl<S: StorageClient + 'static> StorageReader for SyncWrapper<S> {
             projection: Option<&[Arc<str>]>,
             limit: Option<usize>,
         ) -> Result<Vec<Edge>, StorageError>;
+        fn get_node_edges_projected_batch(
+            &self,
+            space: &str,
+            node_ids: &[VertexId],
+            direction: linkrs_core::EdgeDirection,
+            edge_types: &[String],
+            projection: Option<&[Arc<str>]>,
+        ) -> Result<Vec<Vec<Edge>>, StorageError>;
+        fn get_node_edge_headers_batch(
+            &self,
+            space: &str,
+            node_ids: &[VertexId],
+            direction: linkrs_core::EdgeDirection,
+            edge_types: &[String],
+        ) -> Result<Vec<Vec<crate::EdgeTopology>>, StorageError>;
         fn get_vertices_batch(
             &self,
             space: &str,

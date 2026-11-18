@@ -821,7 +821,7 @@ fn buffered_unary_reset_clears_counters_and_seen_rows() {
         dedup_scan,
         UnaryOperator::new(
             UnaryOperatorKind::Dedup {
-                seen_rows: std::collections::HashSet::new(),
+                seen_rows: crate::executor::streaming::operators::unary_operator::DedupSeen::new(),
             },
             empty_layout(),
         ),

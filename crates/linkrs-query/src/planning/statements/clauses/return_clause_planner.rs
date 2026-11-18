@@ -318,6 +318,7 @@ impl ReturnClausePlanner {
                     columns: project_columns.clone(),
                     subqueries: yield_subqueries.clone(),
                     has_folded_expressions: false,
+                    emit_rowless: false,
                     output_var: None,
                     col_names: project_columns
                         .iter()
@@ -496,6 +497,7 @@ impl ReturnClausePlanner {
                     columns: project_columns.clone(),
                     subqueries: yield_subqueries.clone(),
                     has_folded_expressions: false,
+                    emit_rowless: false,
                     output_var: None,
                     col_names: project_columns
                         .iter()
@@ -571,6 +573,7 @@ impl ReturnClausePlanner {
                     columns: yield_columns.clone(),
                     subqueries: yield_subqueries.clone(),
                     has_folded_expressions: false,
+                    emit_rowless: false,
                     output_var: None,
                     col_names: yield_columns.iter().map(|col| col.alias.clone()).collect(),
                     column_types:

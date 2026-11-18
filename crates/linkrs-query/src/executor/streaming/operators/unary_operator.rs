@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::executor::expression::evaluator::compiled::{compiled_eval_enabled, CompiledExpr};
@@ -33,6 +34,51 @@ pub struct UnaryOperatorState {
     pub compiled_project: Option<Vec<CompiledExpr>>,
 }
 
+/// Dedup membership state. A single non-null `BigInt` column can be tracked
+/// as raw `i64` keys; any other row shape promotes to the generic full-row
+/// set so NULL visibility and multi-column equality stay unchanged.
+#[derive(Debug, Default)]
+pub struct DedupSeen {
+    rows: HashSet<Vec<Value>>,
+    integers: HashSet<i64>,
+    integer_mode: Option<bool>,
+}
+
+impl DedupSeen {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    fn promote_to_rows(&mut self) {
+        if self.integer_mode == Some(true) {
+            self.rows
+                .extend(self.integers.drain().map(|key| vec![Value::BigInt(key)]));
+        }
+        self.integer_mode = Some(false);
+    }
+
+    pub fn insert_row(&mut self, row: &[Value]) -> bool {
+        if self.integer_mode == Some(true) {
+            self.promote_to_rows();
+        }
+        self.rows.insert(row.to_vec())
+    }
+
+    pub fn insert_integer(&mut self, key: i64) -> bool {
+        if self.integer_mode == Some(false) {
+            return self.rows.insert(vec![Value::BigInt(key)]);
+        }
+        self.integer_mode = Some(true);
+        self.integers.insert(key)
+    }
+
+    pub fn clear(&mut self) {
+        self.rows.clear();
+        self.integers.clear();
+        self.integer_mode = None;
+    }
+}
+
 #[derive(Debug)]
 pub enum UnaryOperatorKind {
     Filter {
@@ -42,6 +88,8 @@ pub enum UnaryOperatorKind {
     Project {
         output_expressions: Vec<Expression>,
         output_col_names: Vec<String>,
+        emit_rowless: bool,
+        identity_as_unit: bool,
         state: UnaryOperatorState,
     },
     Limit {
@@ -51,7 +99,7 @@ pub enum UnaryOperatorKind {
         consumed: u32,
     },
     Dedup {
-        seen_rows: std::collections::HashSet<Vec<Value>>,
+        seen_rows: DedupSeen,
     },
     Assign {
         assignments: Vec<(String, Expression)>,
@@ -136,10 +184,14 @@ impl UnaryOperator {
             super::spec::UnarySpec::Project {
                 output_expressions,
                 output_col_names,
+                emit_rowless,
+                identity_as_unit,
                 ..
             } => UnaryOperatorKind::Project {
                 output_expressions: output_expressions.clone(),
                 output_col_names: output_col_names.clone(),
+                emit_rowless: *emit_rowless,
+                identity_as_unit: *identity_as_unit,
                 state,
             },
             super::spec::UnarySpec::Limit { offset, limit } => UnaryOperatorKind::Limit {

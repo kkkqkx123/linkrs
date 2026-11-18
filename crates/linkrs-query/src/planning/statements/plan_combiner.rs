@@ -77,6 +77,7 @@ pub(crate) fn wrap_logical_project_with(
         columns,
         subqueries,
         has_folded_expressions,
+        emit_rowless: false,
         output_var: None,
         col_names,
         column_types,

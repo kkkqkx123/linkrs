@@ -171,6 +171,7 @@ impl Planner for GoPlanner {
             columns: project_columns.clone(),
             subqueries: Vec::new(),
             has_folded_expressions: false,
+            emit_rowless: false,
             output_var: None,
             col_names: project_aliases.clone(),
             column_types,

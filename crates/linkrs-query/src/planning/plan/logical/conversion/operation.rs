@@ -24,6 +24,7 @@ pub(super) fn convert_project(n: &ProjectNode) -> Result<LogicalNodeEnum, Conver
                 columns: n.columns().to_vec(),
                 subqueries: n.subqueries().to_vec(),
                 has_folded_expressions: n.has_folded_expressions(),
+                emit_rowless: n.emit_rowless(),
                 output_var: n.output_var().map(|s| s.to_string()),
                 col_names: n.col_names().to_vec(),
                 column_types: n.column_types().to_vec(),

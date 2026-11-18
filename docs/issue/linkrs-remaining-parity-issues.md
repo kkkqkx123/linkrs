@@ -216,3 +216,61 @@
 5. 用矩阵基准验证分区灰度，随后更新配置文档和默认开关。
 6. 补顶层资源报告与内存预算扫描。
 7. 最后处理图算法、无方向元数据放行和存储层深水优化。
+
+---
+
+## 11. 阶段一实测回填（2026-11-18）
+
+本轮在 devs 上编译本地工作树（HEAD `d814ab92` 加阶段一改动），绑核 `16-31`，口径仍为 warmup 1 + run 5。原始日志、逐用例 JSON、验证日志与 PROFILE 输出落在 `perf-data/parity/results/2026-11-18/stage1-final/`，远端同名目录在 `/data/kkkqkx/linkrs/stage1-gate/`。
+
+改动落点：聚合算子增加单列定长键的分组计数路径；identity 去重与 blocking `Distinct` 增加单列 `BigInt` 键集合；单步与变长展开改用一次解析 schema 的批量投影边读取，目的地读取先按 id 去重再恢复行顺序。NULL/可空键、多列、非计数聚合和聚合过滤全部保留原路径。
+
+固定门两轮中位数（ms）：
+
+| 用例 | 基线两轮 | 本轮两轮 | 变化 |
+|---|---:|---:|---|
+| `distinct_limit` | 1154 / 1218 | 521 / 515 | 约 2.2–2.4× |
+| `group_by_count` | 1308 / 1499 | 645 / 656 | 约 2.0–2.3× |
+| 九条纯计数 | 0.14–0.60 | 0.14–0.60 | 无回归 |
+
+PROFILE 显示聚合自身约 49 ms、blocking `Distinct` 自身约 23 ms；剩余时间主要落在 `ExpandAll`（约 0.40–0.43 秒）及其后的行物化（分组约 0.16 秒）。因此阶段一把目标算子的直接成本压进几十毫秒，但端到端未达到方案要求的至少一个数量级，**按硬门槛阶段一尚未闭环**。下一轮应先切断 ExpandAll 到 Project 之间的行物化，而不是继续调聚合。
+
+正确性门：devs 上 `cargo test -p linkrs-query --test dql` 为 319/319，`cargo test -p linkrs-query --lib -- streaming` 为 414/414；两轮固定门用例状态与行数一致。
+
+---
+
+## 12. 行物化切断实测回填（2026-11-18）
+
+阶段一之后 PROFILE 显示算子自身已降到几十毫秒，端到端瓶颈前移到 `Project` 的行物化与 `ExpandAll`。本轮设计是让规划器在「passthrough Project 的直接消费者是 typed-capable 的 `Aggregate`/`Dedup`，且输入子树含 rowless hop」时给 Project 打标；Project 收到 rowless chunk 后直接产出 typed-only chunk，不再转置成 `Vec<Vec<Value>>`。`count(h)` 的 identity 参数在 rowless Project 中被替换为非空单位列，而聚合只观察它的 NULL 性。Plain `Fallback` 标量列在同构时转成 typed batch；异构列仍回退行路径。`Aggregate` 的单列分组计数和 blocking `Distinct`/identity `Dedup` 都补上了 rowless 消费。
+
+标记必须落在优化器克隆后的计划节点上，且字段需要随逻辑计划互转传播，否则会在 CBO 重建时丢失；这一点已用规划器单测锁定。曾尝试把 rowless identity 扫描的 morsel 放大到 8192，实测无收益，已回退。
+
+固定门两轮中位数（ms）：
+
+| 用例 | 阶段一 | 本轮 | 相对基线 |
+|---|---:|---:|---|
+| `distinct_limit` | 521 / 515 | 480 / 498 | 约 2.4–2.5× |
+| `group_by_count` | 645 / 656 | 472 / 488 | 约 2.8–3.2× |
+| 九条纯计数 | 0.14–0.60 | 0.14–0.60 | 无回归 |
+
+PROFILE 显示 Project 已输出 `rows: 0`，单算子成本从约 0.16 秒（分组）降到约 18 ms；聚合约 15 ms，blocking `Distinct` 约 26 ms。剩余约 0.40–0.41 秒全部在 `ExpandAll`，主要是每批投影边的点读与行组装。因此**十倍门槛仍未达成**。下一阶段需要针对 `ExpandAll` 本身：按边类型一次性拉取拓扑列、跳过 `Edge` 对象构造，并评估更大的扫描 morsel 与自适应并行；单纯继续优化聚合/去重已无收益。
+
+正确性门：devs 上 DQL 319/319、streaming lib 414/414；原始日志与 JSON 落在 `perf-data/parity/results/2026-11-18/stage2-final/`。
+
+---
+
+## 13. 拓扑批量读取实测回填（2026-11-18）
+
+设计见 `docs/plan/expand-topology-view-plan.md`。本轮参考 Ladybug 的 CSR 区间顺序读取与 Neug 的零拷贝邻居视图，只借鉴读取形态，不改拓扑/属性布局、边身份与外部 MVCC 权威。存储层新增按批返回拓扑字段的原语：一次解析空间与边类型，直接把 CSR 记录转成共享边类型名加端点与 rank，不构造 `Edge`、不解码属性。查询层仅在拓扑-only 的单步展开使用它；有边属性需求、变长展开和 TTL 相关语义保持原路径。
+
+固定门两轮中位数（ms）：
+
+| 用例 | 阶段二 | 本轮 | 相对基线 |
+|---|---:|---:|---|
+| `distinct_limit` | 480 / 498 | 421 / 414 | 约 2.8–2.9× |
+| `group_by_count` | 472 / 488 | 402 / 398 | 约 3.3–3.8× |
+| 九条纯计数 | 0.14–0.60 | 0.14–0.60 | 无回归 |
+
+PROFILE 中 `ExpandAll` 从约 0.46 秒降到约 0.39–0.40 秒，`Project` 仍为 `rows: 0`，聚合与去重仍在几十毫秒以内。端到端十倍门槛仍未达成；当前 `ExpandAll` 剩余时间主要落在每批邻接区间读取与目的地存在性判定上。后续应按设计文档继续做“单次调用内的 CSR 顺序投影 + 存在性半连接”合并，并在完成分区聚合正确性论证后再启用扫描并行。
+
+正确性门：devs 上 DQL 319/319、streaming lib 414/414；日志与 JSON 落在 `perf-data/parity/results/2026-11-18/stage3-final/`。

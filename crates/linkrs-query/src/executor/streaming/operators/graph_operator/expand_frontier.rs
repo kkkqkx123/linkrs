@@ -143,20 +143,20 @@ pub(super) fn expand_multi_hop_frontier(
     }
     let mut pending: Vec<TailEdge> = Vec::new();
     let mut all_dst: Vec<VertexId> = Vec::new();
-    for (orig_idx, vid) in frontier.iter() {
-        let edges = reader.get_node_edges_projected(
-            ctx.space_name,
-            vid,
-            ctx.direction,
-            ctx.edge_types,
-            projection_ref,
-            None,
-        )?;
+    let tail_ids: Vec<VertexId> = frontier.iter().map(|(_, vid)| *vid).collect();
+    let tail_batches = reader.get_node_edges_projected_batch(
+        ctx.space_name,
+        &tail_ids,
+        ctx.direction,
+        ctx.edge_types,
+        projection_ref,
+    )?;
+    for ((orig_idx, vid), edges) in frontier.iter().zip(tail_batches.iter()) {
         for edge in edges {
-            let dst = edge_neighbor(&edge, vid, ctx.direction);
+            let dst = edge_neighbor(edge, vid, ctx.direction);
             pending.push(TailEdge {
                 orig_idx: *orig_idx,
-                edge,
+                edge: edge.clone(),
                 dst,
             });
             all_dst.push(dst);
@@ -433,20 +433,20 @@ pub(super) fn expand_variable_frontier(
             }
         } else {
             let mut depth_edges: Vec<VarEdge> = Vec::new();
-            for (orig_idx, vid) in frontier.iter() {
-                let edges = reader.get_node_edges_projected(
-                    ctx.space_name,
-                    vid,
-                    ctx.direction,
-                    ctx.edge_types,
-                    projection_ref,
-                    None,
-                )?;
+            let ids: Vec<VertexId> = frontier.iter().map(|(_, vid)| *vid).collect();
+            let batches = reader.get_node_edges_projected_batch(
+                ctx.space_name,
+                &ids,
+                ctx.direction,
+                ctx.edge_types,
+                projection_ref,
+            )?;
+            for ((orig_idx, vid), edges) in frontier.iter().zip(batches.iter()) {
                 for edge in edges {
-                    let dst = edge_neighbor(&edge, vid, ctx.direction);
+                    let dst = edge_neighbor(edge, vid, ctx.direction);
                     depth_edges.push(VarEdge {
                         orig_idx: *orig_idx,
-                        edge,
+                        edge: edge.clone(),
                         dst,
                     });
                     next.push((*orig_idx, dst));

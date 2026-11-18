@@ -5,6 +5,7 @@ use linkrs_core::types::operators::{BinaryOperator, UnaryOperator};
 use linkrs_core::value::decimal128::Decimal128Value;
 
 use super::super::columnar_common::bitmap_is_valid;
+use super::super::kind::{first_non_null, value_to_kind, PushOutcome, TypedColumnBuilder};
 use super::{TypedBatch, TypedColumn};
 
 /// Borrow a typed column as a raw batch (`Fallback` columns are not typed).
@@ -33,8 +34,29 @@ pub(crate) fn typed_column_batch(column: &TypedColumn) -> Option<TypedBatch> {
         // Identity columns are not scalar-evaluable: expression evaluation
         // materializes them through `value_at` / `to_values` instead.
         TypedColumn::VertexIdentity(_) | TypedColumn::EdgeHeader(_) => None,
-        TypedColumn::Fallback(_) => None,
+        TypedColumn::Fallback(values) => fallback_typed_batch(values),
     }
+}
+
+/// Convert a homogeneous fallback column into a raw typed batch.
+///
+/// Rowless bypass columns arrive as `Fallback` even when every value has the
+/// same scalar kind. Reading them as a typed batch lets a rowless projection
+/// stay columnar; mixed-kind columns keep the row path.
+fn fallback_typed_batch(values: &[linkrs_core::Value]) -> Option<TypedBatch> {
+    let representative = first_non_null(values.iter())?;
+    let kind = value_to_kind(representative)?;
+    let mut builder = TypedColumnBuilder::with_capacity(kind, values.len());
+    let mut bitmap = vec![0u64; values.len().div_ceil(64)];
+    let mut has_null = false;
+    for (idx, value) in values.iter().enumerate() {
+        match builder.push_value(value) {
+            PushOutcome::Value => bitmap[idx / 64] |= 1u64 << (idx % 64),
+            PushOutcome::Null => has_null = true,
+            PushOutcome::Mismatch => return None,
+        }
+    }
+    typed_column_batch(&builder.finish(has_null, bitmap))
 }
 
 /// Unary operators on raw typed batches.

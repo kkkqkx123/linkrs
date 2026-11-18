@@ -186,6 +186,7 @@ pub(crate) fn wrap_project_with_subqueries(
             columns: vec![column],
             subqueries,
             has_folded_expressions: false,
+            emit_rowless: false,
             output_var: None,
             col_names: vec![],
             column_types: vec![],

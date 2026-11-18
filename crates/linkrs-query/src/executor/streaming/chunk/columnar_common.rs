@@ -52,6 +52,21 @@ impl EdgeHeaderColumn {
             .into_iter()
             .map(|s| Arc::from(s.as_str()))
             .collect();
+        Self::from_arc_parts(src, dst, edge_type, ranking)
+    }
+
+    /// Assemble from already shared edge-type names, avoiding one string
+    /// allocation per edge when the reader supplies a shared name.
+    pub(crate) fn from_arc_parts(
+        src: Vec<VertexId>,
+        dst: Vec<VertexId>,
+        edge_type: Vec<Arc<str>>,
+        ranking: Vec<i64>,
+    ) -> Self {
+        debug_assert!(
+            src.len() == dst.len() && src.len() == edge_type.len() && src.len() == ranking.len(),
+            "edge identity vectors must share one length"
+        );
         Self {
             src,
             dst,

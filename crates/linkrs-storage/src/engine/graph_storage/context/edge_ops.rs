@@ -174,8 +174,7 @@ impl GraphStorageContext {
                     // Endpoints repeat heavily inside one import batch while
                     // the underlying tables never change under the batch's
                     // single timestamp; memoize committed resolutions only.
-                    let mut resolve_cache: HashMap<(LabelId, VertexId), u32> =
-                        HashMap::new();
+                    let mut resolve_cache: HashMap<(LabelId, VertexId), u32> = HashMap::new();
                     for edge in params.edges {
                         let src_internal = helpers::resolve_internal_id_cached(
                             self,
@@ -863,6 +862,108 @@ impl GraphStorageContext {
         limit: usize,
     ) -> Option<Vec<EdgeRecord>> {
         self.in_edges_projected_impl(edge_label, dst_label, dst_id, ts, projection, Some(limit))
+    }
+
+    /// Projected out-edges for a whole seed batch. Edge tables are locked
+    /// once per table instead of once per seed; endpoint translation runs
+    /// after the guards are released to preserve the lock discipline.
+    pub fn out_edges_projected_batch(
+        &self,
+        edge_label: LabelId,
+        src_label: LabelId,
+        src_ids: &[VertexId],
+        ts: Timestamp,
+        projection: Option<&[Arc<str>]>,
+    ) -> Vec<Vec<EdgeRecord>> {
+        let resolved = self.resolve_node_endpoints(src_label, src_ids, ts);
+        let arcs = self
+            .persistent
+            .data_store
+            .matching_edge_partition_arcs(edge_label);
+        let gate = self.pending_gate();
+        let mut staged: Vec<Vec<(LabelId, EdgeRecord)>> = vec![Vec::new(); src_ids.len()];
+        for arc in &arcs {
+            let table = self.persistent.data_store.read_edge_table(arc);
+            if table.label() != edge_label {
+                continue;
+            }
+            let far_label = table.dst_label();
+            for (index, seed) in resolved.iter().enumerate() {
+                let Some((src_internal, actual_src)) = seed else {
+                    continue;
+                };
+                if table.src_label() != *actual_src {
+                    continue;
+                }
+                for record in
+                    table.out_edges_with_gate_projected(*src_internal, ts, &gate, projection)
+                {
+                    staged[index].push((far_label, record));
+                }
+            }
+        }
+        staged
+            .into_iter()
+            .map(|records| {
+                records
+                    .into_iter()
+                    .map(|(far_label, mut record)| {
+                        record.dst_vid = endpoint_to_external(self, far_label, record.dst_vid, ts);
+                        record
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// In-direction counterpart of [`Self::out_edges_projected_batch`].
+    pub fn in_edges_projected_batch(
+        &self,
+        edge_label: LabelId,
+        dst_label: LabelId,
+        dst_ids: &[VertexId],
+        ts: Timestamp,
+        projection: Option<&[Arc<str>]>,
+    ) -> Vec<Vec<EdgeRecord>> {
+        let resolved = self.resolve_node_endpoints(dst_label, dst_ids, ts);
+        let arcs = self
+            .persistent
+            .data_store
+            .matching_edge_partition_arcs(edge_label);
+        let gate = self.pending_gate();
+        let mut staged: Vec<Vec<(LabelId, EdgeRecord)>> = vec![Vec::new(); dst_ids.len()];
+        for arc in &arcs {
+            let table = self.persistent.data_store.read_edge_table(arc);
+            if table.label() != edge_label {
+                continue;
+            }
+            let far_label = table.src_label();
+            for (index, seed) in resolved.iter().enumerate() {
+                let Some((dst_internal, actual_dst)) = seed else {
+                    continue;
+                };
+                if table.dst_label() != *actual_dst {
+                    continue;
+                }
+                for record in
+                    table.in_edges_with_gate_projected(*dst_internal, ts, &gate, projection)
+                {
+                    staged[index].push((far_label, record));
+                }
+            }
+        }
+        staged
+            .into_iter()
+            .map(|records| {
+                records
+                    .into_iter()
+                    .map(|(far_label, mut record)| {
+                        record.src_vid = endpoint_to_external(self, far_label, record.src_vid, ts);
+                        record
+                    })
+                    .collect()
+            })
+            .collect()
     }
 
     /// Out-direction projected scan shared by the unbounded and limit

@@ -123,6 +123,29 @@ impl StorageReader for GraphStorage {
         )
     }
 
+    fn get_node_edges_projected_batch(
+        &self,
+        space: &str,
+        node_ids: &[VertexId],
+        direction: linkrs_core::EdgeDirection,
+        edge_types: &[String],
+        projection: Option<&[Arc<str>]>,
+    ) -> Result<Vec<Vec<Edge>>, StorageError> {
+        reader::get_node_edges_projected_batch(
+            &self.ctx, space, node_ids, direction, edge_types, projection,
+        )
+    }
+
+    fn get_node_edge_headers_batch(
+        &self,
+        space: &str,
+        node_ids: &[VertexId],
+        direction: linkrs_core::EdgeDirection,
+        edge_types: &[String],
+    ) -> Result<Vec<Vec<crate::EdgeTopology>>, StorageError> {
+        reader::get_node_edge_headers_batch(&self.ctx, space, node_ids, direction, edge_types)
+    }
+
     fn get_vertices_batch(
         &self,
         space: &str,

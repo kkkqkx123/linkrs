@@ -20,6 +20,8 @@ define_plan_node_with_deps! {
         subqueries: Vec<PlannedSubquery>,
         // Whether constant folding replaced part of the columns.
         has_folded_expressions: bool,
+        // Whether a passthrough projection may forward a rowless input.
+        emit_rowless: bool,
     }
     enum: Project
     input: SingleInputNode
@@ -62,6 +64,7 @@ impl ProjectNode {
             columns_serializable: None,
             subqueries: Vec::new(),
             has_folded_expressions: false,
+            emit_rowless: false,
             output_var: None,
             col_names,
             column_types,
@@ -92,6 +95,14 @@ impl ProjectNode {
     /// Obtain the projection column
     pub fn columns(&self) -> &[YieldColumn] {
         &self.columns
+    }
+
+    pub fn emit_rowless(&self) -> bool {
+        self.emit_rowless
+    }
+
+    pub fn set_emit_rowless(&mut self, emit: bool) {
+        self.emit_rowless = emit;
     }
 
     /// Set the projection column

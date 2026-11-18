@@ -286,6 +286,45 @@ impl DataChunk {
         chunk
     }
 
+    /// Build a typed-only projected chunk for a rowless consumer.
+    ///
+    /// Used only when the plan proves the downstream operator consumes typed
+    /// columns directly; the empty row view keeps any accidental row access
+    /// loud instead of silently reconstructing rows here.
+    pub fn project_typed_columns(
+        columns: Vec<TypedColumn>,
+        layout: Arc<SlotLayout>,
+    ) -> Result<Self, linkrs_core::error::QueryError> {
+        let mut chunk = Self::try_new_with_layout(Vec::new(), layout)?;
+        chunk.typed_columns = Some(columns);
+        chunk.columnar_build_deferred = false;
+        Ok(chunk)
+    }
+
+    /// Rebuild the row view of a typed-only chunk for operators that cannot
+    /// consume typed columns directly.
+    pub fn materialize_typed_rows(&mut self) {
+        if !self.rows.is_empty() || self.typed_columns.is_none() || self.selection.is_some() {
+            return;
+        }
+        let Some(len) = self.typed_len() else {
+            return;
+        };
+        let width = self.layout.len();
+        let mut rows = Vec::with_capacity(len);
+        for idx in 0..len {
+            let mut row = Vec::with_capacity(width);
+            for slot in 0..width {
+                row.push(
+                    self.get_typed_by_slot(idx, slot)
+                        .unwrap_or(Value::Null(linkrs_core::NullType::Null)),
+                );
+            }
+            rows.push(row);
+        }
+        self.rows = rows;
+    }
+
     /// Build a row chunk from a columnar batch slice.
     ///
     /// Coexistence API: the batch stays the operator state authority while

@@ -70,6 +70,37 @@ impl TypedColumn {
         !matches!(self, TypedColumn::Fallback(_))
     }
 
+    /// Whether this column carries an explicit NULL bitmap.
+    pub fn is_nullable(&self) -> bool {
+        matches!(
+            self,
+            TypedColumn::NullableI64(..)
+                | TypedColumn::NullableF64(..)
+                | TypedColumn::NullableI32(..)
+                | TypedColumn::NullableBool(..)
+                | TypedColumn::NullableDate(..)
+                | TypedColumn::NullableDateTime(..)
+                | TypedColumn::NullableUtf8(..)
+                | TypedColumn::NullableDecimal(..)
+        )
+    }
+
+    /// NULL bitmap of a nullable typed column. Non-nullable variants return
+    /// `None`, which readers interpret as every position being valid.
+    pub fn validity_bitmap(&self) -> Option<&[u64]> {
+        match self {
+            TypedColumn::NullableI64(_, bitmap)
+            | TypedColumn::NullableF64(_, bitmap)
+            | TypedColumn::NullableI32(_, bitmap)
+            | TypedColumn::NullableBool(_, bitmap)
+            | TypedColumn::NullableDate(_, bitmap)
+            | TypedColumn::NullableDateTime(_, bitmap)
+            | TypedColumn::NullableUtf8(_, bitmap)
+            | TypedColumn::NullableDecimal(_, bitmap) => Some(bitmap),
+            _ => None,
+        }
+    }
+
     /// Materialize the value at `idx` (O(1) for typed variants; NULL for
     /// invalid rows of the `Nullable*` variants).
     pub fn value_at(&self, idx: usize) -> Option<Value> {
@@ -408,6 +439,29 @@ impl TypedBatch {
                     }
                 })
                 .collect(),
+        }
+    }
+}
+
+impl From<TypedBatch> for TypedColumn {
+    fn from(batch: TypedBatch) -> Self {
+        match batch {
+            TypedBatch::I64(v) => Self::I64(v),
+            TypedBatch::F64(v) => Self::F64(v),
+            TypedBatch::I32(v) => Self::I32(v),
+            TypedBatch::Bool(v) => Self::Bool(v),
+            TypedBatch::Date(v) => Self::Date(v),
+            TypedBatch::DateTime(v) => Self::DateTime(v),
+            TypedBatch::Utf8(v) => Self::Utf8(v),
+            TypedBatch::Decimal(v) => Self::Decimal(v),
+            TypedBatch::NullableI64(v, b) => Self::NullableI64(v, b),
+            TypedBatch::NullableF64(v, b) => Self::NullableF64(v, b),
+            TypedBatch::NullableI32(v, b) => Self::NullableI32(v, b),
+            TypedBatch::NullableBool(v, b) => Self::NullableBool(v, b),
+            TypedBatch::NullableDate(v, b) => Self::NullableDate(v, b),
+            TypedBatch::NullableDateTime(v, b) => Self::NullableDateTime(v, b),
+            TypedBatch::NullableUtf8(v, b) => Self::NullableUtf8(v, b),
+            TypedBatch::NullableDecimal(v, b) => Self::NullableDecimal(v, b),
         }
     }
 }

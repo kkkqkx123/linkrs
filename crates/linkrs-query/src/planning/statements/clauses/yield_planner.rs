@@ -73,6 +73,7 @@ impl YieldClausePlanner {
                     columns: yield_columns.to_vec(),
                     subqueries: Vec::new(),
                     has_folded_expressions: false,
+                    emit_rowless: false,
                     output_var: None,
                     col_names: project_node.col_names().to_vec(),
                     column_types: vec![],

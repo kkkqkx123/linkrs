@@ -12,6 +12,9 @@ pub struct DistinctState {
     /// `key_cols` means the full row, preserving the exact `Value` Hash/Eq
     /// contract (Null, NaN, mixed kinds) of the former `HashSet<Vec<Value>>`.
     pub seen_rows: HashSet<RowKey>,
+    /// Raw integer membership index for the identity single-column shape.
+    /// `seen_rows` remains authoritative for output and fallback rows.
+    pub typed_seen: HashSet<i64>,
     /// Key column positions. Empty selects the full row. Reserved for future
     /// keyed distinct pushdown; no producer sets it yet.
     pub key_cols: Vec<usize>,

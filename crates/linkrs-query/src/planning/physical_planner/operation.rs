@@ -10,6 +10,7 @@ pub(super) fn convert_project(
     .expect("Failed to construct ProjectNode")
     .with_subqueries(n.subqueries);
     node.set_has_folded_expressions(n.has_folded_expressions);
+    node.set_emit_rowless(n.emit_rowless);
     if let Some(var) = n.output_var {
         node.set_output_var(var);
     }

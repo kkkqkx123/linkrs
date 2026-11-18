@@ -5,7 +5,7 @@ use crate::macros::{
     forward_methods, forward_timed_read_methods, forward_timed_write_methods, forward_undo_methods,
 };
 use crate::{
-    StorageAdmin, StorageAuthOps, StorageClient, StorageCommitOps, StorageGcOps,
+    EdgeTopology, StorageAdmin, StorageAuthOps, StorageClient, StorageCommitOps, StorageGcOps,
     StorageOperationContext, StorageOperationContextOps, StoragePersistenceOps, StorageReader,
     StorageRecoveryOps, StorageSchemaContextOps, StorageSchemaOps, StorageSnapshotOps,
     StorageStats, StorageSyncContextOps, StorageTtlPurgeOps, StorageWriter,
@@ -285,6 +285,33 @@ impl<S: StorageClient> StorageReader for MetricsStorage<S> {
         self.timed_read(|| {
             self.inner
                 .get_node_edges_projected(space, node_id, direction, edge_types, projection, limit)
+        })
+    }
+
+    fn get_node_edges_projected_batch(
+        &self,
+        space: &str,
+        node_ids: &[VertexId],
+        direction: EdgeDirection,
+        edge_types: &[String],
+        projection: Option<&[Arc<str>]>,
+    ) -> Result<Vec<Vec<Edge>>, StorageError> {
+        self.timed_read(|| {
+            self.inner
+                .get_node_edges_projected_batch(space, node_ids, direction, edge_types, projection)
+        })
+    }
+
+    fn get_node_edge_headers_batch(
+        &self,
+        space: &str,
+        node_ids: &[VertexId],
+        direction: EdgeDirection,
+        edge_types: &[String],
+    ) -> Result<Vec<Vec<EdgeTopology>>, StorageError> {
+        self.timed_read(|| {
+            self.inner
+                .get_node_edge_headers_batch(space, node_ids, direction, edge_types)
         })
     }
 

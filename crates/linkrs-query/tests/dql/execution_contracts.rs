@@ -7,6 +7,7 @@
 use super::common;
 
 use common::test_scenario::TestScenario;
+use linkrs_core::Value;
 use linkrs_query::parser::Parser;
 
 // ==================== Parser contract: unsupported/removed syntax ====================
@@ -150,6 +151,40 @@ fn test_standalone_yield_distinct_pipeline() {
         .query("UNWIND [1, 1, 2] AS x | YIELD DISTINCT x")
         .assert_success()
         .assert_result_count(2);
+}
+
+#[test]
+fn test_distinct_integer_column_deduplicates_rows() {
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("ec_distinct_int")
+        .exec_ddl("CREATE TAG Item(id INT, bucket INT)")
+        .exec_dml("INSERT VERTEX Item(bucket) VALUES 1:(1), 2:(2), 3:(1), 4:(3), 5:(2)")
+        .assert_success()
+        .query("MATCH (n:Item) RETURN DISTINCT n.bucket ORDER BY n.bucket")
+        .assert_success()
+        .assert_result_count(3)
+        .assert_result_contains(vec![Value::Int(1)])
+        .assert_result_contains(vec![Value::Int(2)])
+        .assert_result_contains(vec![Value::Int(3)]);
+}
+
+#[test]
+fn test_distinct_null_and_multi_column_stay_generic() {
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("ec_distinct_generic")
+        .exec_ddl("CREATE TAG Item(id INT, bucket INT, label STRING)")
+        .exec_dml(
+            "INSERT VERTEX Item(bucket, label) VALUES 1:(1, 'a'), 2:(NULL, 'a'), 3:(NULL, 'a'), 4:(1, 'b')",
+        )
+        .assert_success()
+        .query("MATCH (n:Item) RETURN DISTINCT n.bucket")
+        .assert_success()
+        .assert_result_count(2)
+        .query("MATCH (n:Item) RETURN DISTINCT n.bucket, n.label")
+        .assert_success()
+        .assert_result_count(3);
 }
 
 #[test]

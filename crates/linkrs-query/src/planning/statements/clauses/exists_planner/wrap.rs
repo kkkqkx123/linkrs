@@ -200,6 +200,7 @@ pub fn build_group_join_right_subtree(
             columns: columns.clone(),
             subqueries: Vec::new(),
             has_folded_expressions: false,
+            emit_rowless: false,
             output_var: None,
             col_names: project_col_names.clone(),
             column_types: vec![],

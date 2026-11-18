@@ -13,6 +13,7 @@ define_logical_plan_node_with_deps! {
         columns: Vec<YieldColumn>,
         subqueries: Vec<crate::planning::statements::clauses::exists_planner::PlannedSubquery>,
         has_folded_expressions: bool,
+        emit_rowless: bool,
     }
     enum: Project
     input: SingleInputNode

@@ -8,6 +8,7 @@ use crate::engine::graph_storage::ops::{
     edge_record_to_edge, edge_record_to_edge_projected, endpoint_label_id, serialize_properties,
 };
 use crate::engine::params::EdgeOperationParams;
+use crate::EdgeTopology;
 use linkrs_core::types::{EdgeTypeInfo, LabelId, Timestamp, VertexId};
 use linkrs_core::{Edge, EdgeDirection, StorageError, StorageResult, Value};
 
@@ -328,6 +329,293 @@ pub(crate) fn get_node_edges_projected(
         }
     }
     Ok(edges)
+}
+
+/// Exact projected edge fanout for a batch of source vertices.
+///
+/// Schema resolution and edge-table locking are shared across the whole
+/// batch; per-seed ordering, property projection and TTL filtering match
+/// repeated [`get_node_edges_projected`] calls.
+pub(crate) fn get_node_edges_projected_batch(
+    ctx: &GraphStorageContext,
+    space: &str,
+    src_ids: &[VertexId],
+    direction: EdgeDirection,
+    edge_types: &[String],
+    projection: Option<&[Arc<str>]>,
+) -> StorageResult<Vec<Vec<Edge>>> {
+    record_schema_read(ctx, space);
+    let space_info = ctx
+        .schema_manager()
+        .get_space(space)?
+        .ok_or_else(|| StorageError::not_found(format!("Space {} not found", space)))?;
+    let normalized: Vec<VertexId> = src_ids
+        .iter()
+        .map(|id| VertexId::normalize_for_vid_type(&space_info.vid_type, *id))
+        .collect::<Result<_, _>>()?;
+    let edge_types_all = ctx.schema_manager().list_edge_types(space)?;
+    if edge_types_all.is_empty() {
+        return Ok(vec![Vec::new(); normalized.len()]);
+    }
+    let ts = ctx.get_read_timestamp();
+    for id in &normalized {
+        record_vertex_read(ctx, *id);
+    }
+    let mut out: Vec<Vec<Edge>> = vec![Vec::new(); normalized.len()];
+
+    for edge_info in &edge_types_all {
+        if !edge_types.is_empty() && !edge_types.contains(&edge_info.edge_type_name) {
+            continue;
+        }
+        let Some(src_label_id) = endpoint_label_id(ctx, space, &edge_info.src_tag_name)? else {
+            continue;
+        };
+        let Some(dst_label_id) = endpoint_label_id(ctx, space, &edge_info.dst_tag_name)? else {
+            continue;
+        };
+        let edge_label_id = edge_info.edge_type_id;
+        let edge_type_name = edge_info.edge_type_name.as_str();
+        match direction {
+            EdgeDirection::Out => {
+                let batches = ctx.out_edges_projected_batch(
+                    edge_label_id,
+                    src_label_id,
+                    &normalized,
+                    ts,
+                    projection,
+                );
+                for (index, records) in batches.into_iter().enumerate() {
+                    for record in records {
+                        let dst = record.dst_vid;
+                        let edge = edge_record_to_edge_with_projection(
+                            record,
+                            edge_type_name,
+                            normalized[index],
+                            dst,
+                            projection,
+                        );
+                        if !edge_is_expired(edge_info, &edge) {
+                            out[index].push(edge);
+                        }
+                    }
+                }
+            }
+            EdgeDirection::In => {
+                let batches = ctx.in_edges_projected_batch(
+                    edge_label_id,
+                    dst_label_id,
+                    &normalized,
+                    ts,
+                    projection,
+                );
+                for (index, records) in batches.into_iter().enumerate() {
+                    for record in records {
+                        let src = record.src_vid;
+                        let edge = edge_record_to_edge_with_projection(
+                            record,
+                            edge_type_name,
+                            src,
+                            normalized[index],
+                            projection,
+                        );
+                        if !edge_is_expired(edge_info, &edge) {
+                            out[index].push(edge);
+                        }
+                    }
+                }
+            }
+            EdgeDirection::Both => {
+                let out_batches = ctx.out_edges_projected_batch(
+                    edge_label_id,
+                    src_label_id,
+                    &normalized,
+                    ts,
+                    projection,
+                );
+                let in_batches = ctx.in_edges_projected_batch(
+                    edge_label_id,
+                    dst_label_id,
+                    &normalized,
+                    ts,
+                    projection,
+                );
+                for (index, (out_records, in_records)) in
+                    out_batches.into_iter().zip(in_batches).enumerate()
+                {
+                    let mut seen: HashSet<(VertexId, VertexId, i64)> = HashSet::new();
+                    for record in out_records {
+                        let dst = record.dst_vid;
+                        let rank = record.rank;
+                        if !seen.insert((normalized[index], dst, rank)) {
+                            continue;
+                        }
+                        let edge = edge_record_to_edge_with_projection(
+                            record,
+                            edge_type_name,
+                            normalized[index],
+                            dst,
+                            projection,
+                        );
+                        if !edge_is_expired(edge_info, &edge) {
+                            out[index].push(edge);
+                        }
+                    }
+                    for record in in_records {
+                        let src = record.src_vid;
+                        let rank = record.rank;
+                        if !seen.insert((src, normalized[index], rank)) {
+                            continue;
+                        }
+                        let edge = edge_record_to_edge_with_projection(
+                            record,
+                            edge_type_name,
+                            src,
+                            normalized[index],
+                            projection,
+                        );
+                        if !edge_is_expired(edge_info, &edge) {
+                            out[index].push(edge);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Topology-only batch adjacency read.
+///
+/// Mirrors the ordering, edge-type filtering and direction dedup of
+/// `get_node_edges_projected_batch`, but converts CSR records straight into
+/// shared topology identities. No property decode or `Edge` allocation is
+/// performed, which is the shape columnar expand needs when only endpoints
+/// and rank are consumed.
+pub(crate) fn get_node_edge_headers_batch(
+    ctx: &GraphStorageContext,
+    space: &str,
+    src_ids: &[VertexId],
+    direction: EdgeDirection,
+    edge_types: &[String],
+) -> StorageResult<Vec<Vec<EdgeTopology>>> {
+    record_schema_read(ctx, space);
+    let space_info = ctx
+        .schema_manager()
+        .get_space(space)?
+        .ok_or_else(|| StorageError::not_found(format!("Space {} not found", space)))?;
+    let normalized: Vec<VertexId> = src_ids
+        .iter()
+        .map(|id| VertexId::normalize_for_vid_type(&space_info.vid_type, *id))
+        .collect::<Result<_, _>>()?;
+    let edge_types_all = ctx.schema_manager().list_edge_types(space)?;
+    if edge_types_all.is_empty() {
+        return Ok(vec![Vec::new(); normalized.len()]);
+    }
+    let ts = ctx.get_read_timestamp();
+    for id in &normalized {
+        record_vertex_read(ctx, *id);
+    }
+    let mut out: Vec<Vec<EdgeTopology>> = vec![Vec::new(); normalized.len()];
+
+    for edge_info in &edge_types_all {
+        if !edge_types.is_empty() && !edge_types.contains(&edge_info.edge_type_name) {
+            continue;
+        }
+        let Some(src_label_id) = endpoint_label_id(ctx, space, &edge_info.src_tag_name)? else {
+            continue;
+        };
+        let Some(dst_label_id) = endpoint_label_id(ctx, space, &edge_info.dst_tag_name)? else {
+            continue;
+        };
+        let edge_label_id = edge_info.edge_type_id;
+        let edge_type: Arc<str> = Arc::from(edge_info.edge_type_name.as_str());
+        match direction {
+            EdgeDirection::Out => {
+                let batches = ctx.out_edges_projected_batch(
+                    edge_label_id,
+                    src_label_id,
+                    &normalized,
+                    ts,
+                    Some(&[]),
+                );
+                for (index, records) in batches.into_iter().enumerate() {
+                    for record in records {
+                        out[index].push(EdgeTopology {
+                            src: normalized[index],
+                            dst: record.dst_vid,
+                            edge_type: Arc::clone(&edge_type),
+                            ranking: record.rank,
+                        });
+                    }
+                }
+            }
+            EdgeDirection::In => {
+                let batches = ctx.in_edges_projected_batch(
+                    edge_label_id,
+                    dst_label_id,
+                    &normalized,
+                    ts,
+                    Some(&[]),
+                );
+                for (index, records) in batches.into_iter().enumerate() {
+                    for record in records {
+                        out[index].push(EdgeTopology {
+                            src: record.src_vid,
+                            dst: normalized[index],
+                            edge_type: Arc::clone(&edge_type),
+                            ranking: record.rank,
+                        });
+                    }
+                }
+            }
+            EdgeDirection::Both => {
+                let out_batches = ctx.out_edges_projected_batch(
+                    edge_label_id,
+                    src_label_id,
+                    &normalized,
+                    ts,
+                    Some(&[]),
+                );
+                let in_batches = ctx.in_edges_projected_batch(
+                    edge_label_id,
+                    dst_label_id,
+                    &normalized,
+                    ts,
+                    Some(&[]),
+                );
+                for (index, (out_records, in_records)) in
+                    out_batches.into_iter().zip(in_batches).enumerate()
+                {
+                    let mut seen: HashSet<(VertexId, VertexId, i64)> = HashSet::new();
+                    for record in out_records {
+                        let key = (normalized[index], record.dst_vid, record.rank);
+                        if !seen.insert(key) {
+                            continue;
+                        }
+                        out[index].push(EdgeTopology {
+                            src: normalized[index],
+                            dst: record.dst_vid,
+                            edge_type: Arc::clone(&edge_type),
+                            ranking: record.rank,
+                        });
+                    }
+                    for record in in_records {
+                        let key = (record.src_vid, normalized[index], record.rank);
+                        if !seen.insert(key) {
+                            continue;
+                        }
+                        out[index].push(EdgeTopology {
+                            src: record.src_vid,
+                            dst: normalized[index],
+                            edge_type: Arc::clone(&edge_type),
+                            ranking: record.rank,
+                        });
+                    }
+                }
+            }
+        }
+    }
+    Ok(out)
 }
 
 /// Lightweight batch neighbor read used by de-materialized expand hops

@@ -6,6 +6,18 @@ use linkrs_core::types::{EdgeTypeInfo, Index, SpaceInfo, TagInfo, VertexId};
 use linkrs_core::{Edge, EdgeDirection, StorageError, Value, Vertex};
 use std::sync::Arc;
 
+/// Topology-only edge identity returned by the batched adjacency reader.
+///
+/// Kept separate from `EdgeHeader` so a full batch can share one `Arc` per
+/// edge type instead of allocating one string per edge.
+#[derive(Debug, Clone)]
+pub struct EdgeTopology {
+    pub src: VertexId,
+    pub dst: VertexId,
+    pub edge_type: Arc<str>,
+    pub ranking: i64,
+}
+
 /// Read-only data and schema operations.
 pub trait StorageReader: Send + Sync + std::fmt::Debug {
     fn get_vertex(
@@ -152,6 +164,57 @@ pub trait StorageReader: Send + Sync + std::fmt::Debug {
             edges.truncate(limit);
         }
         Ok(edges)
+    }
+
+    /// Projected edge fanout for a batch of source vertices, in input order.
+    ///
+    /// The default is the exact per-vertex loop; the native engine resolves
+    /// the edge-type schema once and reads each edge table once for the whole
+    /// batch. Projection and TTL visibility match [`Self::get_node_edges_projected`].
+    fn get_node_edges_projected_batch(
+        &self,
+        space: &str,
+        node_ids: &[VertexId],
+        direction: EdgeDirection,
+        edge_types: &[String],
+        projection: Option<&[Arc<str>]>,
+    ) -> Result<Vec<Vec<Edge>>, StorageError> {
+        let mut out = Vec::with_capacity(node_ids.len());
+        for id in node_ids {
+            out.push(
+                self.get_node_edges_projected(space, id, direction, edge_types, projection, None)?,
+            );
+        }
+        Ok(out)
+    }
+
+    /// Topology-only edge fanout for a batch of source vertices.
+    ///
+    /// The default converts a topology-only projected read; the native
+    /// engine reads the CSR records directly and never builds `Edge` values.
+    fn get_node_edge_headers_batch(
+        &self,
+        space: &str,
+        node_ids: &[VertexId],
+        direction: EdgeDirection,
+        edge_types: &[String],
+    ) -> Result<Vec<Vec<EdgeTopology>>, StorageError> {
+        let batches =
+            self.get_node_edges_projected_batch(space, node_ids, direction, edge_types, Some(&[]))?;
+        Ok(batches
+            .into_iter()
+            .map(|edges| {
+                edges
+                    .into_iter()
+                    .map(|edge| EdgeTopology {
+                        src: *edge.src(),
+                        dst: *edge.dst(),
+                        edge_type: Arc::from(edge.edge_type()),
+                        ranking: edge.ranking(),
+                    })
+                    .collect()
+            })
+            .collect())
     }
 
     /// Batch vertex point lookups with the schema resolved once.

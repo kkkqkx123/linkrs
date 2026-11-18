@@ -100,6 +100,8 @@ pub(super) fn handle(
     let UnaryOperatorKind::Project {
         output_expressions,
         output_col_names: _,
+        emit_rowless,
+        identity_as_unit,
         state,
     } = &mut op.kind
     else {
@@ -109,6 +111,40 @@ pub(super) fn handle(
     };
     loop {
         if let Some(mut chunk) = input.advance()? {
+            if *emit_rowless
+                && chunk.rows.is_empty()
+                && chunk.selection.is_none()
+                && chunk.typed_columns.is_some()
+            {
+                let typed_result = if *identity_as_unit {
+                    chunk.try_evaluate_rowless_projection_columns(
+                        output_expressions,
+                        Some(&state.env),
+                    )
+                } else {
+                    chunk.try_evaluate_expressions_typed_columns(
+                        output_expressions,
+                        Some(&state.env),
+                    )
+                }
+                .map_err(|e| {
+                    QueryError::execution(format!("Project expression evaluation failed: {}", e))
+                })?;
+                if let Some(columns) = typed_result {
+                    if columns.iter().all(|col| col.len() == chunk.eval_len())
+                        && !columns.is_empty()
+                    {
+                        let multiplicity = chunk.multiplicity();
+                        return Ok(Some(
+                            DataChunk::project_typed_columns(
+                                columns,
+                                Arc::clone(&op.output_layout),
+                            )?
+                            .with_multiplicity(multiplicity),
+                        ));
+                    }
+                }
+            }
             // When the child carries a selection vector, evaluate
             // each output expression only for the visible rows — the
             // output chunk is fully materialized (small).

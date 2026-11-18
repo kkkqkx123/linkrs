@@ -20,6 +20,10 @@ pub enum UnarySpec {
         output_col_types: Vec<DataType>,
         /// Expression-level subqueries compiled for this project.
         subquery_runners: Vec<crate::executor::streaming::subquery::SubqueryRunnerSpec>,
+        /// Forward a typed-only input chunk instead of materializing rows.
+        emit_rowless: bool,
+        /// Treat identity arguments as non-null units for count consumers.
+        identity_as_unit: bool,
     },
     Limit {
         offset: u32,

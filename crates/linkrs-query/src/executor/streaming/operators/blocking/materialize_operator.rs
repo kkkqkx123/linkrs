@@ -8,7 +8,7 @@ use linkrs_core::Value;
 
 use crate::executor::base::{MemoryBudget, MemoryTracker};
 use crate::executor::expression::evaluator::ExpressionEvaluator;
-use crate::executor::streaming::chunk::DataChunk;
+use crate::executor::streaming::chunk::{DataChunk, TypedColumn};
 use crate::executor::streaming::executor::{StreamingExecutor, ValueRowContext};
 use crate::executor::streaming::spill::{
     finalize_partitions_with_runtime, HashPartitionConfig, HashPartitionSpiller, RunReader,
@@ -23,6 +23,7 @@ use super::materialize::{
 pub(super) fn open_distinct(state: &mut Option<DistinctState>) {
     *state = Some(DistinctState {
         seen_rows: std::collections::HashSet::new(),
+        typed_seen: std::collections::HashSet::new(),
         key_cols: Vec::new(),
         batch: MaterializedBatch::new(0, 0),
         emitted_offset: 0,
@@ -34,6 +35,38 @@ pub(super) fn open_distinct(state: &mut Option<DistinctState>) {
         partition_seen: std::collections::HashSet::new(),
         has_spilled: false,
     });
+}
+
+/// Raw integer keys of a single-column BigInt chunk, when the typed layout
+/// and row view agree on every position. Nullable and non-integer keys keep
+/// the exact `Value` membership contract.
+fn integer_keys(chunk: &mut DataChunk) -> Option<Vec<i64>> {
+    let rowless = chunk.rows.is_empty();
+    let len = if rowless {
+        chunk.typed_len()?
+    } else {
+        if chunk
+            .rows
+            .iter()
+            .any(|row| row.len() != 1 || !matches!(row.first(), Some(Value::BigInt(_))))
+        {
+            return None;
+        }
+        chunk.rows.len()
+    };
+    chunk.ensure_typed_columns();
+    let TypedColumn::I64(values) = chunk.typed_column(0)? else {
+        return None;
+    };
+    if values.len() != len
+        || (!rowless
+            && chunk.rows.iter().zip(values.iter()).any(
+                |(row, &key)| !matches!(row.first(), Some(Value::BigInt(value)) if *value == key),
+            ))
+    {
+        return None;
+    }
+    Some(values.clone())
 }
 
 pub(super) fn open_materialize(state: &mut Option<MaterializeState>) {
@@ -297,9 +330,32 @@ pub(super) fn next_distinct(
                     state.col_names = chunk.col_names();
                     state.input_layout = Some(chunk.get_layout());
                 }
-                for row in chunk.rows {
+                let typed_keys = if state.key_cols.is_empty() {
+                    integer_keys(&mut chunk)
+                } else {
+                    None
+                };
+                let keys = match typed_keys {
+                    Some(values) => values
+                        .into_iter()
+                        .map(|value| (vec![Value::BigInt(value)], Some(value)))
+                        .collect::<Vec<_>>(),
+                    None => {
+                        chunk.materialize_typed_rows();
+                        chunk
+                            .rows
+                            .drain(..)
+                            .map(|row| (row, None))
+                            .collect::<Vec<_>>()
+                    }
+                };
+                for (row, typed_key) in keys {
                     let key = project_key(&row, &state.key_cols);
-                    if !state.seen_rows.contains(&key) {
+                    let is_new = match typed_key {
+                        Some(value) => !state.typed_seen.contains(&value),
+                        None => !state.seen_rows.contains(&key),
+                    };
+                    if is_new {
                         if let Err(e) = memory_tracker.try_reserve_row(&row) {
                             if let Some(sm) =
                                 ctx.runtime.as_ref().and_then(|rt| rt.get_spill_manager())
@@ -319,6 +375,7 @@ pub(super) fn next_distinct(
                                     memory_tracker
                                         .release(MemoryBudget::estimate_row_memory(&seen_row));
                                 }
+                                state.typed_seen.clear();
 
                                 spiller.insert_row(&row, &sm)?;
                                 memory_tracker.release(MemoryBudget::estimate_row_memory(&row));
@@ -330,6 +387,9 @@ pub(super) fn next_distinct(
                             } else {
                                 return Err(e);
                             }
+                        }
+                        if let Some(value) = typed_key {
+                            state.typed_seen.insert(value);
                         }
                         state.seen_rows.insert(key);
                     }
@@ -656,6 +716,7 @@ pub(super) fn spill_distinct(
             spiller.insert_row(&row, sm)?;
             memory_tracker.release(MemoryBudget::estimate_row_memory(&row));
         }
+        state.typed_seen.clear();
         state.partition_spiller = Some(spiller);
         state.has_spilled = true;
     }

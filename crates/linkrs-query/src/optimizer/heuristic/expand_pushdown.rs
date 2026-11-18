@@ -24,7 +24,7 @@ use crate::optimizer::heuristic::pattern::Pattern;
 use crate::optimizer::heuristic::result::{RewriteResult, TransformResult};
 use crate::optimizer::heuristic::rule::RewriteRule;
 use crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
-use crate::planning::plan::core::nodes::base::plan_node_traits::PlanNode;
+use crate::planning::plan::core::nodes::base::plan_node_traits::{PlanNode, SingleInputNode};
 use crate::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode;
 use crate::planning::plan::core::nodes::traversal::traversal_node::ExpandAllNode;
 use linkrs_core::types::expr::Expression;
@@ -135,13 +135,116 @@ fn annotate_expand_all(root: &PlanNodeEnum) -> (PlanNodeEnum, bool) {
             );
         }
     }
-    if decisions.is_empty() {
-        return (root.clone(), false);
+    let mut new_root = root.clone();
+    let expand_changed =
+        apply_decisions(&mut new_root, &decisions, &std::collections::HashSet::new());
+    let mut rowless_projects = std::collections::HashSet::new();
+    collect_rowless_projects(
+        &new_root,
+        &mut Vec::new(),
+        &decisions,
+        &mut rowless_projects,
+    );
+    if decisions.is_empty() && rowless_projects.is_empty() {
+        return (new_root, expand_changed);
     }
 
-    let mut new_root = root.clone();
-    let changed = apply_decisions(&mut new_root, &decisions);
-    (new_root, changed)
+    let project_changed = apply_decisions(&mut new_root, &decisions, &rowless_projects);
+    (new_root, expand_changed || project_changed)
+}
+
+/// A passthrough Project over a rowless hop may keep its typed layout when
+/// the nearest non-trivial consumer is an operator that reads typed columns
+/// directly. Anything else still receives a materialized row projection.
+fn collect_rowless_projects<'a>(
+    node: &'a PlanNodeEnum,
+    ancestors: &mut Vec<&'a PlanNodeEnum>,
+    decisions: &HashMap<i64, ExpandDecision>,
+    out: &mut std::collections::HashSet<i64>,
+) {
+    if let PlanNodeEnum::Project(project) = node {
+        let passthrough = project.columns().iter().all(|col| {
+            col.expression
+                .expression()
+                .is_none_or(|meta| project_expression_passthrough(meta.inner()))
+        });
+        if passthrough
+            && rowless_consumer(ancestors, project.col_names().len())
+            && subtree_has_rowless_expand(project.input(), decisions)
+        {
+            out.insert(project.id());
+        }
+    }
+    for child in node.children() {
+        ancestors.push(node);
+        collect_rowless_projects(child, ancestors, decisions, out);
+        ancestors.pop();
+    }
+}
+
+fn project_expression_passthrough(expr: &Expression) -> bool {
+    match expr {
+        Expression::Variable(_) | Expression::Literal(_) => true,
+        Expression::Property { object, .. } => matches!(object.as_ref(), Expression::Variable(_)),
+        _ => false,
+    }
+}
+
+fn rowless_consumer(ancestors: &[&PlanNodeEnum], project_width: usize) -> bool {
+    for ancestor in ancestors.iter().rev() {
+        match ancestor {
+            PlanNodeEnum::Filter(filter)
+                if filter.condition().get_expression().is_some_and(|e| {
+                    matches!(e, Expression::Literal(linkrs_core::Value::Bool(true)))
+                }) =>
+            {
+                continue;
+            }
+            PlanNodeEnum::Aggregate(agg) => {
+                if !agg.grouping_sets().is_empty()
+                    || agg.aggregation_distinct().iter().any(|d| *d)
+                    || agg.aggregation_filters().iter().any(|f| f.is_some())
+                {
+                    return false;
+                }
+                let funcs = agg.aggregation_functions();
+                let args = agg.aggregation_args();
+                let group_ok = if agg.group_keys().is_empty() {
+                    true
+                } else {
+                    agg.group_keys().len() == 1 && funcs.len() == 1
+                };
+                return group_ok
+                    && !funcs.is_empty()
+                    && funcs.len() == args.len()
+                    && funcs.iter().zip(args.iter()).all(|(func, arg)| {
+                        matches!(
+                            func,
+                            linkrs_core::types::operators::AggregateFunction::Count
+                        ) && (arg.is_empty()
+                            || (arg.len() == 1 && matches!(arg[0], Expression::Variable(_))))
+                    });
+            }
+            PlanNodeEnum::Dedup(_) => return project_width == 1,
+            _ => return false,
+        }
+    }
+    false
+}
+
+fn subtree_has_rowless_expand(
+    node: &PlanNodeEnum,
+    decisions: &HashMap<i64, ExpandDecision>,
+) -> bool {
+    if let PlanNodeEnum::ExpandAll(expand) = node {
+        return decisions
+            .get(&expand.id())
+            .map(|decision| decision.skip_rows)
+            .unwrap_or_else(|| expand.skip_rows());
+    }
+    node.children()
+        .into_iter()
+        .any(|child| subtree_has_rowless_expand(child, decisions))
 }
 
 /// Collect every `ExpandAll` node together with its ancestor path

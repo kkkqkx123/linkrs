@@ -109,6 +109,7 @@ impl Planner for FetchEdgesPlanner {
                 columns: yield_columns,
                 subqueries: Vec::new(),
                 has_folded_expressions: false,
+                emit_rowless: false,
                 output_var: None,
                 col_names: project_aliases.clone(),
                 column_types: vec![],

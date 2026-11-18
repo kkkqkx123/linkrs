@@ -106,6 +106,7 @@ fn project_dependency() {
             columns: vec![yield_col],
             subqueries: Vec::new(),
             has_folded_expressions: false,
+            emit_rowless: false,
             output_var: None,
             col_names: vec!["a2".to_string()],
             column_types: vec![],

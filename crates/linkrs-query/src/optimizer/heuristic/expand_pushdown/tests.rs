@@ -2,6 +2,7 @@ use super::*;
 use crate::planning::plan::core::nodes::access::graph_scan_node::ScanVerticesNode;
 use crate::planning::plan::core::nodes::base::plan_node_traits::MultipleInputNode;
 use crate::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode;
+use crate::planning::plan::core::nodes::graph_operations::graph_operations_node::dedup_node::DedupNode;
 use crate::planning::plan::core::nodes::operation::project_node::ProjectNode;
 use crate::planning::plan::core::nodes::traversal::traversal_node::ExpandAllNode;
 use linkrs_core::types::expr::expression_context::ExpressionAnalysisContext;
@@ -69,10 +70,57 @@ fn expand_alls(root: &PlanNodeEnum) -> Vec<ExpandAllNode> {
     out.into_iter().map(|(e, _)| e).collect()
 }
 
+fn projects(root: &PlanNodeEnum) -> Vec<&ProjectNode> {
+    let mut out = Vec::new();
+    if let PlanNodeEnum::Project(project) = root {
+        out.push(project);
+    }
+    for child in root.children() {
+        out.extend(projects(child));
+    }
+    out
+}
+
 fn hop_by_dst<'a>(hops: &'a [ExpandAllNode], dst: &str) -> &'a ExpandAllNode {
     hops.iter()
         .find(|h| h.col_names().get(2).map(|s| s.as_str()) == Some(dst))
         .expect("hop with dst")
+}
+
+#[test]
+fn rowless_project_forwards_only_to_typed_consumers() {
+    let count_chain = count_agg(project_pass_dst(
+        hop("Link", ["a", "e1", "b"], anchor_scan("a")),
+        "b",
+    ));
+    let (annotated, _) = annotate_expand_all(&count_chain);
+    let ps = projects(&annotated);
+    assert_eq!(ps.len(), 1);
+    assert!(
+        ps[0].emit_rowless(),
+        "count consumes the typed layout directly"
+    );
+
+    let dedup_chain = PlanNodeEnum::Dedup(
+        DedupNode::new(project_pass_dst(
+            hop("Link", ["a", "e1", "b"], anchor_scan("a")),
+            "b",
+        ))
+        .expect("dedup should build"),
+    );
+    let (annotated, _) = annotate_expand_all(&dedup_chain);
+    let ps = projects(&annotated);
+    assert_eq!(ps.len(), 1);
+    assert!(
+        ps[0].emit_rowless(),
+        "identity dedup consumes the typed layout"
+    );
+
+    let terminal = project_pass_dst(hop("Link", ["a", "e1", "b"], anchor_scan("a")), "b");
+    let (annotated, _) = annotate_expand_all(&terminal);
+    let ps = projects(&annotated);
+    assert_eq!(ps.len(), 1);
+    assert!(!ps[0].emit_rowless(), "final results still need rows");
 }
 
 #[test]

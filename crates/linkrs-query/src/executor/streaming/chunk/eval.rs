@@ -16,6 +16,7 @@ use std::collections::HashMap;
 use super::kind::typed_literal_batch;
 use super::typed::{
     typed_binary_batch, typed_cast_batch, typed_column_batch, typed_unary_batch, TypedBatch,
+    TypedColumn,
 };
 
 impl DataChunk {
@@ -24,7 +25,7 @@ impl DataChunk {
     /// Evaluation length: row count, falling back to the typed layout for
     /// rowless chunks whose scan skipped the row view. Typed arms stay in
     /// lockstep like rows, so either source addresses the same positions.
-    fn eval_len(&self) -> usize {
+    pub fn eval_len(&self) -> usize {
         if self.rows.is_empty() {
             self.typed_len().unwrap_or(0)
         } else {
@@ -106,6 +107,64 @@ impl DataChunk {
         for expr in expressions {
             match self.try_eval_typed_batch(expr, env)? {
                 Some(batch) => out.push(batch.into_values()),
+                None => return Ok(None),
+            }
+        }
+        Ok(Some(out))
+    }
+
+    /// Rowless projection variant that also turns identity arguments into
+    /// non-null unit columns. The count consumer only observes NULL-ness, so
+    /// this preserves its semantics without materializing edge/vertex values.
+    pub fn try_evaluate_rowless_projection_columns(
+        &mut self,
+        expressions: &[Expression],
+        env: Option<&EvalEnv>,
+    ) -> Result<Option<Vec<TypedColumn>>, ExpressionError> {
+        let len = self.eval_len();
+        let mut out = Vec::with_capacity(expressions.len());
+        for expr in expressions {
+            match self.try_eval_typed_batch(expr, env)? {
+                Some(batch) => out.push(batch.into()),
+                None => {
+                    let Expression::Variable(name) = expr else {
+                        return Ok(None);
+                    };
+                    let Some(slot) = self.layout.slot_id(name) else {
+                        return Ok(None);
+                    };
+                    self.ensure_typed_columns();
+                    if !matches!(
+                        self.typed_column(slot),
+                        Some(TypedColumn::VertexIdentity(_)) | Some(TypedColumn::EdgeHeader(_))
+                    ) {
+                        return Ok(None);
+                    }
+                    out.push(TypedColumn::I64(vec![1; len]));
+                }
+            }
+        }
+        Ok(Some(out))
+    }
+
+    /// Batch-evaluate expressions into typed columns without materializing
+    /// `Value` rows. Used by rowless projections whose consumer reads typed
+    /// columns; returns `None` when any expression leaves the typed set.
+    pub fn try_evaluate_expressions_typed_columns(
+        &mut self,
+        expressions: &[Expression],
+        env: Option<&EvalEnv>,
+    ) -> Result<Option<Vec<TypedColumn>>, ExpressionError> {
+        if self.eval_len() == 0 {
+            return Ok(Some(vec![
+                TypedColumn::Fallback(Vec::new());
+                expressions.len()
+            ]));
+        }
+        let mut out = Vec::with_capacity(expressions.len());
+        for expr in expressions {
+            match self.try_eval_typed_batch(expr, env)? {
+                Some(batch) => out.push(batch.into()),
                 None => return Ok(None),
             }
         }
