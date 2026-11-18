@@ -380,15 +380,29 @@ impl AutoCommitBatchWindow {
     /// plus one table-log sweep; sub-Sync levels skip both fsyncs and only
     /// publish the in-memory barriers, trading crash durability for speed.
     pub fn finalize_group(&self, durability: DurabilityLevel) -> StorageResult<()> {
+        // Segment timers are opt-in so production commits pay no clock reads.
+        let segment_timing = std::env::var_os("LINKRS_COMMIT_SEGMENTS").is_some();
+        let mut apply_us = 0u128;
+        let mut wal_us = 0u128;
+        let mut sync_us = 0u128;
+        let mut timestamp_us = 0u128;
+
         // 0) Commit apply: the group's staged vertex rows install into the
         // main tables, then the accumulated WAL redo is appended as one
         // transaction (no fsync yet). A failure here aborts the whole group.
         let group_txid = *self.group_transaction_id.lock();
-        let group_commit_lsn = if let Some(txid) = group_txid {
+        let apply_start = segment_timing.then(std::time::Instant::now);
+        if let Some(txid) = group_txid {
             if let Err(error) = self.base_ctx.apply_txn_staging(txid) {
                 let _ = self.rollback_group();
                 return Err(error);
             }
+        }
+        if let Some(start) = apply_start {
+            apply_us += start.elapsed().as_micros();
+        }
+        let wal_start = segment_timing.then(std::time::Instant::now);
+        let group_commit_lsn = if let Some(txid) = group_txid {
             match self.base_ctx.commit_staged_writes_grouped(txid, &[]) {
                 Ok(lsn) => lsn,
                 Err(error) => {
@@ -399,8 +413,12 @@ impl AutoCommitBatchWindow {
         } else {
             linkrs_core::types::CommitLsn::ZERO
         };
+        if let Some(start) = wal_start {
+            wal_us += start.elapsed().as_micros();
+        }
         // 1) Durability: Sync performs one sync covering the appended group redo.
         // Sub-Sync skips the fsyncs and only advances the in-memory barriers.
+        let sync_start = segment_timing.then(std::time::Instant::now);
         if durability == DurabilityLevel::Sync {
             if let Some(persistence) = self.base_ctx.persistent.persistence.as_ref() {
                 if let Some(wal) = persistence.read().wal_manager() {
@@ -433,8 +451,12 @@ impl AutoCommitBatchWindow {
                     .advance_barriers(group_commit_lsn);
             }
         }
+        if let Some(start) = sync_start {
+            sync_us += start.elapsed().as_micros();
+        }
         // 2) Visibility: commit the shared write timestamp once, in commit
         // order, then publish the merged window write set.
+        let timestamp_start = segment_timing.then(std::time::Instant::now);
         if let Some(ts) = *self.first_ts.lock() {
             let commit_ts = self.base_ctx.commit_write_timestamp_ordered(ts)?;
             let sets = std::mem::take(&mut *self.group_write_sets.lock());
@@ -453,6 +475,19 @@ impl AutoCommitBatchWindow {
                     self.base_ctx.publish_committed_write_set(commit_ts, merged);
                 }
             }
+        }
+        if let Some(start) = timestamp_start {
+            timestamp_us += start.elapsed().as_micros();
+        }
+        if segment_timing {
+            eprintln!(
+                "COMMIT segments: statements={} apply={:.1}ms wal={:.1}ms sync={:.1}ms timestamp={:.1}ms",
+                self.statement_count.load(Ordering::SeqCst),
+                apply_us as f64 / 1000.0,
+                wal_us as f64 / 1000.0,
+                sync_us as f64 / 1000.0,
+                timestamp_us as f64 / 1000.0,
+            );
         }
         // 3) Window cleanup (unchanged): unregister snapshots, release gate.
         self.unregister_snapshots();

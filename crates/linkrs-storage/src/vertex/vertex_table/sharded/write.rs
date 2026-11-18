@@ -5,6 +5,8 @@ use linkrs_core::types::Timestamp;
 use linkrs_core::{StorageError, StorageResult, Value};
 use std::sync::Arc;
 
+/// Staged row routed to its owning shard, carrying the shard-local reserved
+/// id (not the globally encoded id used by scope and commit mapping).
 type ShardStagedInsert = (IdKey, u32, PropertyRowList);
 
 /// Every mutation a tracked commit installed, addressed by global id so a
@@ -691,6 +693,9 @@ impl ShardedVertexTable {
     }
 
     fn prevalidate_staged(&self, scope: &mut WriteScope, ts: Timestamp) -> StorageResult<()> {
+        if !scope.has_non_insert_rows_for_label(self.label) {
+            return Ok(());
+        }
         // Rows created by this commit's own insert stage are exempt from
         // the liveness check; their values were validated at staging.
         let created: std::collections::HashSet<u32> = scope
@@ -797,9 +802,10 @@ impl ShardedVertexTable {
 
     /// Apply the label's staged inserts grouped by shard. Every row commits
     /// under the global id reserved at staging time, so the reported
-    /// mapping echoes the declared ids. Rows applied before a failure are
-    /// collected in `applied` for the caller to undo; the failed row and
-    /// every later row have their unbound reservations released here.
+    /// mapping echoes the declared ids. Each shard group applies as one
+    /// pending-then-publish unit; earlier groups that already applied are
+    /// collected in `applied` for the caller to undo, while the failing
+    /// group aborts its own pending slots and returns every reservation.
     fn apply_staged_inserts(
         &self,
         scope: &mut WriteScope,
@@ -814,44 +820,44 @@ impl ShardedVertexTable {
             group.reserve(estimate);
         }
         for (key, reserved, props) in staged {
-            let idx = match &key {
-                IdKey::Text(name) => self.shard_index_by_str(name),
-                IdKey::Int(n) => self.shard_index_by_i64(*n),
-            };
-            by_shard[idx].push((key, reserved, props));
+            let (idx, local_id) = self.decode_id(reserved);
+            debug_assert_eq!(
+                idx,
+                match &key {
+                    IdKey::Text(name) => self.shard_index_by_str(name),
+                    IdKey::Int(n) => self.shard_index_by_i64(*n),
+                }
+            );
+            by_shard[idx].push((key, local_id, props));
         }
         for (shard_idx, group) in by_shard.iter().enumerate() {
             if group.is_empty() {
                 continue;
             }
             let table = self.shards[shard_idx].read();
-            let mut pos = 0usize;
-            let mut failure: Option<StorageError> = None;
-            while pos < group.len() {
-                let (key, reserved, props) = &group[pos];
-                let (_, local_id) = self.decode_id(*reserved);
-                if let Err(error) = table.apply_insert(key.clone(), props, ts, Some(local_id)) {
-                    failure = Some(error);
-                    break;
-                }
-                applied.push((shard_idx, local_id));
-                mapping.push((key.clone(), *reserved));
-                pos += 1;
-            }
-            drop(table);
-            if let Some(error) = failure {
-                // The failed row's reservation is already settled inside
-                // `apply_insert` (released or recycled through its own
-                // undo); only rows that never entered the table remain.
-                for (_, reserved, _) in &group[pos + 1..] {
-                    self.release_reserved_vertex(*reserved);
-                }
-                for later in &by_shard[shard_idx + 1..] {
-                    for (_, reserved, _) in later {
-                        self.release_reserved_vertex(*reserved);
+            match table.apply_insert_group(group, ts) {
+                Ok(local_ids) => {
+                    for ((key, _, _), local_id) in group.iter().zip(local_ids) {
+                        applied.push((shard_idx, local_id));
+                        mapping.push((key.clone(), self.encode_id(shard_idx, local_id)));
                     }
                 }
-                return Err(error);
+                Err(error) => {
+                    drop(table);
+                    // The group hook settles every reservation it bound;
+                    // releasing them again is a no-op for bound slots and
+                    // deduplicated for returned ones. Rows that never
+                    // reached this shard still need their slots returned.
+                    for (_, local_id, _) in group {
+                        self.release_reserved_vertex(self.encode_id(shard_idx, *local_id));
+                    }
+                    for (later_idx, later) in by_shard.iter().enumerate().skip(shard_idx + 1) {
+                        for (_, local_id, _) in later {
+                            self.release_reserved_vertex(self.encode_id(later_idx, *local_id));
+                        }
+                    }
+                    return Err(error);
+                }
             }
         }
         Ok(())

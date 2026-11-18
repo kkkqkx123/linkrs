@@ -309,6 +309,97 @@ fn failed_commit_leaves_no_partial_application() {
 }
 
 #[test]
+fn grouped_apply_keeps_mixed_property_patterns() {
+    let schema = VertexSchema {
+        label_id: 7,
+        label_name: "scoped".into(),
+        properties: vec![
+            StoragePropertyDef::new("name".into(), DataType::String),
+            StoragePropertyDef {
+                name: "age".into(),
+                data_type: DataType::Int,
+                nullable: true,
+                default_value: None,
+            },
+        ],
+        primary_key_index: 0,
+        schema_version: 1,
+    };
+    let table = ShardedVertexTable::with_config(7, "scoped".into(), schema, 1);
+    let ts: Timestamp = 100;
+    let mut scope = WriteScope::new(ts);
+    table
+        .insert_with_scope(
+            "with_age",
+            &[("age".into(), Value::from(7))],
+            ts,
+            &mut scope,
+        )
+        .unwrap();
+    table
+        .insert_with_scope("without_age", &[], ts, &mut scope)
+        .unwrap();
+    let applied = table
+        .commit_write_scope_tracked(&mut scope, ts)
+        .unwrap()
+        .mapping;
+    assert_eq!(applied.len(), 2);
+    let with_age = applied
+        .iter()
+        .find(|(key, _)| matches!(key, IdKey::Text(name) if name == "with_age"))
+        .map(|(_, id)| *id)
+        .expect("row with age");
+    let without_age = applied
+        .iter()
+        .find(|(key, _)| matches!(key, IdKey::Text(name) if name == "without_age"))
+        .map(|(_, id)| *id)
+        .expect("row without age");
+    assert_eq!(
+        table
+            .get_by_internal_id_offline(with_age, ts)
+            .unwrap()
+            .properties,
+        vec![
+            ("name".into(), Value::from("with_age")),
+            ("age".into(), Value::from(7)),
+        ]
+    );
+    let row = table.get_by_internal_id_offline(without_age, ts).unwrap();
+    assert_eq!(
+        row.properties,
+        vec![("name".into(), Value::from("without_age"))]
+    );
+}
+
+#[test]
+fn grouped_apply_failure_aborts_every_pending_row() {
+    let table = ShardedVertexTable::with_config(7, "scoped".into(), test_schema(), 1);
+    let ts: Timestamp = 100;
+    table.shards[0]
+        .read()
+        .mark_column_unavailable("name", "group test".into());
+    let mut scope = WriteScope::new(ts);
+    table
+        .insert_with_scope("a", &props("a"), ts, &mut scope)
+        .unwrap();
+    table
+        .insert_with_scope("b", &props("b"), ts, &mut scope)
+        .unwrap();
+    assert!(table.commit_write_scope_tracked(&mut scope, ts).is_err());
+    assert_eq!(table.lookup_pk("a", ts), PkLookup::Missing);
+    assert_eq!(table.lookup_pk("b", ts), PkLookup::Missing);
+    assert_eq!(table.approximate_total_count(), 0);
+
+    table.shards[0].read().clear_unavailable_columns();
+    let mut retry = WriteScope::new(ts);
+    table
+        .insert_with_scope("a", &props("a"), ts, &mut retry)
+        .unwrap();
+    table.commit_write_scope_tracked(&mut retry, ts).unwrap();
+    assert_eq!(table.approximate_total_count(), 1);
+}
+
+#[test]
 fn scoped_insert_rejects_cross_timestamp_reuse() {
     let table = ShardedVertexTable::with_config(7, "scoped".into(), test_schema(), 4);
     let mut scope = WriteScope::new(100);

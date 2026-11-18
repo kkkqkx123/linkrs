@@ -325,6 +325,20 @@ impl WriteScope {
         out
     }
 
+    /// Whether this label has staged updates, deletes or column deletions.
+    /// Pure insert commits skip pre-validation entirely, so they never build
+    /// the set of ids created by the same commit.
+    pub fn has_non_insert_rows_for_label(&self, label: LabelId) -> bool {
+        self.updates
+            .keys()
+            .chain(self.property_deletes.keys())
+            .any(|(entry_label, _)| *entry_label == label)
+            || self
+                .deletes
+                .iter()
+                .any(|(entry_label, _)| *entry_label == label)
+    }
+
     /// Reserved global ids of staged inserts for one label, without
     /// consuming them. Commit pre-validation exempts updates and deletes
     /// targeting these ids from the liveness check: their rows are created
@@ -404,6 +418,20 @@ mod tests {
 
     fn props(name: &str) -> Vec<(std::sync::Arc<str>, Value)> {
         vec![("name".into(), Value::from(name))]
+    }
+
+    #[test]
+    fn non_insert_probe_ignores_other_labels() {
+        let mut scope = WriteScope::new(10);
+        scope
+            .stage_insert(1, IdKey::Text("a".into()), 100, props("a"))
+            .expect("first stage succeeds");
+        assert!(!scope.has_non_insert_rows_for_label(1));
+        scope
+            .stage_update(2, 200, props("b"))
+            .expect("other label update succeeds");
+        assert!(!scope.has_non_insert_rows_for_label(1));
+        assert!(scope.has_non_insert_rows_for_label(2));
     }
 
     #[test]

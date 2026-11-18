@@ -1,10 +1,12 @@
 //! Insert pipeline, identity allocation, and primary-key mirror writes.
 
+use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use super::VertexTable;
-use crate::vertex::{primary_key_mirror_value, IdKey, PkLookup, Timestamp};
+use crate::types::PropertyRowList;
+use crate::vertex::{primary_key_mirror_value, IdKey, PkLookup, Timestamp, VertexTimestamp};
 use linkrs_core::{StorageError, StorageResult, Value};
 
 impl VertexTable {
@@ -88,45 +90,7 @@ impl VertexTable {
         // step below runs without exposing a half-written row.
         let (internal_id, fresh) = {
             let mut stamps = self.timestamps.write();
-            if let Some(existing) = self.id_indexer.get_index(&key) {
-                if stamps.is_pending(existing) {
-                    if let Some(id) = reserved {
-                        self.id_indexer.release_reserved(id);
-                    }
-                    return Err(StorageError::vertex_already_exists(format!("{:?}", key)));
-                }
-                if stamps.is_valid(existing, ts) {
-                    if let Some(id) = reserved {
-                        self.id_indexer.release_reserved(id);
-                    }
-                    return Err(StorageError::vertex_already_exists(format!("{:?}", key)));
-                }
-                if matches!(reserved, Some(id) if id != existing) {
-                    if let Some(id) = reserved {
-                        self.id_indexer.release_reserved(id);
-                    }
-                    return Err(StorageError::vertex_already_exists(format!("{:?}", key)));
-                }
-                stamps.mark_pending(existing);
-                (existing, false)
-            } else {
-                let bound = match reserved {
-                    Some(id) => self.id_indexer.register_reserved(key, id).map(|()| id),
-                    None => self.id_indexer.insert(key),
-                };
-                match bound {
-                    Ok(internal_id) => {
-                        stamps.mark_pending(internal_id);
-                        (internal_id, true)
-                    }
-                    Err(error) => {
-                        if let Some(id) = reserved {
-                            self.id_indexer.release_reserved(id);
-                        }
-                        return Err(error);
-                    }
-                }
-            }
+            self.bind_insert_identity(&mut *stamps, &key, reserved, ts)?
         };
 
         // Data step: segment-latched column writes, identity latch released.
@@ -149,6 +113,137 @@ impl VertexTable {
             }
         }
         Ok(internal_id)
+    }
+
+    /// Bind one insert's key to its reserved or freshly allocated slot and
+    /// mark that slot pending. The caller holds the identity latch. A failed
+    /// bind settles the caller's reservation exactly like the inline identity
+    /// step, so point and group paths share one contract.
+    fn bind_insert_identity(
+        &self,
+        stamps: &mut VertexTimestamp,
+        key: &IdKey,
+        reserved: Option<u32>,
+        ts: Timestamp,
+    ) -> StorageResult<(u32, bool)> {
+        if let Some(existing) = self.id_indexer.get_index(key) {
+            if stamps.is_pending(existing)
+                || stamps.is_valid(existing, ts)
+                || matches!(reserved, Some(id) if id != existing)
+            {
+                if let Some(id) = reserved {
+                    self.id_indexer.release_reserved(id);
+                }
+                return Err(StorageError::vertex_already_exists(format!("{:?}", key)));
+            }
+            stamps.mark_pending(existing);
+            return Ok((existing, false));
+        }
+        let bound = match reserved {
+            Some(id) => self
+                .id_indexer
+                .register_reserved(key.clone(), id)
+                .map(|()| id),
+            None => self.id_indexer.insert(key.clone()),
+        };
+        match bound {
+            Ok(internal_id) => {
+                stamps.mark_pending(internal_id);
+                Ok((internal_id, true))
+            }
+            Err(error) => {
+                if let Some(id) = reserved {
+                    self.id_indexer.release_reserved(id);
+                }
+                Err(error)
+            }
+        }
+    }
+
+    /// Apply one shard's staged insert group. All identities bind and mark
+    /// pending under one identity-latch hold, all column data lands while the
+    /// rows are still pending, then one latch hold publishes every creation
+    /// stamp. Any failure aborts every pending slot of the group, so readers
+    /// never observe a row whose columns are incomplete.
+    pub(crate) fn apply_insert_group(
+        &self,
+        group: &[(IdKey, u32, PropertyRowList)],
+        ts: Timestamp,
+    ) -> StorageResult<Vec<u32>> {
+        if !self.is_open.load(Ordering::Acquire) {
+            for (_, reserved, _) in group {
+                self.id_indexer.release_reserved(*reserved);
+            }
+            return Err(StorageError::storage_not_open());
+        }
+
+        let (prepared, failure) = {
+            let mut stamps = self.timestamps.write();
+            let mut prepared = Vec::with_capacity(group.len());
+            let mut failure = None;
+            for (key, reserved, _) in group {
+                match self.bind_insert_identity(&mut *stamps, key, Some(*reserved), ts) {
+                    Ok(bound) => prepared.push(bound),
+                    Err(error) => {
+                        failure = Some(error);
+                        break;
+                    }
+                }
+            }
+            (prepared, failure)
+        };
+        if let Some(error) = failure {
+            self.abort_prepared_inserts(&prepared);
+            return Err(error);
+        }
+
+        // Property patterns repeat across rows of one label. Resolve each
+        // distinct name sequence once; the shard read guard held by the
+        // caller excludes structural schema changes for the whole group.
+        let mut resolved_patterns: HashMap<Vec<Arc<str>>, Vec<(Arc<str>, usize)>> = HashMap::new();
+        for ((_, _, props), (internal_id, _)) in group.iter().zip(&prepared) {
+            let names: Vec<Arc<str>> = props.iter().map(|(name, _)| name.clone()).collect();
+            let resolved = match resolved_patterns.entry(names) {
+                std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    let mut resolved = Vec::with_capacity(props.len());
+                    for (name, _) in props {
+                        match self.columns.index_of(name) {
+                            Some(idx) => resolved.push((name.clone(), idx)),
+                            None => {
+                                self.abort_prepared_inserts(&prepared);
+                                return Err(StorageError::column_not_found(name.to_string()));
+                            }
+                        }
+                    }
+                    entry.insert(resolved)
+                }
+            };
+            if let Err(error) =
+                self.columns
+                    .set_versioned_resolved(*internal_id as usize, props, resolved, ts)
+            {
+                self.abort_prepared_inserts(&prepared);
+                return Err(error);
+            }
+        }
+
+        {
+            let mut stamps = self.timestamps.write();
+            for (internal_id, _) in &prepared {
+                stamps.insert(*internal_id, ts);
+            }
+        }
+        Ok(prepared
+            .into_iter()
+            .map(|(internal_id, _)| internal_id)
+            .collect())
+    }
+
+    fn abort_prepared_inserts(&self, prepared: &[(u32, bool)]) {
+        for &(internal_id, fresh) in prepared {
+            self.abort_pending_insert(internal_id, fresh);
+        }
     }
 
     fn abort_pending_insert(&self, internal_id: u32, fresh: bool) {

@@ -283,7 +283,15 @@ impl ColumnStore {
     /// every data path that would decode or write the column calls it first
     /// so the error names the column instead of refusing the whole table.
     pub fn check_column_available(&self, name: &str) -> StorageResult<()> {
-        if let Some(reason) = self.unavailable.read().get(name) {
+        let unavailable = self.unavailable.read();
+        Self::check_column_available_in(&unavailable, name)
+    }
+
+    fn check_column_available_in(
+        unavailable: &std::collections::HashMap<String, String>,
+        name: &str,
+    ) -> StorageResult<()> {
+        if let Some(reason) = unavailable.get(name) {
             return Err(StorageError::deserialize_error(format!(
                 "column {} unavailable: {}",
                 name, reason
@@ -404,8 +412,14 @@ impl ColumnStore {
     /// so point-path call sites work unchanged; the guard must not be held
     /// across structural store operations.
     pub fn get_column(&self, name: &str) -> Option<parking_lot::MappedRwLockReadGuard<'_, Column>> {
-        let idx = *self.name_to_index.read().get(name)?;
+        let idx = self.index_of(name)?;
         parking_lot::RwLockReadGuard::try_map(self.columns.read(), |cols| cols.get(idx)).ok()
+    }
+
+    /// Physical index of one column. Batch callers resolve it once per
+    /// property-name pattern and reuse it for every row of the group.
+    pub fn index_of(&self, name: &str) -> Option<usize> {
+        self.name_to_index.read().get(name).copied()
     }
 
     /// The declared data type of the column `name`, if it exists.
@@ -451,6 +465,31 @@ impl ColumnStore {
             if let Some(col) = self.get_column(name) {
                 col.set_versioned(row_idx, Some(value), ts)?;
             }
+        }
+        Ok(())
+    }
+
+    /// Versioned write using column indices resolved once for a batch group.
+    /// Availability is rechecked per row because a failed checkpoint load can
+    /// mark a column unavailable while a writer holds only the shard read
+    /// guard; structural column changes require the shard write guard and
+    /// cannot overlap the group.
+    pub fn set_versioned_resolved(
+        &self,
+        row_idx: usize,
+        values: &[(Arc<str>, Value)],
+        resolved: &[(Arc<str>, usize)],
+        ts: Timestamp,
+    ) -> StorageResult<()> {
+        debug_assert_eq!(values.len(), resolved.len());
+        let unavailable = self.unavailable.read();
+        let columns = self.columns.read();
+        for ((_, value), (name, idx)) in values.iter().zip(resolved) {
+            Self::check_column_available_in(&unavailable, name)?;
+            let col = columns
+                .get(*idx)
+                .ok_or_else(|| StorageError::column_not_found(name.to_string()))?;
+            col.set_versioned(row_idx, Some(value), ts)?;
         }
         Ok(())
     }
