@@ -19,8 +19,37 @@
 
 use std::sync::Arc;
 
-use linkrs_core::types::VertexId;
+use linkrs_core::types::{LabelId, VertexId};
 use linkrs_core::{EdgeHeader, Value};
+
+/// Vertex identity plus the storage handle captured by a topology-only scan.
+///
+/// The external id remains the public value; the internal pair is a hint for
+/// a direct CSR lookup and is `None` whenever the producer has no storage
+/// row address.
+#[derive(Debug, Clone, Default)]
+pub struct VertexHandleColumn {
+    pub ids: Vec<VertexId>,
+    pub internals: Vec<Option<(u32, LabelId)>>,
+}
+
+impl VertexHandleColumn {
+    pub fn len(&self) -> usize {
+        self.ids.len()
+    }
+
+    pub fn estimated_size(&self) -> usize {
+        self.ids.capacity() * std::mem::size_of::<VertexId>()
+            + self.internals.capacity() * std::mem::size_of::<Option<(u32, LabelId)>>()
+    }
+
+    pub fn gather(&self, indices: &[usize]) -> Self {
+        Self {
+            ids: indices.iter().map(|&i| self.ids[i]).collect(),
+            internals: indices.iter().map(|&i| self.internals[i]).collect(),
+        }
+    }
+}
 
 /// Struct-of-arrays edge identity column: one `(src, dst, edge_type,
 /// ranking)` tuple per row with no property map and no storage-internal
@@ -237,6 +266,8 @@ macro_rules! column_variants {
             NullableDecimal(Vec<Decimal128Value>, Vec<u64>),
             /// Vertex identity column: one id per row, never NULL.
             VertexIdentity(Vec<linkrs_core::types::VertexId>),
+            /// Vertex identity with an optional storage handle.
+            VertexHandle(crate::executor::streaming::chunk::VertexHandleColumn),
             /// Edge identity column: struct-of-arrays headers, never NULL.
             EdgeHeader(EdgeHeaderColumn),
             Fallback(Vec<Value>),
@@ -263,6 +294,7 @@ macro_rules! column_variants {
                     $name::NullableUtf8(v, _) => v.len(),
                     $name::NullableDecimal(v, _) => v.len(),
                     $name::VertexIdentity(v) => v.len(),
+                    $name::VertexHandle(v) => v.len(),
                     $name::EdgeHeader(v) => v.len(),
                     $name::Fallback(v) => v.len(),
                 }
@@ -319,6 +351,7 @@ macro_rules! column_variants {
                     $name::VertexIdentity(v) => {
                         v.capacity() * std::mem::size_of::<linkrs_core::types::VertexId>()
                     }
+                    $name::VertexHandle(v) => v.estimated_size(),
                     $name::EdgeHeader(v) => v.estimated_size(),
                     $name::Fallback(v) => v.iter().map(Value::estimated_size).sum(),
                 }
@@ -383,6 +416,7 @@ macro_rules! gather_column {
             TypedColumn::VertexIdentity(v) => {
                 $out::VertexIdentity(indices.iter().map(|&i| v[i]).collect())
             }
+            TypedColumn::VertexHandle(v) => $out::VertexHandle(v.gather(indices)),
             TypedColumn::EdgeHeader(v) => $out::EdgeHeader(v.gather(indices)),
             TypedColumn::Fallback(v) => {
                 $out::Fallback(indices.iter().map(|&i| v[i].clone()).collect())

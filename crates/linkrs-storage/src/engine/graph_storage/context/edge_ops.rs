@@ -21,7 +21,7 @@ type PartitionedEdges = Vec<(LabelPair, EdgeEndpoints)>;
 
 /// Project a stored internal endpoint id to its external `VertexId` using the
 /// edge table's owning label. Unresolved ids stay unchanged (dangling edge).
-fn endpoint_to_external(
+pub(crate) fn endpoint_to_external(
     ctx: &GraphStorageContext,
     label: LabelId,
     vid: VertexId,
@@ -63,6 +63,16 @@ fn defer_edge_wal_sync(ctx: &GraphStorageContext) -> bool {
 }
 
 impl GraphStorageContext {
+    /// Project a raw CSR endpoint through its owning vertex label.
+    pub(crate) fn endpoint_to_external(
+        &self,
+        label: LabelId,
+        vid: VertexId,
+        ts: Timestamp,
+    ) -> VertexId {
+        endpoint_to_external(self, label, vid, ts)
+    }
+
     pub fn insert_edge(&self, params: InsertEdgeParams) -> StorageResult<()> {
         if !self.persistent.is_open.load(Ordering::Acquire) {
             return Err(StorageError::storage_not_open());
@@ -964,6 +974,92 @@ impl GraphStorageContext {
                     .collect()
             })
             .collect()
+    }
+
+    /// Topology-only out-adjacency for a whole seed batch.
+    ///
+    /// Keeps raw internal endpoints so the caller can translate the much
+    /// smaller set of distinct destinations once, rather than per edge.
+    pub fn out_topology_batch(
+        &self,
+        edge_label: LabelId,
+        src_label: LabelId,
+        src_ids: &[VertexId],
+        handles: Option<&[Option<(u32, LabelId)>]>,
+        ts: Timestamp,
+    ) -> Vec<Vec<(LabelId, HotNbr)>> {
+        let resolved: Vec<Option<(u32, LabelId)>> = match handles {
+            Some(handles) => handles
+                .iter()
+                .zip(src_ids.iter())
+                .map(|(&handle, &id)| match handle {
+                    Some((internal, label)) if label == src_label => Some((internal, label)),
+                    _ => self.resolve_node_endpoint(src_label, id, ts),
+                })
+                .collect(),
+            None => self.resolve_node_endpoints(src_label, src_ids, ts),
+        };
+        let arcs = self
+            .persistent
+            .data_store
+            .matching_edge_partition_arcs(edge_label);
+        let gate = self.pending_gate();
+        let mut staged: Vec<Vec<(LabelId, HotNbr)>> = vec![Vec::new(); src_ids.len()];
+        for arc in &arcs {
+            let table = self.persistent.data_store.read_edge_table(arc);
+            if table.label() != edge_label {
+                continue;
+            }
+            let far_label = table.dst_label();
+            for (index, seed) in resolved.iter().enumerate() {
+                let Some((src_internal, actual_src)) = seed else {
+                    continue;
+                };
+                if table.src_label() != *actual_src {
+                    continue;
+                }
+                for hot in table.out_topology_with_gate(*src_internal, ts, &gate) {
+                    staged[index].push((far_label, hot));
+                }
+            }
+        }
+        staged
+    }
+
+    /// In-direction counterpart of [`Self::out_topology_batch`].
+    pub fn in_topology_batch(
+        &self,
+        edge_label: LabelId,
+        dst_label: LabelId,
+        dst_ids: &[VertexId],
+        ts: Timestamp,
+    ) -> Vec<Vec<(LabelId, HotNbr)>> {
+        let resolved = self.resolve_node_endpoints(dst_label, dst_ids, ts);
+        let arcs = self
+            .persistent
+            .data_store
+            .matching_edge_partition_arcs(edge_label);
+        let gate = self.pending_gate();
+        let mut staged: Vec<Vec<(LabelId, HotNbr)>> = vec![Vec::new(); dst_ids.len()];
+        for arc in &arcs {
+            let table = self.persistent.data_store.read_edge_table(arc);
+            if table.label() != edge_label {
+                continue;
+            }
+            let far_label = table.src_label();
+            for (index, seed) in resolved.iter().enumerate() {
+                let Some((dst_internal, actual_dst)) = seed else {
+                    continue;
+                };
+                if table.dst_label() != *actual_dst {
+                    continue;
+                }
+                for hot in table.in_topology_with_gate(*dst_internal, ts, &gate) {
+                    staged[index].push((far_label, hot));
+                }
+            }
+        }
+        staged
     }
 
     /// Out-direction projected scan shared by the unbounded and limit

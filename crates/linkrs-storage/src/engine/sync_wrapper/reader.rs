@@ -67,6 +67,7 @@ impl<S: StorageClient + 'static> StorageReader for SyncWrapper<S> {
             &self,
             space: &str,
             node_ids: &[VertexId],
+            handles: Option<&[Option<(u32, u32)>]>,
             direction: linkrs_core::EdgeDirection,
             edge_types: &[String],
         ) -> Result<Vec<Vec<crate::EdgeTopology>>, StorageError>;

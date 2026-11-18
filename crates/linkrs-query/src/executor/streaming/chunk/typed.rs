@@ -174,6 +174,7 @@ impl TypedColumn {
                 }
             }
             TypedColumn::VertexIdentity(v) => v.get(idx).map(|&id| Value::VertexId(id)),
+            TypedColumn::VertexHandle(v) => v.ids.get(idx).map(|&id| Value::VertexId(id)),
             TypedColumn::EdgeHeader(v) => v.header_at(idx).map(Value::edge_header),
             TypedColumn::Fallback(v) => v.get(idx).cloned(),
         }
@@ -285,6 +286,7 @@ impl TypedColumn {
                 })
                 .collect(),
             TypedColumn::VertexIdentity(v) => v.iter().map(|&id| Value::VertexId(id)).collect(),
+            TypedColumn::VertexHandle(v) => v.ids.iter().map(|&id| Value::VertexId(id)).collect(),
             TypedColumn::EdgeHeader(v) => v.to_values(),
             TypedColumn::Fallback(v) => v.clone(),
         }

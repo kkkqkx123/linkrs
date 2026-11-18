@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::edge::CsrBase;
@@ -495,6 +495,7 @@ pub(crate) fn get_node_edge_headers_batch(
     ctx: &GraphStorageContext,
     space: &str,
     src_ids: &[VertexId],
+    handles: Option<&[Option<(u32, LabelId)>]>,
     direction: EdgeDirection,
     edge_types: &[String],
 ) -> StorageResult<Vec<Vec<EdgeTopology>>> {
@@ -516,6 +517,10 @@ pub(crate) fn get_node_edge_headers_batch(
         record_vertex_read(ctx, *id);
     }
     let mut out: Vec<Vec<EdgeTopology>> = vec![Vec::new(); normalized.len()];
+    // A traversal batch reaches a small set of destinations many times.
+    // Translate each internal endpoint once per call instead of once per
+    // CSR slot, while keeping the CSR visit order unchanged.
+    let mut translated: HashMap<(LabelId, u32), VertexId> = HashMap::new();
 
     for edge_info in &edge_types_all {
         if !edge_types.is_empty() && !edge_types.contains(&edge_info.edge_type_name) {
@@ -531,84 +536,113 @@ pub(crate) fn get_node_edge_headers_batch(
         let edge_type: Arc<str> = Arc::from(edge_info.edge_type_name.as_str());
         match direction {
             EdgeDirection::Out => {
-                let batches = ctx.out_edges_projected_batch(
+                let batches = ctx.out_topology_batch(
                     edge_label_id,
                     src_label_id,
                     &normalized,
+                    handles,
                     ts,
-                    Some(&[]),
                 );
-                for (index, records) in batches.into_iter().enumerate() {
-                    for record in records {
+                for (index, hots) in batches.into_iter().enumerate() {
+                    for (far_label, hot) in hots {
+                        let dst =
+                            *translated
+                                .entry((far_label, hot.endpoint))
+                                .or_insert_with(|| {
+                                    ctx.endpoint_to_external(
+                                        far_label,
+                                        VertexId::from_u32(hot.endpoint),
+                                        ts,
+                                    )
+                                });
                         out[index].push(EdgeTopology {
                             src: normalized[index],
-                            dst: record.dst_vid,
+                            dst,
                             edge_type: Arc::clone(&edge_type),
-                            ranking: record.rank,
+                            ranking: hot.rank,
                         });
                     }
                 }
             }
             EdgeDirection::In => {
-                let batches = ctx.in_edges_projected_batch(
-                    edge_label_id,
-                    dst_label_id,
-                    &normalized,
-                    ts,
-                    Some(&[]),
-                );
-                for (index, records) in batches.into_iter().enumerate() {
-                    for record in records {
+                let batches = ctx.in_topology_batch(edge_label_id, dst_label_id, &normalized, ts);
+                for (index, hots) in batches.into_iter().enumerate() {
+                    for (far_label, hot) in hots {
+                        let src =
+                            *translated
+                                .entry((far_label, hot.endpoint))
+                                .or_insert_with(|| {
+                                    ctx.endpoint_to_external(
+                                        far_label,
+                                        VertexId::from_u32(hot.endpoint),
+                                        ts,
+                                    )
+                                });
                         out[index].push(EdgeTopology {
-                            src: record.src_vid,
+                            src,
                             dst: normalized[index],
                             edge_type: Arc::clone(&edge_type),
-                            ranking: record.rank,
+                            ranking: hot.rank,
                         });
                     }
                 }
             }
             EdgeDirection::Both => {
-                let out_batches = ctx.out_edges_projected_batch(
+                let out_batches = ctx.out_topology_batch(
                     edge_label_id,
                     src_label_id,
                     &normalized,
+                    handles,
                     ts,
-                    Some(&[]),
                 );
-                let in_batches = ctx.in_edges_projected_batch(
-                    edge_label_id,
-                    dst_label_id,
-                    &normalized,
-                    ts,
-                    Some(&[]),
-                );
-                for (index, (out_records, in_records)) in
+                let in_batches =
+                    ctx.in_topology_batch(edge_label_id, dst_label_id, &normalized, ts);
+                for (index, (out_hots, in_hots)) in
                     out_batches.into_iter().zip(in_batches).enumerate()
                 {
                     let mut seen: HashSet<(VertexId, VertexId, i64)> = HashSet::new();
-                    for record in out_records {
-                        let key = (normalized[index], record.dst_vid, record.rank);
+                    for (far_label, hot) in out_hots {
+                        let dst =
+                            *translated
+                                .entry((far_label, hot.endpoint))
+                                .or_insert_with(|| {
+                                    ctx.endpoint_to_external(
+                                        far_label,
+                                        VertexId::from_u32(hot.endpoint),
+                                        ts,
+                                    )
+                                });
+                        let key = (normalized[index], dst, hot.rank);
                         if !seen.insert(key) {
                             continue;
                         }
                         out[index].push(EdgeTopology {
                             src: normalized[index],
-                            dst: record.dst_vid,
+                            dst,
                             edge_type: Arc::clone(&edge_type),
-                            ranking: record.rank,
+                            ranking: hot.rank,
                         });
                     }
-                    for record in in_records {
-                        let key = (record.src_vid, normalized[index], record.rank);
+                    for (far_label, hot) in in_hots {
+                        let src =
+                            *translated
+                                .entry((far_label, hot.endpoint))
+                                .or_insert_with(|| {
+                                    ctx.endpoint_to_external(
+                                        far_label,
+                                        VertexId::from_u32(hot.endpoint),
+                                        ts,
+                                    )
+                                });
+                        let key = (src, normalized[index], hot.rank);
                         if !seen.insert(key) {
                             continue;
                         }
                         out[index].push(EdgeTopology {
-                            src: record.src_vid,
+                            src,
                             dst: normalized[index],
                             edge_type: Arc::clone(&edge_type),
-                            ranking: record.rank,
+                            ranking: hot.rank,
                         });
                     }
                 }

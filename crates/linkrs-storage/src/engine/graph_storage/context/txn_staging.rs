@@ -1126,9 +1126,11 @@ impl super::GraphStorageContext {
             // resolution, uniqueness checks and invalidation all bypass it,
             // and later queries warm it themselves. Skip the per-row format
             // and insert; domain evidence stays because planning reads it.
-            let bulk_window = self.persistent.persistence.as_ref().is_some_and(
-                |coordinator| coordinator.read().bulk_load_active(),
-            );
+            let bulk_window = self
+                .persistent
+                .persistence
+                .as_ref()
+                .is_some_and(|coordinator| coordinator.read().bulk_load_active());
             for (key, id) in &commit.mapping {
                 if !bulk_window {
                     let external = match key {

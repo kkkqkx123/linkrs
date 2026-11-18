@@ -303,6 +303,7 @@ mod tests {
         let record = FlatVertexRecord {
             vid: VertexId::try_from_int64(42).expect("valid vertex id"),
             internal_id: 7,
+            label_id: None,
             tag_name: "person".to_string(),
             props: vec![
                 ("age".into(), Value::BigInt(30)),
@@ -330,6 +331,7 @@ mod tests {
         let record = FlatVertexRecord {
             vid: VertexId::try_from_int64(42).expect("valid vertex id"),
             internal_id: 7,
+            label_id: None,
             tag_name: "person".to_string(),
             props: vec![
                 ("age".into(), Value::BigInt(30)),
@@ -377,6 +379,7 @@ mod tests {
         let record = FlatVertexRecord {
             vid: VertexId::try_from_int64(42).expect("valid vertex id"),
             internal_id: 7,
+            label_id: None,
             tag_name: "person".to_string(),
             props: vec![("age".into(), Value::BigInt(30))],
         };
@@ -392,6 +395,7 @@ mod tests {
         let record = FlatVertexRecord {
             vid: VertexId::try_from_int64(42).expect("valid vertex id"),
             internal_id: 7,
+            label_id: None,
             tag_name: "person".to_string(),
             props: vec![("age".into(), Value::BigInt(30))],
         };

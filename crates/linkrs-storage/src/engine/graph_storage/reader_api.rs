@@ -140,10 +140,18 @@ impl StorageReader for GraphStorage {
         &self,
         space: &str,
         node_ids: &[VertexId],
+        handles: Option<&[Option<(u32, u32)>]>,
         direction: linkrs_core::EdgeDirection,
         edge_types: &[String],
     ) -> Result<Vec<Vec<crate::EdgeTopology>>, StorageError> {
-        reader::get_node_edge_headers_batch(&self.ctx, space, node_ids, direction, edge_types)
+        reader::get_node_edge_headers_batch(
+            &self.ctx,
+            space,
+            node_ids,
+            handles,
+            direction,
+            edge_types,
+        )
     }
 
     fn get_vertices_batch(

@@ -306,12 +306,13 @@ impl<S: StorageClient> StorageReader for MetricsStorage<S> {
         &self,
         space: &str,
         node_ids: &[VertexId],
+        handles: Option<&[Option<(u32, u32)>]>,
         direction: EdgeDirection,
         edge_types: &[String],
     ) -> Result<Vec<Vec<EdgeTopology>>, StorageError> {
         self.timed_read(|| {
             self.inner
-                .get_node_edge_headers_batch(space, node_ids, direction, edge_types)
+                .get_node_edge_headers_batch(space, node_ids, handles, direction, edge_types)
         })
     }
 

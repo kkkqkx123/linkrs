@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
-use linkrs_core::types::{DataType, Timestamp};
+use linkrs_core::types::{DataType, LabelId, Timestamp};
 use linkrs_core::StorageError;
 
 pub mod column_batch;
@@ -343,6 +343,8 @@ pub struct FlatVertexRecord {
     pub vid: linkrs_core::types::VertexId,
     /// Internal (storage) vertex ID.
     pub internal_id: i64,
+    /// Owning label, when the native cursor can supply it.
+    pub label_id: Option<LabelId>,
     /// Tag (label) name of the scanned table.
     pub tag_name: String,
     /// Projected properties in storage order.
@@ -401,6 +403,7 @@ pub trait VertexCursor: Send + std::fmt::Debug {
                 // integer vids project to their row key, anything else
                 // reports -1. Storage engines override this with real ids.
                 internal_id: v.vid.as_internal_u32().map(|id| id as i64).unwrap_or(-1),
+                label_id: None,
                 tag_name: v.tag.name.clone(),
                 props: v.tag.properties.clone().into_iter().collect(),
             })
@@ -430,6 +433,7 @@ pub trait VertexCursor: Send + std::fmt::Debug {
         let mut batch = VertexColumnBatch {
             vids: Vec::with_capacity(row_count),
             internal_ids: Vec::with_capacity(row_count),
+            label_ids: Vec::with_capacity(row_count),
             tag_names: Vec::with_capacity(row_count),
             columns: Vec::with_capacity(prop_names.len()),
         };
@@ -441,6 +445,7 @@ pub trait VertexCursor: Send + std::fmt::Debug {
             batch.tag_names.push(record.tag_name.clone());
             batch.vids.push(record.vid);
             batch.internal_ids.push(record.internal_id);
+            batch.label_ids.push(record.label_id);
             for (i, name) in prop_names.iter().enumerate() {
                 let value = record
                     .props

@@ -136,7 +136,9 @@ impl DataChunk {
                     self.ensure_typed_columns();
                     if !matches!(
                         self.typed_column(slot),
-                        Some(TypedColumn::VertexIdentity(_)) | Some(TypedColumn::EdgeHeader(_))
+                        Some(TypedColumn::VertexIdentity(_))
+                            | Some(TypedColumn::VertexHandle(_))
+                            | Some(TypedColumn::EdgeHeader(_))
                     ) {
                         return Ok(None);
                     }

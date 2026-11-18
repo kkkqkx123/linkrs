@@ -49,7 +49,9 @@ pub(super) fn count_identity_arg(
     };
     matches!(
         chunk.typed_column(slot),
-        Some(TypedColumn::VertexIdentity(_)) | Some(TypedColumn::EdgeHeader(_))
+        Some(TypedColumn::VertexIdentity(_))
+            | Some(TypedColumn::VertexHandle(_))
+            | Some(TypedColumn::EdgeHeader(_))
     )
 }
 

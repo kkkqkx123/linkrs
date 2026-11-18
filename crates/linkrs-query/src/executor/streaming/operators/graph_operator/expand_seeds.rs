@@ -6,6 +6,7 @@ use crate::executor::streaming::context::ValueRowContext;
 use crate::executor::streaming::slot::SlotLayout;
 use linkrs_core::types::expr::Expression;
 use linkrs_core::types::storage_ids::VertexId;
+use linkrs_core::types::LabelId;
 use linkrs_core::Value;
 
 use super::expand_buffer::visible_rows;
@@ -19,6 +20,24 @@ pub(super) fn identity_seed_ids(chunk: &DataChunk, seed_slot: usize) -> Option<&
         Some(TypedColumn::VertexIdentity(ids)) => Some(ids),
         _ => None,
     }
+}
+
+/// Recover the storage handles attached to a topology-only identity scan.
+/// Positions come from `parse_seeds`, so the returned vector stays aligned
+/// with the seed ids even after selection or filtering.
+pub(super) fn identity_seed_handles(
+    chunk: &DataChunk,
+    seed_slot: usize,
+    positions: &[usize],
+) -> Vec<Option<(u32, LabelId)>> {
+    let handle = match chunk.typed_column(seed_slot) {
+        Some(TypedColumn::VertexHandle(handle)) => Some(handle),
+        _ => None,
+    };
+    positions
+        .iter()
+        .map(|&pos| handle.and_then(|h| h.internals.get(pos).copied()).flatten())
+        .collect()
 }
 
 /// Resolve the seed id for one visible row: identity scan output reads the

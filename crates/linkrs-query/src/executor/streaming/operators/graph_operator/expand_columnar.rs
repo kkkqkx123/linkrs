@@ -13,7 +13,7 @@ use super::expand_dispatch::{
     bypass_column, closed_loop_dst_tag, dst_bypass_value, edge_bypass_value, edge_projection,
     has_bypass_conflict, hop_bypass, ColumnarOutcome,
 };
-use super::expand_seeds::{parse_seeds, seed_slot};
+use super::expand_seeds::{identity_seed_handles, parse_seeds, seed_slot};
 use super::ExpandCtx;
 
 /// Destination batch read honoring the bypass projection.
@@ -240,6 +240,11 @@ pub(super) fn expand_single_step_columnar(
     let projection = edge_projection(ctx.edge_required_props.as_deref());
     let projection_ref = projection.as_deref();
     let edge_empty = matches!(ctx.edge_required_props.as_ref(), Some(v) if v.is_empty());
+    let seed_handles = if edge_empty && ctx.edge_required_props.is_some() {
+        identity_seed_handles(chunk, seed_slot, &seed_positions)
+    } else {
+        Vec::new()
+    };
     let dst_empty = matches!(ctx.dst_required_props.as_ref(), Some(v) if v.is_empty());
 
     struct PendingEdge {
@@ -250,8 +255,13 @@ pub(super) fn expand_single_step_columnar(
     let mut pending: Vec<PendingEdge> = Vec::new();
     let mut all_dst: Vec<VertexId> = Vec::new();
     if edge_empty && ctx.edge_required_props.is_some() {
-        let batches =
-            reader.get_node_edge_headers_batch(space_name, &seed_vids, direction, edge_types)?;
+        let batches = reader.get_node_edge_headers_batch(
+            space_name,
+            &seed_vids,
+            Some(&seed_handles),
+            direction,
+            edge_types,
+        )?;
         for (seed_idx, (vid, headers)) in seed_vids.iter().zip(batches.iter()).enumerate() {
             for topology in headers {
                 let dst = edge_neighbor_topology(topology, vid, direction);

@@ -60,7 +60,7 @@ mod typed;
 pub use collector::{LocalChunkCollector, COLLECTOR_BLOCK_ROWS};
 pub use columnar_batch::{BatchColumn, ColumnarBatch};
 pub(crate) use columnar_common::bitmap_is_valid;
-pub use columnar_common::EdgeHeaderColumn;
+pub use columnar_common::{EdgeHeaderColumn, VertexHandleColumn};
 pub use core::DataChunk;
 pub(crate) use policy::use_columnar_path;
 pub use policy::{ColumnarPolicy, QueryColumnarOverride};

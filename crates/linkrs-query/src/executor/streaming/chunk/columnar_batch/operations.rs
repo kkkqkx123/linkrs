@@ -59,6 +59,7 @@ impl BatchColumn {
             BatchColumn::Empty
             | BatchColumn::Fallback(_)
             | BatchColumn::VertexIdentity(_)
+            | BatchColumn::VertexHandle(_)
             | BatchColumn::EdgeHeader(_) => None,
             BatchColumn::I64(_) | BatchColumn::NullableI64(..) => Some(TypedKind::I64),
             BatchColumn::F64(_) | BatchColumn::NullableF64(..) => Some(TypedKind::F64),
@@ -146,6 +147,11 @@ impl BatchColumn {
                 .get(idx)
                 .map(|&id| Value::VertexId(id))
                 .unwrap_or(Value::Null(NullType::Null)),
+            BatchColumn::VertexHandle(v) => v
+                .ids
+                .get(idx)
+                .map(|&id| Value::VertexId(id))
+                .unwrap_or(Value::Null(NullType::Null)),
             BatchColumn::EdgeHeader(v) => v
                 .header_at(idx)
                 .map(Value::edge_header)
@@ -221,6 +227,7 @@ impl BatchColumn {
                 nullable_cmp_at(bm, &v[a], &v[b], a, b, |x, y| x.cmp(y))
             }
             BatchColumn::VertexIdentity(v) => v[a].cmp(&v[b]),
+            BatchColumn::VertexHandle(v) => v.ids[a].cmp(&v.ids[b]),
             // Edge headers have no raw `Ord`: compare the materialized
             // values exactly as the `Fallback` path does.
             BatchColumn::EdgeHeader(v) => compare_values(
@@ -565,6 +572,19 @@ impl BatchColumn {
             },
             BatchColumn::VertexIdentity(buf) => match col {
                 TypedColumn::VertexIdentity(src) => buf.extend(indices.iter().map(|&i| src[i])),
+                TypedColumn::VertexHandle(src) => buf.extend(indices.iter().map(|&i| src.ids[i])),
+                _ => *self = Self::degraded_append(self, col, indices),
+            },
+            BatchColumn::VertexHandle(buf) => match col {
+                TypedColumn::VertexHandle(src) => {
+                    buf.ids.extend(indices.iter().map(|&i| src.ids[i]));
+                    buf.internals
+                        .extend(indices.iter().map(|&i| src.internals[i]));
+                }
+                TypedColumn::VertexIdentity(src) => {
+                    buf.ids.extend(indices.iter().map(|&i| src[i]));
+                    buf.internals.extend(indices.iter().map(|_| None));
+                }
                 _ => *self = Self::degraded_append(self, col, indices),
             },
             BatchColumn::EdgeHeader(buf) => match col {
@@ -763,6 +783,14 @@ impl BatchColumn {
                     *self = BatchColumn::degraded_push(self, value);
                 }
             }
+            BatchColumn::VertexHandle(buf) => {
+                if let Value::VertexId(id) = value {
+                    buf.ids.push(*id);
+                    buf.internals.push(None);
+                } else {
+                    *self = BatchColumn::degraded_push(self, value);
+                }
+            }
             BatchColumn::EdgeHeader(buf) => {
                 if let Value::EdgeHeader(header) = value {
                     buf.push(header.src, header.dst, &header.edge_type, header.ranking);
@@ -824,6 +852,10 @@ impl BatchColumn {
                 bm.truncate(len.div_ceil(64));
             }
             BatchColumn::VertexIdentity(v) => v.truncate(len),
+            BatchColumn::VertexHandle(v) => {
+                v.ids.truncate(len);
+                v.internals.truncate(len);
+            }
             BatchColumn::EdgeHeader(v) => v.truncate(len),
             BatchColumn::Fallback(v) => v.truncate(len),
         }
@@ -907,6 +939,13 @@ impl BatchColumn {
             BatchColumn::VertexIdentity(v) => {
                 let old = std::mem::take(v);
                 *v = perm.iter().map(|&i| old[i]).collect();
+            }
+            BatchColumn::VertexHandle(v) => {
+                let old = std::mem::take(v);
+                *v = crate::executor::streaming::chunk::VertexHandleColumn {
+                    ids: perm.iter().map(|&i| old.ids[i]).collect(),
+                    internals: perm.iter().map(|&i| old.internals[i]).collect(),
+                };
             }
             BatchColumn::EdgeHeader(v) => v.permute(perm),
             BatchColumn::Fallback(v) => {

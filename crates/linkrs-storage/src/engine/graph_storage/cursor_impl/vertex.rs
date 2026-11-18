@@ -452,10 +452,12 @@ impl VertexCursor for GraphVertexCursor {
         &mut self,
         batch_size: usize,
     ) -> Result<Vec<FlatVertexRecord>, StorageError> {
+        let label_id = self.current_label;
         self.scan_batch(batch_size, |vid, internal_id, tag_name, props| {
             FlatVertexRecord {
                 vid,
                 internal_id,
+                label_id,
                 tag_name,
                 props,
             }
@@ -504,6 +506,7 @@ impl GraphVertexCursor {
             );
             let mut vids: Vec<VertexId> = Vec::new();
             let mut internal_ids: Vec<u32> = Vec::new();
+            let mut label_ids: Vec<Option<linkrs_core::types::LabelId>> = Vec::new();
             let mut tag_names: Vec<String> = Vec::new();
             // Union of decoded column names, grown as tables are processed.
             let mut union_names: Vec<std::sync::Arc<str>> = Vec::new();
@@ -648,6 +651,7 @@ impl GraphVertexCursor {
                         vids.push(*vid);
                         kept += 1;
                     }
+                    label_ids.extend(std::iter::repeat_n(self.current_label, kept));
                     tag_names.extend(std::iter::repeat_n(tag_name.to_string(), kept));
                     continue;
                 }
@@ -758,11 +762,13 @@ impl GraphVertexCursor {
 
                 internal_ids.extend(run_internal);
                 vids.extend(run_vids);
+                label_ids.extend(std::iter::repeat_n(self.current_label, run_rows));
                 tag_names.extend(std::iter::repeat_n(tag_name.to_string(), run_rows));
             }
 
             (
                 internal_ids,
+                label_ids,
                 vids,
                 tag_names,
                 union_names,
@@ -771,13 +777,14 @@ impl GraphVertexCursor {
             )
         });
 
-        let (internal_ids, vids, tag_names, union_names, mut columns, _exhausted) = result;
+        let (internal_ids, label_ids, vids, tag_names, union_names, mut columns, _exhausted) =
+            result;
 
         // Apply pushed predicates over the decoded columns. Filtering
         // produces a selection vector (index sequence, not a boolean mask)
         // and surviving rows are gathered via that selection.
-        let (final_ids, final_vids, final_tags) = if self.predicate.is_empty() {
-            (internal_ids, vids, tag_names)
+        let (final_ids, final_labels, final_vids, final_tags) = if self.predicate.is_empty() {
+            (internal_ids, label_ids, vids, tag_names)
         } else {
             let mut keep = vec![true; internal_ids.len()];
             for predicate in &self.predicate {
@@ -803,19 +810,21 @@ impl GraphVertexCursor {
                     .filter_map(|(i, &k)| if k { Some(i) } else { None })
                     .collect();
                 let mut kept_ids = Vec::with_capacity(selection.len());
+                let mut kept_labels = Vec::with_capacity(selection.len());
                 let mut kept_vids = Vec::with_capacity(selection.len());
                 let mut kept_tags = Vec::with_capacity(selection.len());
                 for &row in &selection {
                     kept_ids.push(internal_ids[row]);
+                    kept_labels.push(label_ids[row]);
                     kept_vids.push(vids[row]);
                     kept_tags.push(tag_names[row].clone());
                 }
                 for column in columns.iter_mut() {
                     column.select(&selection);
                 }
-                (kept_ids, kept_vids, kept_tags)
+                (kept_ids, kept_labels, kept_vids, kept_tags)
             } else {
-                (internal_ids, vids, tag_names)
+                (internal_ids, label_ids, vids, tag_names)
             }
         };
 
@@ -824,6 +833,7 @@ impl GraphVertexCursor {
             union_names,
             columns,
             final_ids,
+            final_labels,
             final_vids,
             final_tags,
         );
@@ -1063,6 +1073,7 @@ impl GraphVertexCursor {
         union_names: Vec<std::sync::Arc<str>>,
         columns: Vec<crate::cursor::ColumnValues>,
         internal_ids: Vec<u32>,
+        label_ids: Vec<Option<linkrs_core::types::LabelId>>,
         vids: Vec<VertexId>,
         tag_names: Vec<String>,
     ) -> crate::cursor::VertexColumnBatch {
@@ -1099,6 +1110,7 @@ impl GraphVertexCursor {
         crate::cursor::VertexColumnBatch {
             vids,
             internal_ids: internal_ids.into_iter().map(|id| id as i64).collect(),
+            label_ids,
             tag_names,
             columns: output_columns,
         }

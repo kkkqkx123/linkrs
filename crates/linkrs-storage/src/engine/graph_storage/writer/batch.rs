@@ -241,12 +241,10 @@ fn batch_insert_grouped(
         let positions = by_type
             .get(edge_type_name)
             .ok_or_else(|| StorageError::db_error("batch type group missing".to_string()))?;
-        let schema = resolved.get(edge_type_name).ok_or_else(|| {
-            StorageError::db_error("batch resolved type missing".to_string())
-        })?;
-        insert_one_type_batch(
-            ctx, space_id, edges, positions, schema, ts, rollback,
-        )?;
+        let schema = resolved
+            .get(edge_type_name)
+            .ok_or_else(|| StorageError::db_error("batch resolved type missing".to_string()))?;
+        insert_one_type_batch(ctx, space_id, edges, positions, schema, ts, rollback)?;
     }
     Ok(())
 }
@@ -375,10 +373,7 @@ fn resolve_one_edge_type(
     let edge_type = super::edge::resolve_edge_type(ctx, space, edge_type_name)?;
     let src_label_id =
         endpoint_label_id(ctx, space, &edge_type.src_tag_name)?.ok_or_else(|| {
-            StorageError::not_found(format!(
-                "Source tag {} not found",
-                edge_type.src_tag_name
-            ))
+            StorageError::not_found(format!("Source tag {} not found", edge_type.src_tag_name))
         })?;
     let dst_label_id =
         endpoint_label_id(ctx, space, &edge_type.dst_tag_name)?.ok_or_else(|| {

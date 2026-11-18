@@ -344,6 +344,42 @@ impl EdgeStore {
         out
     }
 
+    /// Topology-only out-neighbors for one CSR row.
+    ///
+    /// Walks the same hot interval and visibility gate as
+    /// `out_edges_with_gate_projected`, but stops at the CSR slot so no edge
+    /// property table or `EdgeRecord` is touched.
+    pub fn out_topology_with_gate(
+        &self,
+        src: u32,
+        ts: Timestamp,
+        gate: &crate::mvcc_visibility::PendingGate<'_>,
+    ) -> Vec<HotNbr> {
+        if !self.is_open || !self.schema.has_out() {
+            return Vec::new();
+        }
+        let mut hots = Vec::new();
+        self.collect_visible_hots_with_gate(&self.out_csr, src, ts, gate, &mut hots);
+        self.observe_direction_read(true, hots.len() as u64);
+        hots
+    }
+
+    /// Topology-only in-neighbors for one CSR row.
+    pub fn in_topology_with_gate(
+        &self,
+        dst: u32,
+        ts: Timestamp,
+        gate: &crate::mvcc_visibility::PendingGate<'_>,
+    ) -> Vec<HotNbr> {
+        if !self.is_open || !self.schema.has_in() {
+            return Vec::new();
+        }
+        let mut hots = Vec::new();
+        self.collect_visible_hots_with_gate(&self.in_csr, dst, ts, gate, &mut hots);
+        self.observe_direction_read(false, hots.len() as u64);
+        hots
+    }
+
     pub fn out_edges_with_gate(
         &self,
         src: u32,

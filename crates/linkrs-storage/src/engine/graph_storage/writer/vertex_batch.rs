@@ -96,12 +96,8 @@ fn stage_vertex_row(
         vid,
         properties: props.clone(),
     };
-    let redo_entry = ctx.append_wal_redo_buffered(
-        WalOpType::InsertVertex,
-        ts,
-        &redo,
-        &mut batch.wal_scratch,
-    )?;
+    let redo_entry =
+        ctx.append_wal_redo_buffered(WalOpType::InsertVertex, ts, &redo, &mut batch.wal_scratch)?;
     let key = match route_vertex_id(&vid)? {
         RoutedVertexId::Int(vid_int) => IdKey::Int(vid_int),
         RoutedVertexId::Text(id_str) => IdKey::Text(id_str),

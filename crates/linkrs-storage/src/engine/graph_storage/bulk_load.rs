@@ -89,11 +89,7 @@ impl BulkLoadSession {
         // Recent checkpoint means the dataset is already anchored; another
         // full flush would rewrite it for no recovery benefit.
         const MIN_FINAL_CHECKPOINT_INTERVAL: Duration = Duration::from_secs(60);
-        let checkpointed_recently = persistence
-            .read()
-            .last_checkpoint_time
-            .read()
-            .elapsed()
+        let checkpointed_recently = persistence.read().last_checkpoint_time.read().elapsed()
             < MIN_FINAL_CHECKPOINT_INTERVAL;
         if checkpointed_recently {
             return Ok(None);
@@ -209,12 +205,9 @@ mod tests {
     fn file_backed_storage_opens_engaged_session_through_group_trait() {
         use crate::AutoCommitGroupOps;
         let dir = TempDir::new().expect("temp dir");
-        let storage = crate::GraphStorage::open_with_persistence(
-            dir.path().to_path_buf(),
-            false,
-            None,
-        )
-        .expect("file-backed storage opens");
+        let storage =
+            crate::GraphStorage::open_with_persistence(dir.path().to_path_buf(), false, None)
+                .expect("file-backed storage opens");
         // The COPY path reaches the session through the group trait on a
         // trait object; an engaged session here proves the wiring, while a
         // missing coordinator would silently keep the old behavior.

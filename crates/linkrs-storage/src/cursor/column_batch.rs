@@ -1,4 +1,4 @@
-use linkrs_core::types::DataType;
+use linkrs_core::types::{DataType, LabelId};
 
 /// Raw decoded values for one property column, in column-major order.
 ///
@@ -618,6 +618,8 @@ pub struct PropertyColumn {
 pub struct VertexColumnBatch {
     pub vids: Vec<linkrs_core::types::VertexId>,
     pub internal_ids: Vec<i64>,
+    /// Owning label per row when the cursor can supply it.
+    pub label_ids: Vec<Option<LabelId>>,
     /// Tag (label) name per row (batches may span tables).
     pub tag_names: Vec<String>,
     pub columns: Vec<PropertyColumn>,
@@ -628,6 +630,7 @@ impl VertexColumnBatch {
         Self {
             vids: Vec::new(),
             internal_ids: Vec::new(),
+            label_ids: Vec::new(),
             tag_names: Vec::new(),
             columns: Vec::new(),
         }

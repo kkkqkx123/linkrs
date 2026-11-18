@@ -2,7 +2,7 @@
 
 use crate::cursor::{EdgeCursor, IndexCursor, IndexRow, IndexScanPlan, ScanOptions, VertexCursor};
 use crate::schema::{LabelVersionHistory, PropertyChange};
-use linkrs_core::types::{EdgeTypeInfo, Index, SpaceInfo, TagInfo, VertexId};
+use linkrs_core::types::{EdgeTypeInfo, Index, LabelId, SpaceInfo, TagInfo, VertexId};
 use linkrs_core::{Edge, EdgeDirection, StorageError, Value, Vertex};
 use std::sync::Arc;
 
@@ -196,6 +196,7 @@ pub trait StorageReader: Send + Sync + std::fmt::Debug {
         &self,
         space: &str,
         node_ids: &[VertexId],
+        handles: Option<&[Option<(u32, LabelId)>]>,
         direction: EdgeDirection,
         edge_types: &[String],
     ) -> Result<Vec<Vec<EdgeTopology>>, StorageError> {

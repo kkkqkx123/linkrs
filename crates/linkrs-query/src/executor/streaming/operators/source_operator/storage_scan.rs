@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::Arc;
 
 use crate::executor::streaming::chunk::{
-    use_columnar_path, DataChunk, EdgeHeaderColumn, TypedColumn,
+    use_columnar_path, DataChunk, EdgeHeaderColumn, TypedColumn, VertexHandleColumn,
 };
 use crate::executor::streaming::operators::state::SourceState;
 use crate::executor::streaming::runtime::ExecutionRuntime;
@@ -552,7 +552,19 @@ fn build_column_chunk(
         if identity_only {
             // Identity entity layout: take over the batch id vector instead
             // of cloning one id per row out of the row view.
-            typed.push(TypedColumn::VertexIdentity(batch.vids));
+            let internals = batch
+                .internal_ids
+                .iter()
+                .zip(batch.label_ids.iter())
+                .map(|(&id, &label)| match label {
+                    Some(label) if id >= 0 && id <= u32::MAX as i64 => Some((id as u32, label)),
+                    _ => None,
+                })
+                .collect();
+            typed.push(TypedColumn::VertexHandle(VertexHandleColumn {
+                ids: batch.vids,
+                internals,
+            }));
         } else {
             typed.push(TypedColumn::Fallback(
                 chunk.rows.iter().map(|r| r[0].clone()).collect(),
