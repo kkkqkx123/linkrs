@@ -19,35 +19,6 @@ mod batch;
 mod bundled_values;
 
 impl CsrShardSet {
-    /// Routing-cache invalidation family for cache coherence.
-    ///
-    /// Group drops, load replacement and per-group updates converge on the
-    /// per-group entry; group-space resets use the all-routes entry. The
-    /// cache stays an accelerator only: misses never populate for missing
-    /// groups, so absent rows read as empty and no invalidation path can
-    /// leave a stale triple behind.
-    pub(crate) fn invalidate_group_route(&self, gid: usize) {
-        self.route_cache.invalidate_gid(gid);
-    }
-
-    /// Invalidate every cached route after a group-space reset.
-    pub(crate) fn invalidate_all_routes(&self) {
-        self.route_cache.clear();
-    }
-
-    /// Routing-cache hit rate for observability. Capacity stays fixed;
-    /// this only reports so operators can tell whether hot lookups hit.
-    pub fn route_hit_rate(&self) -> f32 {
-        self.route_cache.hit_rate()
-    }
-
-    /// Routing-cache collision count since creation. Collisions share the
-    /// miss counter; this separates true empty misses from evictions so
-    /// operators can tell whether 128 slots still cover the working set.
-    pub fn route_collision_count(&self) -> usize {
-        self.route_cache.collision_count()
-    }
-
     pub fn new(
         strategy: EdgeStrategy,
         group_bits: u32,
@@ -69,7 +40,6 @@ impl CsrShardSet {
             record_form,
             tombstone_reuse_cutoff: Timestamp::MAX,
             shards: BTreeMap::new(),
-            route_cache: super::RouteCache::new(),
         };
         if strategy != EdgeStrategy::None {
             set.shards.insert(
@@ -258,29 +228,12 @@ impl CsrShardSet {
     }
 
     pub(super) fn route(&self, vid: u32) -> Option<(usize, u32)> {
-        // Hot-row fast path: repeats skip the group map search. Cached
-        // triples are only stored for existing groups and removals
-        // invalidate, so a hit is authoritative without rechecking the map.
-        if let Some(hit) = self.route_cache.lookup(vid) {
-            // Debug-only coherence check: cached triples are only stored for
-            // existing groups and removals invalidate first, so a hit must
-            // always agree with the map. A failure here means a removal path
-            // forgot to invalidate, never a benign race.
-            debug_assert!(
-                self.shards.contains_key(&hit.0),
-                "stale route cache entry for vertex {vid}: group {} is gone",
-                hit.0,
-            );
-            return Some(hit);
-        }
+        // Routing is derived from immutable group bits and a group map that
+        // is only mutated by checkpoint writers. Deriving it per read avoids
+        // sharing a mutable cache across concurrent partition workers.
         let gid = group_id_for(vid, self.group_bits);
         let local = local_vid(vid, self.group_bits);
-        if self.shards.contains_key(&gid) {
-            self.route_cache.insert(vid, gid, local);
-            Some((gid, local))
-        } else {
-            None
-        }
+        self.shards.contains_key(&gid).then_some((gid, local))
     }
 
     /// Borrow one persisted group for checkpoint writes.
@@ -351,7 +304,6 @@ impl CsrShardSet {
                 )));
             }
             self.shards.clear();
-            self.invalidate_all_routes();
             return Ok(());
         }
         let ids: Vec<u32> = (0..count).map(|gid| gid as u32).collect();
@@ -385,7 +337,6 @@ impl CsrShardSet {
                 )));
             }
             self.shards.clear();
-            self.invalidate_all_routes();
             return Ok(());
         }
         let mut wanted: Vec<usize> = ids.iter().map(|id| *id as usize).collect();
@@ -421,7 +372,6 @@ impl CsrShardSet {
             );
         }
         self.shards = fresh;
-        self.invalidate_all_routes();
         self.clear_all_dirty();
         Ok(())
     }
@@ -450,7 +400,6 @@ impl CsrShardSet {
             .count();
         shard.dead_entries = dead;
         shard.reclaim_hint = dead > 0;
-        self.invalidate_group_route(gid);
         Ok(())
     }
 
@@ -488,12 +437,6 @@ impl CsrShardSet {
                     },
                 );
             }
-        }
-        // Dropped groups change routing: invalidate their cached rows so
-        // later reads route to missing groups as empty instead of hitting
-        // stale triples.
-        for gid in removed {
-            self.invalidate_group_route(gid);
         }
     }
 

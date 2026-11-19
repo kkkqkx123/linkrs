@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 
 use crate::executor::base::MemoryReservation;
 use linkrs_core::error::QueryError;
+use linkrs_core::Value;
 
 use super::chunk::DataChunk;
 use super::executor::StreamingExecutor;
@@ -115,11 +116,37 @@ pub enum PartitionMessage {
     Finished,
 }
 
+/// Record a single scalar partition result for EXPLAIN ANALYZE.
+///
+/// Count frontiers emit one integer per partition. Other partition shapes
+/// are hidden by the plan formatter, so sampling the first slot here does
+/// not change their reported counters.
+fn record_scalar_partition_count(
+    runtime: &ExecutionRuntime,
+    partition_id: usize,
+    chunk: &DataChunk,
+) {
+    let Some(count) = chunk.get_typed_by_slot(0, 0).and_then(|value| match value {
+        Value::SmallInt(value) => Some(value as i64),
+        Value::Int(value) => Some(value as i64),
+        Value::BigInt(value) => Some(value),
+        Value::Float(value) => Some(value as i64),
+        Value::Double(value) => Some(value as i64),
+        _ => None,
+    }) else {
+        return;
+    };
+    runtime
+        .profile()
+        .record_partition_count(partition_id, count);
+}
+
 /// Run a partition tree, sending output chunks through the given sender.
 /// This is the core worker loop: open, advance in a loop, close.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn run_partition(
     tree: &mut StreamingExecutor,
+    partition_id: usize,
     sender: &SyncSender<PartitionMessage>,
     stop: &AtomicBool,
     runtime: &ExecutionRuntime,
@@ -136,6 +163,7 @@ pub(crate) fn run_partition(
                 send_message(sender, PartitionMessage::Finished, stop, runtime)?;
                 return Ok(());
             };
+            record_scalar_partition_count(runtime, partition_id, &chunk);
             let bytes = chunk.estimated_bytes();
             let reservation = runtime.memory_budget.reserve(bytes)?;
             let message = PartitionMessage::Chunk(BufferedChunk {
@@ -476,6 +504,9 @@ impl PartitionHandle {
             self.worker_count.min(self.partition_count),
             Ordering::Relaxed,
         );
+        board
+            .parallel_partitions
+            .fetch_max(self.partition_count, Ordering::Relaxed);
         board.parallel_buffered_chunks_peak.fetch_max(
             self.buffered_chunks_peak.load(Ordering::Relaxed),
             Ordering::Relaxed,
@@ -632,6 +663,7 @@ impl MorselWorkerPool {
             let started = Instant::now();
             let result = run_partition(
                 tree,
+                index,
                 &batch.senders[index],
                 &batch.stop,
                 &batch.runtime,

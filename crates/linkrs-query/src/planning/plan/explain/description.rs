@@ -148,6 +148,15 @@ pub struct PlanDescription {
     pub parallel_work_time_us: u64,
     pub parallel_buffered_chunks_peak: usize,
     pub parallel_buffered_bytes_peak: usize,
+    /// Partitions requested by the physical plan and actually executed.
+    pub requested_partitions: usize,
+    pub actual_partitions: usize,
+    /// How each partition computed its local count.
+    pub partition_count_mode: String,
+    /// Local counts in partition order.
+    pub partition_counts: Vec<(usize, i64)>,
+    /// Runtime reasons a count frontier used materialized rows.
+    pub count_fallback_reasons: Vec<String>,
     pub parallel_fallback_reason: String,
 
     // ── Cost-based decision notes (populated at plan build) ──
@@ -174,6 +183,11 @@ impl PlanDescription {
             parallel_work_time_us: 0,
             parallel_buffered_chunks_peak: 0,
             parallel_buffered_bytes_peak: 0,
+            requested_partitions: 0,
+            actual_partitions: 0,
+            partition_count_mode: String::new(),
+            partition_counts: Vec::new(),
+            count_fallback_reasons: Vec::new(),
             parallel_fallback_reason: String::new(),
             cbo_notes: Vec::new(),
             statistics_summary: String::new(),
@@ -235,6 +249,11 @@ mod tests {
         desc.parallel_work_time_us = 2000;
         desc.parallel_buffered_chunks_peak = 3;
         desc.parallel_buffered_bytes_peak = 8192;
+        desc.requested_partitions = 4;
+        desc.actual_partitions = 2;
+        desc.partition_count_mode = "count_frontier".to_string();
+        desc.partition_counts = vec![(0, 3), (1, 4)];
+        desc.count_fallback_reasons = vec!["TTL".to_string()];
         desc.parallel_fallback_reason = "test fallback".to_string();
 
         let json = serde_json::to_string(&desc).expect("serialize");
@@ -246,6 +265,11 @@ mod tests {
         assert_eq!(restored.parallel_work_time_us, 2000);
         assert_eq!(restored.parallel_buffered_chunks_peak, 3);
         assert_eq!(restored.parallel_buffered_bytes_peak, 8192);
+        assert_eq!(restored.requested_partitions, 4);
+        assert_eq!(restored.actual_partitions, 2);
+        assert_eq!(restored.partition_count_mode, "count_frontier");
+        assert_eq!(restored.partition_counts, vec![(0, 3), (1, 4)]);
+        assert_eq!(restored.count_fallback_reasons, vec!["TTL"]);
         assert_eq!(restored.parallel_fallback_reason, "test fallback");
     }
 }

@@ -145,12 +145,7 @@ impl StorageReader for GraphStorage {
         edge_types: &[String],
     ) -> Result<Vec<Vec<crate::EdgeTopology>>, StorageError> {
         reader::get_node_edge_headers_batch(
-            &self.ctx,
-            space,
-            node_ids,
-            handles,
-            direction,
-            edge_types,
+            &self.ctx, space, node_ids, handles, direction, edge_types,
         )
     }
 
@@ -191,6 +186,16 @@ impl StorageReader for GraphStorage {
         edge_types: &[String],
     ) -> Result<Vec<usize>, StorageError> {
         reader::out_degree_batch(&self.ctx, space, src_ids, direction, edge_types)
+    }
+
+    fn neighbor_degree_batch(
+        &self,
+        space: &str,
+        src_ids: &[VertexId],
+        direction: EdgeDirection,
+        edge_types: &[String],
+    ) -> Result<Vec<usize>, StorageError> {
+        reader::neighbor_degree_batch(&self.ctx, space, src_ids, direction, edge_types)
     }
 
     fn scan_edges_by_type(&self, space: &str, edge_type: &str) -> Result<Vec<Edge>, StorageError> {

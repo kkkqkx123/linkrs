@@ -536,13 +536,8 @@ pub(crate) fn get_node_edge_headers_batch(
         let edge_type: Arc<str> = Arc::from(edge_info.edge_type_name.as_str());
         match direction {
             EdgeDirection::Out => {
-                let batches = ctx.out_topology_batch(
-                    edge_label_id,
-                    src_label_id,
-                    &normalized,
-                    handles,
-                    ts,
-                );
+                let batches =
+                    ctx.out_topology_batch(edge_label_id, src_label_id, &normalized, handles, ts);
                 for (index, hots) in batches.into_iter().enumerate() {
                     for (far_label, hot) in hots {
                         let dst =
@@ -588,13 +583,8 @@ pub(crate) fn get_node_edge_headers_batch(
                 }
             }
             EdgeDirection::Both => {
-                let out_batches = ctx.out_topology_batch(
-                    edge_label_id,
-                    src_label_id,
-                    &normalized,
-                    handles,
-                    ts,
-                );
+                let out_batches =
+                    ctx.out_topology_batch(edge_label_id, src_label_id, &normalized, handles, ts);
                 let in_batches =
                     ctx.in_topology_batch(edge_label_id, dst_label_id, &normalized, ts);
                 for (index, (out_hots, in_hots)) in
@@ -794,6 +784,139 @@ pub(crate) fn out_degree_batch(
         );
     }
     Ok(seen.iter().map(HashSet::len).collect())
+}
+
+/// Fused two-hop degree read for count-only walks.
+///
+/// For one resolved edge type and one direction the first pass stages raw
+/// internal neighbor endpoints, and the second pass counts their tail degrees
+/// by row id. External ids are resolved once per batch to keep dangling-neighbor
+/// visibility, but are not materialized into query rows. Other schemas fall
+/// back to the portable neighbor plus degree calls so their dedup rules stay
+/// unchanged.
+pub(crate) fn neighbor_degree_batch(
+    ctx: &GraphStorageContext,
+    space: &str,
+    src_ids: &[VertexId],
+    direction: EdgeDirection,
+    edge_types: &[String],
+) -> StorageResult<Vec<usize>> {
+    record_schema_read(ctx, space);
+    let edge_type_infos = ctx.schema_manager().list_edge_types(space)?;
+    let ts = ctx.get_read_timestamp();
+    let mut resolved = Vec::new();
+    for edge_info in &edge_type_infos {
+        if !edge_types.is_empty() && !edge_types.contains(&edge_info.edge_type_name) {
+            continue;
+        }
+        let Some(src_label_id) = endpoint_label_id(ctx, space, &edge_info.src_tag_name)? else {
+            continue;
+        };
+        let Some(dst_label_id) = endpoint_label_id(ctx, space, &edge_info.dst_tag_name)? else {
+            continue;
+        };
+        resolved.push((edge_info.edge_type_id, src_label_id, dst_label_id));
+    }
+    for src_id in src_ids {
+        record_vertex_read(ctx, *src_id);
+    }
+    if resolved.len() != 1 || matches!(direction, EdgeDirection::Both) {
+        return portable_neighbor_degree(ctx, space, src_ids, direction, edge_types);
+    }
+    let (edge_label, src_label, dst_label) = resolved[0];
+    let mut staged: Vec<Vec<(LabelId, u32)>> = vec![Vec::new(); src_ids.len()];
+    if direction == EdgeDirection::Out {
+        ctx.visit_out_nbrs_batched(
+            edge_label,
+            src_label,
+            dst_label,
+            src_ids,
+            ts,
+            |index, _, label, nbr| {
+                staged[index].push((label, nbr.endpoint));
+            },
+        );
+    } else {
+        ctx.visit_in_nbrs_batched(
+            edge_label,
+            src_label,
+            dst_label,
+            src_ids,
+            ts,
+            |index, _, label, nbr| {
+                staged[index].push((label, nbr.endpoint));
+            },
+        );
+    }
+    let neighbor_label = if direction == EdgeDirection::Out {
+        dst_label
+    } else {
+        src_label
+    };
+    if staged
+        .iter()
+        .flatten()
+        .any(|(label, _)| *label != neighbor_label)
+    {
+        return portable_neighbor_degree(ctx, space, src_ids, direction, edge_types);
+    }
+    // Keep the portable path's dangling-neighbor visibility with one batched
+    // resolution, then record the same read keys when a recorder is active.
+    let mut raw_offsets = Vec::with_capacity(src_ids.len() + 1);
+    let mut raw_endpoints = Vec::new();
+    for neighbors in &staged {
+        raw_offsets.push(raw_endpoints.len());
+        raw_endpoints.extend(neighbors.iter().map(|(_, endpoint)| *endpoint));
+    }
+    raw_offsets.push(raw_endpoints.len());
+    let external = ctx.external_ids_by_internal_batch(neighbor_label, &raw_endpoints, ts);
+    let recording = ctx.mutation_recorder().is_some();
+    let mut offsets = Vec::with_capacity(src_ids.len() + 1);
+    let mut endpoints = Vec::with_capacity(raw_endpoints.len());
+    for (index, neighbors) in staged.iter().enumerate() {
+        offsets.push(endpoints.len());
+        let start = raw_offsets[index];
+        for (position, (_, endpoint)) in neighbors.iter().enumerate() {
+            if let Some(ext) = external[start + position] {
+                if recording {
+                    record_vertex_read(ctx, ext);
+                }
+                endpoints.push(*endpoint);
+            }
+        }
+    }
+    offsets.push(endpoints.len());
+    let degrees = if direction == EdgeDirection::Out {
+        ctx.count_out_nbrs_by_internal(edge_label, neighbor_label, &endpoints, ts)
+    } else {
+        ctx.count_in_nbrs_by_internal(edge_label, neighbor_label, &endpoints, ts)
+    };
+    let mut totals = Vec::with_capacity(src_ids.len());
+    for pair in offsets.windows(2) {
+        totals.push(degrees[pair[0]..pair[1]].iter().sum());
+    }
+    Ok(totals)
+}
+
+fn portable_neighbor_degree(
+    ctx: &GraphStorageContext,
+    space: &str,
+    src_ids: &[VertexId],
+    direction: EdgeDirection,
+    edge_types: &[String],
+) -> StorageResult<Vec<usize>> {
+    let neighbors = neighbor_dst_ids_batch(ctx, space, src_ids, direction, edge_types)?;
+    let lengths: Vec<usize> = neighbors.iter().map(Vec::len).collect();
+    let flat: Vec<VertexId> = neighbors.into_iter().flatten().collect();
+    let degrees = out_degree_batch(ctx, space, &flat, direction, edge_types)?;
+    let mut totals = Vec::with_capacity(src_ids.len());
+    let mut offset = 0;
+    for length in lengths {
+        let sum: usize = degrees[offset..offset + length].iter().sum();
+        totals.push(sum);
+        offset += length;
+    }
+    Ok(totals)
 }
 
 /// Stage hot-CSR neighbors for a whole seed batch, one edge type at a time.

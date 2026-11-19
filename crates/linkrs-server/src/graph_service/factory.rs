@@ -441,6 +441,8 @@ impl<
             allow_pure_count_chain: parallel.allow_pure_count_chain,
             allow_global_aggregate: parallel.allow_global_aggregate,
             allow_ordered_parallel_expand: parallel.allow_ordered_parallel_expand,
+            allow_parallel_count_frontier: parallel.allow_parallel_count_frontier,
+            allow_partition_metadata_count: parallel.allow_partition_metadata_count,
         }
     }
 

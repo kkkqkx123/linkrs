@@ -27,7 +27,7 @@ use crate::edge::mutable_csr::row::{
 use crate::edge::mutable_csr::write::TOMBSTONE_REUSE_SCAN_BOUND;
 use crate::edge::node_group::address::{LEAF_HIGH_CSR_DENSITY, LEAF_REGION_ROWS};
 use crate::edge::node_group::{
-    DEFAULT_NODE_GROUP_BITS, GROUP_MERGE_MIN_DENSITY, REGION_MERGE_MIN_DENSITY, ROUTE_CACHE_SLOTS,
+    DEFAULT_NODE_GROUP_BITS, GROUP_MERGE_MIN_DENSITY, REGION_MERGE_MIN_DENSITY,
 };
 use crate::edge::property_schema::DEFAULT_VERSION_CHAIN_CAP;
 use crate::edge::pure_csr::LIVE_SET_WIDTH_BOUND as PURE_CSR_LIVE_SET_WIDTH_BOUND;
@@ -217,7 +217,6 @@ fn test_registry_pins_constants() {
     let _ = PURE_CSR_LIVE_SET_WIDTH_BOUND;
     let _ = GraphStorage::RECOMMENDED_BATCH_CHUNK_EDGES;
     let _ = REGION_MERGE_MIN_DENSITY;
-    let _ = ROUTE_CACHE_SLOTS;
     let _ = ROWS_PER_PAGE;
     let _ = SATURATION_QUERIES;
     let _ = SCAN_PAGE;

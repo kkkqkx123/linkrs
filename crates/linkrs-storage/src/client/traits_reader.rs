@@ -319,6 +319,33 @@ pub trait StorageReader: Send + Sync + std::fmt::Debug {
         edge_types: &[String],
     ) -> Result<Vec<usize>, StorageError>;
 
+    /// Sum the tail degrees of each source's neighbors in one batch.
+    ///
+    /// The result has one entry per source and counts every neighbor edge
+    /// occurrence, so self-loops and parallel edges keep walk semantics.
+    /// Adapters use the portable two-call form; the native engine overrides
+    /// it with an internal-endpoint read that avoids external id round trips.
+    fn neighbor_degree_batch(
+        &self,
+        space: &str,
+        src_ids: &[VertexId],
+        direction: EdgeDirection,
+        edge_types: &[String],
+    ) -> Result<Vec<usize>, StorageError> {
+        let neighbors = self.neighbor_dst_ids_batch(space, src_ids, direction, edge_types)?;
+        let lengths: Vec<usize> = neighbors.iter().map(Vec::len).collect();
+        let flat: Vec<VertexId> = neighbors.into_iter().flatten().collect();
+        let degrees = self.out_degree_batch(space, &flat, direction, edge_types)?;
+        let mut totals = Vec::with_capacity(src_ids.len());
+        let mut offset = 0;
+        for length in lengths {
+            let sum: usize = degrees[offset..offset + length].iter().sum();
+            totals.push(sum);
+            offset += length;
+        }
+        Ok(totals)
+    }
+
     fn scan_edges_by_type(&self, space: &str, edge_type: &str) -> Result<Vec<Edge>, StorageError>;
     /// Table-sharded parallel variant of [`Self::scan_edges_by_type`]: the
     /// type's edge tables fan out across `shards` rayon shards sharing one

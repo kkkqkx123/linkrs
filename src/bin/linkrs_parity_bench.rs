@@ -35,6 +35,8 @@ fn main() {
                  linkrs-parity-bench run --db <path> --space <name> --benchmark-dir <dir> \
                  [--warmup N] [--run N] [--out <dir>] [--threads N]
                  [--parallel-workers N] [--min-rows-per-partition N]
+                 [--count-frontier on|off] [--ordered-parallel-expand on|off]
+                 [--explain-dir <dir>] [--profile-runs N] [--no-checkpoint]
                  [--skip-file <path>]"
             );
             std::process::exit(2);
@@ -47,6 +49,15 @@ fn opt_value(args: &[String], flag: &str) -> Option<String> {
         .position(|a| a == flag)
         .and_then(|i| args.get(i + 1))
         .cloned()
+}
+
+fn parse_switch(args: &[String], flag: &str, default: bool) -> bool {
+    match opt_value(args, flag).as_deref() {
+        None => default,
+        Some("on" | "true" | "1") => true,
+        Some("off" | "false" | "0") => false,
+        Some(value) => die(format!("invalid {flag} value {value}: expected on or off")),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -462,6 +473,11 @@ struct Benchmark {
     compare: CompareMode,
 }
 
+struct ExplainTarget {
+    name: String,
+    query: String,
+}
+
 fn benchmark_marker(line: &str) -> Option<(&str, Option<&str>)> {
     let trimmed = line.trim_start();
     if let Some(rest) = trimmed.strip_prefix("----") {
@@ -650,15 +666,23 @@ fn cmd_run(args: &[String]) {
             .parse::<u64>()
             .unwrap_or_else(|e| die(format!("invalid --min-rows-per-partition {value}: {e}")))
     });
+    let explain_dir = opt_value(args, "--explain-dir").map(PathBuf::from);
+    let profile_runs: usize = opt_value(args, "--profile-runs")
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(1);
+    let checkpoint_on_close = !args.iter().any(|a| a == "--no-checkpoint");
+    let count_frontier = parse_switch(args, "--count-frontier", false);
+    let ordered_parallel_expand = parse_switch(args, "--ordered-parallel-expand", false);
     let skip_file = opt_value(args, "--skip-file");
     let skip_set = skip_file.as_deref().map(load_skip_file).unwrap_or_default();
 
-    let mut db_config = DatabaseConfig::file(&db).with_checkpoint_on_close(true);
+    let mut db_config = DatabaseConfig::file(&db).with_checkpoint_on_close(checkpoint_on_close);
     if parallel_workers > 1 {
         let mut parallel_config = linkrs::config::ParallelConfig {
             workers: parallel_workers,
             max_partitions: parallel_workers,
-            allow_ordered_parallel_expand: true,
+            allow_ordered_parallel_expand: ordered_parallel_expand,
+            allow_parallel_count_frontier: count_frontier,
             ..linkrs::config::ParallelConfig::default()
         };
         if let Some(min_rows) = min_rows_per_partition {
@@ -676,8 +700,12 @@ fn cmd_run(args: &[String]) {
         .unwrap_or_else(|e| die(format!("USE {space}: {e}")));
 
     fs::create_dir_all(&out_dir).unwrap_or_else(|e| die(format!("create out dir: {e}")));
+    if let Some(dir) = &explain_dir {
+        fs::create_dir_all(dir).unwrap_or_else(|e| die(format!("create explain dir: {e}")));
+    }
 
     let files = collect_benchmark_files(&bench_dir);
+    let mut explain_targets: Vec<ExplainTarget> = Vec::new();
 
     println!(
         "[run] db={} space={space} warmup={warmup} run={runs} threads={threads} \
@@ -732,11 +760,19 @@ fn cmd_run(args: &[String]) {
         if warmup_failed {
             continue;
         }
+        if explain_dir.is_some() {
+            explain_targets.push(ExplainTarget {
+                name: bench.name.clone(),
+                query: bench.query.clone(),
+            });
+        }
         let mut times_ms: Vec<f64> = Vec::with_capacity(runs);
         let mut compile_ms: Vec<f64> = Vec::with_capacity(runs);
         let mut execute_ms: Vec<f64> = Vec::with_capacity(runs);
         let mut rows_seen = 0usize;
         let mut got_lines: Vec<String> = Vec::new();
+        let mut result_first_row = String::new();
+        let mut result_values: Vec<String> = Vec::new();
         let mut error: Option<String> = None;
         for _ in 0..runs {
             let start = Instant::now();
@@ -744,6 +780,8 @@ fn cmd_run(args: &[String]) {
                 Ok(result) => {
                     rows_seen = result.len();
                     got_lines = format_rows(&result);
+                    result_first_row = got_lines.first().cloned().unwrap_or_default();
+                    result_values.push(result_first_row.clone());
                     times_ms.push(start.elapsed().as_secs_f64() * 1000.0);
                     // Compiling/executing split per the Ladybug reporting
                     // pair: compile covers parse through optimize, execute
@@ -774,6 +812,15 @@ fn cmd_run(args: &[String]) {
                 );
             }
         }
+        let result_stable = result_values
+            .first()
+            .is_some_and(|first| result_values.iter().all(|value| value == first));
+        if !result_stable {
+            eprintln!(
+                "[run] {} result varied across timed runs: {result_values:?}",
+                bench.name
+            );
+        }
         let exec_ms = trimmed_mean(&times_ms);
         let median_ms = median(&times_ms);
         let compile_mean = trimmed_mean(&compile_ms);
@@ -784,7 +831,7 @@ fn cmd_run(args: &[String]) {
             "[run] {}: {} run(s), exec {exec_ms:.2} ms (drop-max mean, median {median_ms:.2}), \
              compile {compile_mean:.2} ms (median {compile_median:.2}), \
              execute-stage {execute_mean:.2} ms (median {execute_median:.2}), \
-             {rows_seen} row(s), status {status}",
+             {rows_seen} row(s), result [{result_first_row}], result_stable={result_stable}, status {status}",
             bench.name,
             times_ms.len()
         );
@@ -797,6 +844,25 @@ fn cmd_run(args: &[String]) {
             status,
             threads,
         );
+    }
+    // Profile after every timed query has finished: EXPLAIN ANALYZE executes
+    // its target and can update feedback statistics, so keeping it in a
+    // separate pass prevents it from perturbing the measured runs.
+    if let Some(dir) = &explain_dir {
+        for target in &explain_targets {
+            let safe_name = target.name.replace(['/', '\\', ' '], "_");
+            for profile in 1..=profile_runs {
+                match session.execute(&format!("EXPLAIN ANALYZE {}", target.query)) {
+                    Ok(result) => {
+                        let path = dir.join(format!("{safe_name}_r{profile}.txt"));
+                        if let Err(error) = fs::write(path, format_rows(&result).join("\n")) {
+                            eprintln!("[run] {} explain write failed: {error}", target.name);
+                        }
+                    }
+                    Err(error) => eprintln!("[run] {} explain failed: {error}", target.name),
+                }
+            }
+        }
     }
     if let Some(kb) = rss_peak_kb() {
         println!("[run] VmHWM peak at end: {kb} kB");

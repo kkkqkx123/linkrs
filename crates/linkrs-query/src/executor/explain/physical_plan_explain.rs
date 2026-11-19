@@ -52,6 +52,34 @@ pub fn physical_plan_to_plan_description(plan: &PhysicalPlan) -> PlanDescription
     desc.cbo_notes = plan.diagnostics.notes.clone();
     desc.statistics_summary = plan.statistics_summary.clone();
     if let Some(spec) = plan.partition_spec() {
+        desc.requested_partitions = spec.partition_count();
+        let mut metadata_count = false;
+        let mut count_frontier = false;
+        for operator in &plan.operators {
+            match &operator.spec {
+                crate::executor::streaming::plan::types::OperatorKindSpec::Source(
+                    crate::executor::streaming::operators::spec::SourceSpec::MetadataCount {
+                        ..
+                    },
+                ) => metadata_count = true,
+                crate::executor::streaming::plan::types::OperatorKindSpec::Graph(
+                    crate::executor::streaming::operators::spec::GraphSpec::ExpandAll {
+                        count_only: true,
+                        ..
+                    },
+                ) => count_frontier = true,
+                _ => {}
+            }
+        }
+        desc.partition_count_mode = if metadata_count {
+            "metadata".to_string()
+        } else if count_frontier {
+            "count_frontier".to_string()
+        } else {
+            "rows".to_string()
+        };
+    }
+    if let Some(spec) = plan.partition_spec() {
         let version = spec
             .layout_version()
             .map(|v| format!(", layout_version={v}"))

@@ -33,6 +33,13 @@ pub struct PartitioningConfig {
     /// single-step de-materialized hop feeding count, group-count, or ordered
     /// distinct. Other shapes keep the serial path even when this is on.
     pub allow_ordered_parallel_expand: bool,
+    /// Admit count-only expand frontiers whose partition-local result is a
+    /// scalar count merged by the existing `SUM(_expand_count)` rewrite.
+    pub allow_parallel_count_frontier: bool,
+    /// Admit storage metadata counts that are proven disjoint per partition.
+    /// The storage proof is a separate prerequisite; this switch alone never
+    /// changes a plan.
+    pub allow_partition_metadata_count: bool,
     /// Parallel fixed startup overhead in row-equivalents (fragment startup,
     /// exchange coordination). All-zero cost params disable the economic
     /// gate and leave the row-count threshold as the only gate.
@@ -56,6 +63,8 @@ impl Default for PartitioningConfig {
             allow_pure_count_chain: false,
             allow_global_aggregate: false,
             allow_ordered_parallel_expand: false,
+            allow_parallel_count_frontier: false,
+            allow_partition_metadata_count: false,
             fixed_overhead_rows: 0,
             per_partition_rows: 0,
             exchange_row_per_mille: 0,

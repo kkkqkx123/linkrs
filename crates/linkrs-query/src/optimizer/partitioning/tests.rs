@@ -37,6 +37,8 @@ fn selects_only_with_trusted_range_and_sufficient_statistics() {
         allow_pure_count_chain: false,
         allow_global_aggregate: false,
         allow_ordered_parallel_expand: false,
+        allow_parallel_count_frontier: false,
+        allow_partition_metadata_count: false,
     });
 
     let decision = planner.decide(&tagged_scan(), &view_of(&stats));
@@ -158,6 +160,8 @@ fn storage_self_proven_domain_overrides_config_range() {
         allow_pure_count_chain: false,
         allow_global_aggregate: false,
         allow_ordered_parallel_expand: false,
+        allow_parallel_count_frontier: false,
+        allow_partition_metadata_count: false,
     });
 
     // A narrower proven domain must be used (not the config range).
@@ -248,6 +252,8 @@ fn make_planner() -> PartitioningPlanner {
         allow_pure_count_chain: false,
         allow_global_aggregate: false,
         allow_ordered_parallel_expand: false,
+        allow_parallel_count_frontier: false,
+        allow_partition_metadata_count: false,
     })
 }
 
@@ -305,6 +311,8 @@ fn planner_with_min_rows(min_rows: u64) -> PartitioningPlanner {
         allow_pure_count_chain: false,
         allow_global_aggregate: false,
         allow_ordered_parallel_expand: false,
+        allow_parallel_count_frontier: false,
+        allow_partition_metadata_count: false,
     })
 }
 
@@ -751,6 +759,8 @@ fn partition_count_is_capped_by_available_workers() {
         allow_pure_count_chain: false,
         allow_global_aggregate: false,
         allow_ordered_parallel_expand: false,
+        allow_parallel_count_frontier: false,
+        allow_partition_metadata_count: false,
     });
 
     let decision = planner.decide(&tagged_scan(), &view_of(&stats));
@@ -779,6 +789,8 @@ fn partition_count_is_capped_by_economic_worker_bound() {
         allow_pure_count_chain: false,
         allow_global_aggregate: false,
         allow_ordered_parallel_expand: false,
+        allow_parallel_count_frontier: false,
+        allow_partition_metadata_count: false,
     });
 
     let decision = planner.decide(&tagged_scan(), &view_of(&stats));
@@ -806,6 +818,8 @@ fn partition_count_is_capped_by_max_partitions() {
         allow_pure_count_chain: false,
         allow_global_aggregate: false,
         allow_ordered_parallel_expand: false,
+        allow_parallel_count_frontier: false,
+        allow_partition_metadata_count: false,
     });
 
     let decision = planner.decide(&tagged_scan(), &view_of(&stats));
@@ -1195,6 +1209,8 @@ fn costed_planner(fixed: u64, per_partition: u64, per_mille: u32) -> Partitionin
         allow_pure_count_chain: false,
         allow_global_aggregate: false,
         allow_ordered_parallel_expand: false,
+        allow_parallel_count_frontier: false,
+        allow_partition_metadata_count: false,
     })
 }
 

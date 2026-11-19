@@ -13,6 +13,40 @@ use linkrs_core::Value;
 use std::sync::Arc;
 
 impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
+    /// Compare the recorded partition counts with the query's actual scalar
+    /// result. The check is diagnostic only: a mismatch means the EXPLAIN
+    /// counters cannot be trusted, not that the query result is wrong.
+    fn record_count_metric_check(
+        result: &ExecutionResult,
+        plan_desc: &mut crate::planning::plan::explain::PlanDescription,
+    ) {
+        if plan_desc.partition_count_mode != "count_frontier"
+            || plan_desc.partition_counts.is_empty()
+        {
+            return;
+        }
+        let recorded: i64 = plan_desc
+            .partition_counts
+            .iter()
+            .map(|(_, count)| *count)
+            .sum();
+        let actual = result.to_data_set().and_then(|data| {
+            if data.rows.len() == 1 && data.col_names.len() == 1 {
+                numeric_count(&data.rows[0][0])
+            } else {
+                None
+            }
+        });
+        let status = match actual {
+            Some(actual) if actual == recorded => "match".to_string(),
+            Some(actual) => format!("MISMATCH recorded={recorded}, result={actual}"),
+            None => format!("UNVERIFIABLE recorded={recorded}"),
+        };
+        plan_desc
+            .cbo_notes
+            .push(format!("partition_count_check: {status}"));
+    }
+
     /// Compile the statement wrapped by an EXPLAIN / PROFILE.
     ///
     /// Goes through the shared `compile_or_get_cached` path so diagnostic
@@ -96,6 +130,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                 &physical_plan,
             );
         Self::overlay_execution_profile(&instance, &mut plan_desc, exec_ctx.max_workers);
+        Self::record_count_metric_check(&_result, &mut plan_desc);
 
         let output =
             crate::executor::explain::format::render_plan(&plan_desc, explain_stmt.format.clone());
@@ -215,15 +250,53 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             operator_info.push(Value::string(&info));
         }
 
+        let count_mode = plan_desc.partition_count_mode == "count_frontier"
+            || plan_desc.partition_count_mode == "metadata";
+        let partition_counts = if count_mode {
+            plan_desc
+                .partition_counts
+                .iter()
+                .map(|(id, count)| format!("{id}:{count}"))
+                .collect::<Vec<_>>()
+                .join(",")
+        } else {
+            String::new()
+        };
+        let counts_info = if count_mode && !partition_counts.is_empty() {
+            format!(", partition_counts: [{partition_counts}]")
+        } else {
+            String::new()
+        };
+        let partition_info = if plan_desc.requested_partitions > 0 {
+            format!(
+                ", requested_partitions: {}, actual_partitions: {}, partition_mode: {}{}",
+                plan_desc.requested_partitions,
+                plan_desc.actual_partitions,
+                plan_desc.partition_count_mode,
+                counts_info,
+            )
+        } else {
+            String::new()
+        };
+        let fallback_info = if plan_desc.count_fallback_reasons.is_empty() {
+            String::new()
+        } else {
+            format!(
+                ", count_fallback: {}",
+                plan_desc.count_fallback_reasons.join("; ")
+            )
+        };
         let parallel_info = if plan_desc.actual_workers > 0 {
             format!(
-                "requested_workers: {}, actual_workers: {}, wall_time: {}us, work_time: {}us, buffered_chunks_peak: {}, buffered_bytes_peak: {}",
+                "requested_workers: {}, actual_workers: {}, wall_time: {}us, work_time: {}us, buffered_chunks_peak: {}, buffered_bytes_peak: {}{}{}",
                 plan_desc.requested_workers,
                 plan_desc.actual_workers,
                 plan_desc.parallel_wall_time_us,
                 plan_desc.parallel_work_time_us,
                 plan_desc.parallel_buffered_chunks_peak,
                 plan_desc.parallel_buffered_bytes_peak,
+                partition_info,
+                fallback_info,
             )
         } else if !plan_desc.parallel_fallback_reason.is_empty() {
             format!(
@@ -303,7 +376,11 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         plan_desc: &mut crate::planning::plan::explain::PlanDescription,
         max_workers: usize,
     ) {
-        let ((wall_us, work_us, workers, chunks_peak, bytes_peak), columnar) = {
+        let (
+            (wall_us, work_us, workers, chunks_peak, bytes_peak),
+            (partitions, partition_counts, count_fallbacks),
+            columnar,
+        ) = {
             let profile = instance.runtime().profile().flush_to_collector();
             for (key, op_profile) in &profile.operators {
                 let node_id = key.physical_operator_id.0 as i64;
@@ -369,6 +446,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             }
             (
                 profile.parallel_profile(),
+                profile.partition_profile(),
                 crate::executor::streaming::runtime::ColumnarStatsSnapshot::from_stats(
                     &instance.runtime().columnar_stats(),
                 ),
@@ -382,6 +460,11 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         plan_desc.parallel_work_time_us = work_us;
         plan_desc.parallel_buffered_chunks_peak = chunks_peak;
         plan_desc.parallel_buffered_bytes_peak = bytes_peak;
+        if partitions > 0 {
+            plan_desc.actual_partitions = partitions;
+        }
+        plan_desc.partition_counts = partition_counts;
+        plan_desc.count_fallback_reasons = count_fallbacks;
         plan_desc.columnar_summary = columnar.summary();
         if plan_desc.actual_workers == 0
             && plan_desc.requested_workers > 1
@@ -390,5 +473,16 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             plan_desc.parallel_fallback_reason =
                 "serial fallback (parallelism not activated)".to_string();
         }
+    }
+}
+
+fn numeric_count(value: &Value) -> Option<i64> {
+    match value {
+        Value::SmallInt(value) => Some(*value as i64),
+        Value::Int(value) => Some(*value as i64),
+        Value::BigInt(value) => Some(*value),
+        Value::Float(value) => Some(*value as i64),
+        Value::Double(value) => Some(*value as i64),
+        _ => None,
     }
 }

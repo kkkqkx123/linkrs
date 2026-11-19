@@ -36,7 +36,7 @@ pub(crate) fn is_ordered_parallel_expand(root: &PlanNodeEnum) -> bool {
     }
 
     let (mut node, needs_order) = match node {
-        PlanNodeEnum::Aggregate(aggregate) if is_count_consumer(aggregate) => {
+        PlanNodeEnum::Aggregate(aggregate) if is_count_consumer(aggregate, true) => {
             (aggregate.input(), false)
         }
         PlanNodeEnum::Dedup(dedup) if dedup.col_names().len() == 1 => (dedup.input(), true),
@@ -73,7 +73,7 @@ pub(crate) fn is_ordered_parallel_expand(root: &PlanNodeEnum) -> bool {
     matches!(source, PlanNodeEnum::ScanVertices(_))
 }
 
-fn skip_true_filters(mut node: &PlanNodeEnum) -> &PlanNodeEnum {
+pub(super) fn skip_true_filters(mut node: &PlanNodeEnum) -> &PlanNodeEnum {
     while let PlanNodeEnum::Filter(filter) = node {
         if !is_true_filter(filter) {
             break;
@@ -83,7 +83,7 @@ fn skip_true_filters(mut node: &PlanNodeEnum) -> &PlanNodeEnum {
     node
 }
 
-fn is_count_consumer(aggregate: &AggregateNode) -> bool {
+pub(super) fn is_count_consumer(aggregate: &AggregateNode, allow_group: bool) -> bool {
     let functions = aggregate.aggregation_functions();
     if functions.is_empty()
         || !functions
@@ -117,11 +117,11 @@ fn is_count_consumer(aggregate: &AggregateNode) -> bool {
     if aggregate.group_keys().is_empty() {
         functions.len() == 1
     } else {
-        aggregate.group_keys().len() == 1 && functions.len() == 1
+        allow_group && aggregate.group_keys().len() == 1 && functions.len() == 1
     }
 }
 
-fn is_true_filter(filter: &FilterNode) -> bool {
+pub(super) fn is_true_filter(filter: &FilterNode) -> bool {
     filter
         .condition()
         .get_expression()

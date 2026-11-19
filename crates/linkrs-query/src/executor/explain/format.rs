@@ -48,6 +48,38 @@ pub fn format_parallel_header(plan_desc: &PlanDescription) -> String {
         "Parallel Workers: requested={}",
         plan_desc.requested_workers,
     );
+    if plan_desc.requested_partitions > 0 {
+        let counts = if plan_desc.partition_count_mode == "count_frontier"
+            || plan_desc.partition_count_mode == "metadata"
+        {
+            plan_desc
+                .partition_counts
+                .iter()
+                .map(|(id, count)| format!("{id}:{count}"))
+                .collect::<Vec<_>>()
+                .join(",")
+        } else {
+            String::new()
+        };
+        let counts_field = if counts.is_empty() {
+            String::new()
+        } else {
+            format!(", partition_counts=[{counts}]")
+        };
+        header.push_str(&format!(
+            ", requested_partitions={}, actual_partitions={}, partition_mode={}{}",
+            plan_desc.requested_partitions,
+            plan_desc.actual_partitions,
+            plan_desc.partition_count_mode,
+            counts_field,
+        ));
+    }
+    if !plan_desc.count_fallback_reasons.is_empty() {
+        header.push_str(&format!(
+            ", count_fallback=[{}]",
+            plan_desc.count_fallback_reasons.join("; "),
+        ));
+    }
     if plan_desc.actual_workers > 0 {
         header.push_str(&format!(
             ", actual={}, wall_time={}us, work_time={}us, buffered_chunks_peak={}, buffered_bytes_peak={}",
@@ -452,6 +484,11 @@ pub fn format_plan_as_json(
         parallel_work_time_us: u64,
         parallel_buffered_chunks_peak: usize,
         parallel_buffered_bytes_peak: usize,
+        requested_partitions: usize,
+        actual_partitions: usize,
+        partition_count_mode: String,
+        partition_counts: Vec<(usize, i64)>,
+        count_fallback_reasons: Vec<String>,
         parallel_fallback_reason: String,
         statistics_summary: String,
         plan_node_descs: Vec<SerializablePlanNodeDescription>,
@@ -538,6 +575,11 @@ pub fn format_plan_as_json(
         parallel_work_time_us: plan_desc.parallel_work_time_us,
         parallel_buffered_chunks_peak: plan_desc.parallel_buffered_chunks_peak,
         parallel_buffered_bytes_peak: plan_desc.parallel_buffered_bytes_peak,
+        requested_partitions: plan_desc.requested_partitions,
+        actual_partitions: plan_desc.actual_partitions,
+        partition_count_mode: plan_desc.partition_count_mode.clone(),
+        partition_counts: plan_desc.partition_counts.clone(),
+        count_fallback_reasons: plan_desc.count_fallback_reasons.clone(),
         parallel_fallback_reason: plan_desc.parallel_fallback_reason.clone(),
         statistics_summary: plan_desc.statistics_summary.clone(),
         plan_node_descs: serializable_nodes,
@@ -647,6 +689,30 @@ mod tests {
         assert!(json.contains("\"parallel_work_time_us\":200"));
         assert!(json.contains("\"parallel_buffered_chunks_peak\":3"));
         assert!(json.contains("\"parallel_buffered_bytes_peak\":4096"));
+    }
+
+    #[test]
+    fn partition_count_metrics_are_rendered() {
+        let mut plan_desc = PlanDescription::new();
+        plan_desc.requested_workers = 4;
+        plan_desc.actual_workers = 4;
+        plan_desc.requested_partitions = 4;
+        plan_desc.actual_partitions = 4;
+        plan_desc.partition_count_mode = "count_frontier".to_string();
+        plan_desc.partition_counts = vec![(0, 7), (1, 9)];
+        plan_desc.count_fallback_reasons = vec!["count frontier: TTL on edge type".to_string()];
+
+        let table = format_plan_as_table(&plan_desc);
+        assert!(table.contains("requested_partitions=4"));
+        assert!(table.contains("actual_partitions=4"));
+        assert!(table.contains("partition_mode=count_frontier"));
+        assert!(table.contains("partition_counts=[0:7,1:9]"));
+        assert!(table.contains("count_fallback=[count frontier: TTL on edge type]"));
+
+        let json = format_plan_as_json(&plan_desc, false).expect("json output");
+        assert!(json.contains("\"requested_partitions\":4"));
+        assert!(json.contains("\"actual_partitions\":4"));
+        assert!(json.contains("\"partition_counts\":[[0,7],[1,9]]"));
     }
 
     #[test]

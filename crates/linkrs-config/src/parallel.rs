@@ -40,6 +40,14 @@ pub struct ParallelConfig {
     /// false.
     #[serde(default)]
     pub allow_ordered_parallel_expand: bool,
+    /// Gray-release allowlist: partition count-only expand frontiers whose
+    /// partial results are scalar counts. Defaults to false.
+    #[serde(default)]
+    pub allow_parallel_count_frontier: bool,
+    /// Gray-release allowlist for shard-local metadata counts. Stays off
+    /// until storage can prove shard ownership and layout identity.
+    #[serde(default)]
+    pub allow_partition_metadata_count: bool,
 }
 
 impl Default for ParallelConfig {
@@ -55,6 +63,8 @@ impl Default for ParallelConfig {
             allow_pure_count_chain: false,
             allow_global_aggregate: false,
             allow_ordered_parallel_expand: false,
+            allow_parallel_count_frontier: false,
+            allow_partition_metadata_count: false,
         }
     }
 }

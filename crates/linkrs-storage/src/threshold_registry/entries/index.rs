@@ -2,7 +2,6 @@
 
 use super::super::model::{ThresholdEntry, ThresholdValue, LAYER_B, LAYER_C};
 use crate::edge::edge_table::core::index::INDEX_SEGMENT_CUTOVER;
-use crate::edge::node_group::ROUTE_CACHE_SLOTS;
 use crate::edge::property_schema::DEFAULT_VERSION_CHAIN_CAP;
 use crate::engine::graph_storage::index_manager::checkpoint::POOL_CAPACITY;
 use crate::index::chunk::data::CHUNK_TARGET_SIZE;
@@ -125,16 +124,5 @@ pub(crate) const ENTRIES: &[ThresholdEntry] = &[
         benches: &[],
         affected_modules: &["index"],
         note: "index chunk target size; no bench isolates chunk sizing",
-    },
-    ThresholdEntry {
-        id: "ROUTE_CACHE_SLOTS",
-        unit: "count",
-        source: "edge/node_group.rs",
-        layers: LAYER_C,
-        live_default: || ThresholdValue::Usize(ROUTE_CACHE_SLOTS),
-        documented_default: ThresholdValue::Usize(128),
-        benches: &[],
-        affected_modules: &["edge/node_group"],
-        note: "hot-row routing cache slots; no bench isolates the group-address cache hit rate",
     },
 ];

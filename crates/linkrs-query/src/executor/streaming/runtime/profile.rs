@@ -158,8 +158,11 @@ pub struct ProfileBoard {
     pub parallel_wall_time_us: AtomicU64,
     pub parallel_work_time_us: AtomicU64,
     pub parallel_workers: AtomicUsize,
+    pub parallel_partitions: AtomicUsize,
     pub parallel_buffered_chunks_peak: AtomicUsize,
     pub parallel_buffered_bytes_peak: AtomicUsize,
+    partition_counts: RwLock<HashMap<usize, i64>>,
+    count_fallback_reasons: Mutex<Vec<String>>,
 }
 
 impl Default for ProfileBoard {
@@ -179,8 +182,11 @@ impl ProfileBoard {
             parallel_wall_time_us: AtomicU64::new(0),
             parallel_work_time_us: AtomicU64::new(0),
             parallel_workers: AtomicUsize::new(0),
+            parallel_partitions: AtomicUsize::new(0),
             parallel_buffered_chunks_peak: AtomicUsize::new(0),
             parallel_buffered_bytes_peak: AtomicUsize::new(0),
+            partition_counts: RwLock::new(HashMap::new()),
+            count_fallback_reasons: Mutex::new(Vec::new()),
         }
     }
 
@@ -214,6 +220,23 @@ impl ProfileBoard {
         self.entries.read().get(key).cloned()
     }
 
+    /// Add one partition's scalar count to the profile.
+    ///
+    /// Count chunks are keyed by partition index so the reported vector is
+    /// stable regardless of worker completion order.
+    pub fn record_partition_count(&self, partition_id: usize, count: i64) {
+        let mut guard = self.partition_counts.write();
+        *guard.entry(partition_id).or_insert(0) += count;
+    }
+
+    /// Record why a count frontier used materialized rows for one chunk.
+    pub fn record_count_fallback(&self, reason: &str) {
+        let mut guard = self.count_fallback_reasons.lock();
+        if !guard.iter().any(|existing| existing.as_str() == reason) {
+            guard.push(reason.to_string());
+        }
+    }
+
     /// Aggregate all entries into a [`ProfileCollector`] for EXPLAIN output.
     pub fn flush_to_collector(&self) -> ProfileCollector {
         let mut collector = ProfileCollector::new();
@@ -232,6 +255,13 @@ impl ProfileBoard {
         collector.parallel_wall_time_us = self.parallel_wall_time_us.load(Ordering::Relaxed);
         collector.parallel_work_time_us = self.parallel_work_time_us.load(Ordering::Relaxed);
         collector.parallel_workers = self.parallel_workers.load(Ordering::Relaxed);
+        collector.parallel_partitions = self.parallel_partitions.load(Ordering::Relaxed);
+        let counts = self.partition_counts.read();
+        let mut ordered: Vec<_> = counts.iter().map(|(id, count)| (*id, *count)).collect();
+        ordered.sort_by_key(|(id, _)| *id);
+        collector.partition_counts = ordered;
+        drop(counts);
+        collector.count_fallback_reasons = self.count_fallback_reasons.lock().clone();
         collector.parallel_buffered_chunks_peak =
             self.parallel_buffered_chunks_peak.load(Ordering::Relaxed);
         collector.parallel_buffered_bytes_peak =
@@ -254,6 +284,12 @@ pub struct ProfileCollector {
     pub parallel_work_time_us: u64,
     /// Maximum number of workers used by any coordinator in this query.
     pub parallel_workers: usize,
+    /// Maximum number of partitions executed by any coordinator.
+    pub parallel_partitions: usize,
+    /// Scalar count produced by each partition, in partition order.
+    pub partition_counts: Vec<(usize, i64)>,
+    /// Reasons a count frontier degraded to the materialized row path.
+    pub count_fallback_reasons: Vec<String>,
     /// Peak number of chunks retained in output queues.
     pub parallel_buffered_chunks_peak: usize,
     /// Peak accounted bytes retained in output queues.
@@ -294,6 +330,15 @@ impl ProfileCollector {
             self.parallel_workers,
             self.parallel_buffered_chunks_peak,
             self.parallel_buffered_bytes_peak,
+        )
+    }
+
+    /// Snapshot of partition counts and count fallbacks for EXPLAIN output.
+    pub fn partition_profile(&self) -> (usize, Vec<(usize, i64)>, Vec<String>) {
+        (
+            self.parallel_partitions,
+            self.partition_counts.clone(),
+            self.count_fallback_reasons.clone(),
         )
     }
 

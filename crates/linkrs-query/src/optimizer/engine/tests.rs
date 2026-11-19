@@ -1642,6 +1642,8 @@ mod fast_shape_tests {
             allow_pure_count_chain: false,
             allow_global_aggregate: false,
             allow_ordered_parallel_expand: false,
+            allow_parallel_count_frontier: false,
+            allow_partition_metadata_count: false,
         });
         let plan = engine
             .optimize(ExecutionPlan::new(Some(person_scan("n"))), Some("test"))

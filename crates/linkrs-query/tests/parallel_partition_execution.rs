@@ -176,6 +176,8 @@ fn build_pipeline(
             allow_pure_count_chain: false,
             allow_global_aggregate: false,
             allow_ordered_parallel_expand: false,
+            allow_parallel_count_frontier: false,
+            allow_partition_metadata_count: false,
         }
     } else {
         PartitioningConfig {
@@ -1007,6 +1009,8 @@ fn storage_self_proven_domain_enables_partitioning_without_config_range() {
         allow_pure_count_chain: false,
         allow_global_aggregate: false,
         allow_ordered_parallel_expand: false,
+        allow_parallel_count_frontier: false,
+        allow_partition_metadata_count: false,
     });
     let stats = Arc::new(StatsManager::new());
     let mut pipeline =
@@ -1060,6 +1064,8 @@ fn ordered_parallel_expand_matches_serial_for_narrow_shapes() {
         allow_pure_count_chain: false,
         allow_global_aggregate: false,
         allow_ordered_parallel_expand: true,
+        allow_parallel_count_frontier: false,
+        allow_partition_metadata_count: false,
     };
     let mut parallel = build_pipeline_with_config(&storage, config);
 
@@ -1116,6 +1122,8 @@ fn ordered_parallel_expand_gate_keeps_unlisted_shapes_serial() {
         allow_pure_count_chain: false,
         allow_global_aggregate: false,
         allow_ordered_parallel_expand: true,
+        allow_parallel_count_frontier: false,
+        allow_partition_metadata_count: false,
     };
     let mut pipeline = build_pipeline_with_config(&storage, config);
 
@@ -1133,4 +1141,109 @@ fn ordered_parallel_expand_gate_keeps_unlisted_shapes_serial() {
             "unlisted shape must stay serial: {query}\n{plan}"
         );
     }
+}
+
+fn count_frontier_config() -> PartitioningConfig {
+    PartitioningConfig {
+        enabled: false,
+        min_rows_per_partition: 100,
+        max_partitions: 4,
+        vertex_id_range: Some(0i64..2 * VERTEX_COUNT),
+        max_workers: 4,
+        max_buffered_chunks: 4,
+        fixed_overhead_rows: 0,
+        per_partition_rows: 0,
+        exchange_row_per_mille: 0,
+        allow_pure_count_chain: false,
+        allow_global_aggregate: false,
+        allow_ordered_parallel_expand: false,
+        allow_parallel_count_frontier: true,
+        allow_partition_metadata_count: false,
+    }
+}
+
+fn parsed_partition_counts(plan: &str) -> Vec<i64> {
+    let Some(list) = plan.split("partition_counts=[").nth(1) else {
+        return Vec::new();
+    };
+    let Some(list) = list.split(']').next() else {
+        return Vec::new();
+    };
+    list.split(',')
+        .filter_map(|entry| entry.split(':').nth(1)?.parse::<i64>().ok())
+        .collect()
+}
+
+#[test]
+fn parallel_count_frontier_matches_serial_and_reports_partition_counts() {
+    let storage = setup_storage();
+    let mut serial = build_pipeline(&storage, 1);
+    let mut parallel = build_pipeline_with_config(&storage, count_frontier_config());
+
+    for query in [
+        "MATCH (a:Node)-[:Link]->(b:Node)-[:Link]->(c:Node) RETURN count(c)",
+        "MATCH (a:Node)-[k:Link*1..2]->(b:Node) RETURN count(k)",
+    ] {
+        let expected = query_rows(&mut serial, query);
+        for _ in 0..4 {
+            assert_eq!(
+                expected,
+                query_rows(&mut parallel, query),
+                "count frontier result drifted for {query}"
+            );
+        }
+        let Value::BigInt(expected_count) = &expected[0][0] else {
+            panic!("count query must return one bigint: {expected:?}");
+        };
+
+        let analyzed = query_rows(&mut parallel, &format!("EXPLAIN ANALYZE {query}"));
+        let plan = analyzed[0][0].to_string().unwrap_or_default();
+        assert!(
+            plan.contains("partition_mode=count_frontier"),
+            "scalar frontier must be reported: {query}\n{plan}"
+        );
+        assert!(
+            plan.contains("partition_count_check: match"),
+            "partition counters must match the query result: {query}\n{plan}"
+        );
+        let counts = parsed_partition_counts(&plan);
+        assert_eq!(counts.len(), 4, "each partition reports one count: {plan}");
+        assert_eq!(
+            counts.iter().sum::<i64>(),
+            *expected_count,
+            "partition counts must sum to the serial result: {plan}"
+        );
+        let workers = plan
+            .split("actual=")
+            .nth(1)
+            .and_then(|s| s.split(|c: char| !c.is_ascii_digit()).next())
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(0);
+        assert!(workers >= 2, "frontier must use real workers: {plan}");
+    }
+
+    let one_hop = "MATCH (a:Node)-[:Link]->(b:Node) RETURN count(b)";
+    let analyzed = query_rows(&mut parallel, &format!("EXPLAIN ANALYZE {one_hop}"));
+    let plan = analyzed[0][0].to_string().unwrap_or_default();
+    assert!(
+        !plan.contains("partition_mode=count_frontier"),
+        "single-step count must stay on the metadata path: {plan}"
+    );
+}
+
+#[test]
+fn metadata_count_flag_alone_does_not_select_generic_partitioning() {
+    let storage = setup_storage();
+    let mut config = count_frontier_config();
+    config.allow_parallel_count_frontier = false;
+    config.allow_partition_metadata_count = true;
+    let mut pipeline = build_pipeline_with_config(&storage, config);
+
+    let query = "MATCH (a:Node)-[:Link]->(b:Node)-[:Link]->(c:Node) RETURN count(c)";
+    let analyzed = query_rows(&mut pipeline, &format!("EXPLAIN ANALYZE {query}"));
+    let plan = analyzed[0][0].to_string().unwrap_or_default();
+    assert!(
+        !plan.contains("Partitioning:") || plan.contains("fallback_reason"),
+        "metadata flag without storage proof must stay serial: {plan}"
+    );
 }

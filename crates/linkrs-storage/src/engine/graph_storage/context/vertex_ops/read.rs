@@ -151,4 +151,38 @@ impl GraphStorageContext {
                 }
             })
     }
+
+    /// Resolve many internal row ids under one vertex-table lock.
+    ///
+    /// Raw ids win over timestamp-valid ids so dangling edge endpoints still
+    /// resolve, matching the single-id resolver's semantics.
+    pub fn external_ids_by_internal_batch(
+        &self,
+        label: LabelId,
+        internal_ids: &[u32],
+        ts: Timestamp,
+    ) -> Vec<Option<VertexId>> {
+        if !self.persistent.is_open.load(Ordering::Acquire) {
+            return vec![None; internal_ids.len()];
+        }
+        self.persistent
+            .data_store
+            .with_vertex_tables(|vertex_tables| {
+                let Some(table) = vertex_tables.get(&label) else {
+                    return vec![None; internal_ids.len()];
+                };
+                internal_ids
+                    .iter()
+                    .map(|id| {
+                        table
+                            .get_external_id_raw(*id)
+                            .or_else(|| table.get_external_id(*id, ts))
+                            .and_then(|key| match key {
+                                crate::vertex::IdKey::Int(i) => VertexId::try_from_int64(i).ok(),
+                                crate::vertex::IdKey::Text(s) => VertexId::try_from_string(&s).ok(),
+                            })
+                    })
+                    .collect()
+            })
+    }
 }

@@ -616,11 +616,11 @@ pub(super) fn expand_variable_frontier(
 
 /// Count-only expansion without output-row materialization.
 ///
-/// A single step sums per-seed out-degrees. The fixed `1..2` range (also used
-/// when two single-step hops collapse) sums the tail degrees of each frontier
-/// depth while advancing the frontier with raw neighbor ids. Shapes whose
-/// degrees cannot express the walk (TTL, open schema, constrained repeat
-/// rule) replay the materializing row path and count its rows instead.
+/// A single step sums per-seed out-degrees. The fixed `2` and `1..2` ranges
+/// use the fused neighbor-degree read so no intermediate neighbor id batch is
+/// materialized in the query layer. Shapes whose degrees cannot express the
+/// walk (TTL, open schema, constrained repeat rule) replay the materializing
+/// row path and count its rows instead.
 pub(super) fn expand_count_only(
     chunk: DataChunk,
     reader: &dyn QueryStorage,
@@ -654,6 +654,7 @@ pub(super) fn expand_count_only(
     let Some(limits) = step_limits else {
         if ctx.edge_ttl_active(reader)? {
             // Raw adjacency cannot evaluate TTL; materialized edges can.
+            ctx.record_count_fallback("count frontier: TTL on edge type");
             let mut count: i64 = 0;
             for vid in &seed_vids {
                 count += reader
@@ -667,39 +668,41 @@ pub(super) fn expand_count_only(
     };
 
     let ttl_active = ctx.edge_ttl_active(reader)?;
-    if limits.is_empty()
-        || limits.iter().any(|&depth| depth == 0 || depth > 2)
-        || ttl_active
-        || ctx.include_empty_paths
-        || !ctx.closed_loop
-        || !is_closed_loop_storage(reader, space_name, edge_types, direction, ctx.dst_tag)
-    {
+    let unsupported_range =
+        limits.is_empty() || limits.iter().any(|&depth| depth == 0 || depth > 2);
+    let storage_closed = !unsupported_range
+        && !ttl_active
+        && !ctx.include_empty_paths
+        && ctx.closed_loop
+        && is_closed_loop_storage(reader, space_name, edge_types, direction, ctx.dst_tag);
+    if unsupported_range || ttl_active || ctx.include_empty_paths || !storage_closed {
+        let reason = if unsupported_range {
+            "count frontier: unsupported step range"
+        } else if ttl_active {
+            "count frontier: TTL on edge type"
+        } else if ctx.include_empty_paths {
+            "count frontier: empty paths requested"
+        } else if !ctx.closed_loop {
+            "count frontier: schema closure not claimed"
+        } else {
+            "count frontier: storage schema proof failed"
+        };
+        ctx.record_count_fallback(reason);
         return count_materialized_rows(chunk, reader, src_vids, limits, ctx);
     }
 
-    let max_depth = limits.iter().copied().max().unwrap_or(0);
-    let wanted: std::collections::HashSet<u32> = limits.iter().copied().collect();
-    let mut frontier = seed_vids;
+    let mut depths = limits.to_vec();
+    depths.sort_unstable();
+    depths.dedup();
     let mut total: i64 = 0;
-    for depth in 1..=max_depth {
-        if frontier.is_empty() {
-            break;
-        }
-        if wanted.contains(&depth) {
-            let degrees = reader.out_degree_batch(space_name, &frontier, direction, edge_types)?;
-            total += degrees.iter().map(|&d| d as i64).sum::<i64>();
-        }
-        if depth == max_depth {
-            break;
-        }
-        let batches =
-            reader.neighbor_dst_ids_batch(space_name, &frontier, direction, edge_types)?;
-        frontier = batches.into_iter().flatten().collect();
-        if frontier.len() > 1_000_000 {
-            return Err(QueryError::execution(
-                "count-only frontier exceeded the in-memory fanout budget".to_string(),
-            ));
-        }
+    if depths.contains(&1) {
+        let degrees = reader.out_degree_batch(space_name, &seed_vids, direction, edge_types)?;
+        total += degrees.iter().map(|&d| d as i64).sum::<i64>();
+    }
+    if depths.contains(&2) {
+        let degrees =
+            reader.neighbor_degree_batch(space_name, &seed_vids, direction, edge_types)?;
+        total += degrees.iter().map(|&d| d as i64).sum::<i64>();
     }
     Ok(total)
 }

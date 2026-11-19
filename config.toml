@@ -253,6 +253,10 @@ max_buffered_chunks = 10
 allow_pure_count_chain = false
 allow_global_aggregate = false
 allow_ordered_parallel_expand = false
+# Admit partitioned count-only expand frontiers
+allow_parallel_count_frontier = false
+# Requires shard-local storage evidence; inert until that proof exists
+allow_partition_metadata_count = false
 # Optional vertex ID range (takes effect only when both start and end are set)
 # vertex_id_start = 0
 # vertex_id_end = 100000

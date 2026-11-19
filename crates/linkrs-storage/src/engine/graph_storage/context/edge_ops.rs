@@ -828,6 +828,69 @@ impl GraphStorageContext {
         }
     }
 
+    /// Count visible out-edges for already resolved internal row ids.
+    ///
+    /// Used by the fused two-hop count after the first adjacency pass has
+    /// staged neighbor endpoints. No vertex-id resolution happens here: the
+    /// caller owns the label for each endpoint, and no other lock is taken
+    /// while an edge table is held.
+    pub fn count_out_nbrs_by_internal(
+        &self,
+        edge_label: LabelId,
+        src_label: LabelId,
+        endpoints: &[u32],
+        ts: Timestamp,
+    ) -> Vec<usize> {
+        let mut counts = vec![0usize; endpoints.len()];
+        if !self.persistent.is_open.load(Ordering::Acquire) {
+            return counts;
+        }
+        let arcs = self
+            .persistent
+            .data_store
+            .matching_edge_partition_arcs(edge_label);
+        let gate = self.pending_gate();
+        for arc in &arcs {
+            let table = self.persistent.data_store.read_edge_table(arc);
+            if table.label() != edge_label || table.src_label() != src_label {
+                continue;
+            }
+            for (index, endpoint) in endpoints.iter().enumerate() {
+                table.visit_out_with_gate(*endpoint, ts, &gate, |_| counts[index] += 1);
+            }
+        }
+        counts
+    }
+
+    /// In-direction counterpart of [`Self::count_out_nbrs_by_internal`].
+    pub fn count_in_nbrs_by_internal(
+        &self,
+        edge_label: LabelId,
+        dst_label: LabelId,
+        endpoints: &[u32],
+        ts: Timestamp,
+    ) -> Vec<usize> {
+        let mut counts = vec![0usize; endpoints.len()];
+        if !self.persistent.is_open.load(Ordering::Acquire) {
+            return counts;
+        }
+        let arcs = self
+            .persistent
+            .data_store
+            .matching_edge_partition_arcs(edge_label);
+        let gate = self.pending_gate();
+        for arc in &arcs {
+            let table = self.persistent.data_store.read_edge_table(arc);
+            if table.label() != edge_label || table.dst_label() != dst_label {
+                continue;
+            }
+            for (index, endpoint) in endpoints.iter().enumerate() {
+                table.visit_in_with_gate(*endpoint, ts, &gate, |_| counts[index] += 1);
+            }
+        }
+        counts
+    }
+
     pub fn out_edges_projected(
         &self,
         edge_label: LabelId,

@@ -7,6 +7,7 @@ use crate::planning::plan::{PartitionSource, PartitionSpec, PartitionStrategy, P
 
 use super::super::config::{PartitioningDecision, PartitioningLayoutInfo};
 use super::core::{fallback, PartitioningPlanner};
+use super::count::is_parallel_count_frontier;
 use super::helpers::{hop_fanout, split_range};
 use super::ordered::is_ordered_parallel_expand;
 
@@ -48,10 +49,13 @@ pub(crate) fn decide_anchored_traversal(
     // through the narrow ordered-expand gate.
     let rowless_gate =
         planner.config().allow_ordered_parallel_expand && is_ordered_parallel_expand(root);
+    let count_frontier_gate =
+        planner.config().allow_parallel_count_frontier && is_parallel_count_frontier(root);
     let hops_ok = chain.iter().all(|n| match n {
         PlanNodeEnum::ExpandAll(expand) => {
+            let steps_ok = count_frontier_gate || expand.step_limit().unwrap_or(1) == 1;
             expand.filter().is_none()
-                && expand.step_limit().unwrap_or(1) == 1
+                && steps_ok
                 && (expand.id_only() || expand.count_only() || (rowless_gate && expand.skip_rows()))
         }
         _ => true,

@@ -15,6 +15,7 @@ pub(super) fn handle(
     op: &mut GraphOperator,
     input: &mut StreamingExecutor,
 ) -> Result<Option<DataChunk>, QueryError> {
+    let count_runtime = op.runtime.clone();
     let GraphOperatorKind::Expand {
         storage,
         space_name,
@@ -64,6 +65,7 @@ pub(super) fn handle(
                     lightweight_source: false,
                     include_empty_paths: false,
                     ttl_active: None,
+                    runtime: count_runtime.clone(),
                 },
             )? {
                 return Ok(Some(output));
@@ -115,6 +117,7 @@ pub(super) fn handle_all(
     op: &mut GraphOperator,
     input: &mut StreamingExecutor,
 ) -> Result<Option<DataChunk>, QueryError> {
+    let count_runtime = op.runtime.clone();
     let GraphOperatorKind::ExpandAll {
         storage,
         space_name,
@@ -220,6 +223,7 @@ pub(super) fn handle_all(
                         lightweight_source,
                         include_empty_paths,
                         ttl_active: None,
+                        runtime: count_runtime.clone(),
                     },
                 )?;
                 if count > 0 {
@@ -249,6 +253,7 @@ pub(super) fn handle_all(
                 lightweight_source,
                 include_empty_paths,
                 ttl_active: None,
+                runtime: count_runtime.clone(),
             };
             let expand_result = if let Some(limits) = step_limits.clone() {
                 let var_eligible = !limits.is_empty()

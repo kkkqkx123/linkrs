@@ -366,3 +366,27 @@ devs 上 release 编译通过；`expand_pushdown` 单测 22/22、DQL 322/322、s
 | 九条纯计数 | 0.140–0.606 | 0.146–0.654 | 无实质回归，单轮漂移 |
 
 `variable_path_count` 已从秒级降到十几毫秒，超过与 Ladybug 同数量级的目标；`join_two_hop` 约 14 ms，相对 Ladybug 的 2.42 ms 仍有约 5–6 倍差距，但已消除中间路径行物化。后续收益需来自更窄的度读取或并行前沿，而不是继续改聚合。原始日志与四轮 JSON 落在 `perf-data/parity/results/2026-11-18/stage10-two-hop-variable/`，远端在 `/data/kkkqkx/linkrs/stage2-results/` 与 `/data/kkkqkx/linkrs/stage2-gate3.log`。
+
+## 20. 两跳计数读取合并实测回填（2026-11-19）
+
+设计见 `docs/plan/two-hop-count-read-fusion-plan.md`。第 19 节后 `EXPLAIN ANALYZE` 显示两个固定门的顶点扫描仅约 0.5 ms，剩余时间全部在 `ExpandAll`。本轮在存储查询 trait 上增加按批返回「邻居度数之和」的只读原语：原生引擎对单类型、单方向形状先暂存内部端点，再按内部行号读尾边度数；外部 ID 只在一次批量解析中用于保持悬空邻居可见性和读集合记录，不进入查询层行。多类型、`Both` 与非原生适配器沿用原两次调用组合。查询层固定深度 `2` 与范围 `1..2` 直接消费新原语，不再构造中间邻居 ID 向量；TTL、开放 schema 与受限路径语义仍回退物化行数。
+
+原生实现与可移植组合的等价性由新存储测试锁定，覆盖自环、平行边、悬空端点与 `Out`/`In` 双方向；DQL 自环、TTL 与物化对照测试继续通过。devs 上 release 编译通过；存储新测试 2/2、`expand_pushdown` 单测 22/22、DQL 322/322、streaming lib 419/419、`parallel_partition_execution` 25/25。固定门沿用第 19 节口径，四轮中位数 ms：
+
+| 用例 | 第 19 节四轮 | 本轮四轮 | 相对上轮均值 |
+|---|---:|---:|---|
+| `join_two_hop` | 13.4–14.3 | 6.31 / 6.73 / 6.72 / 6.78 | 约 2.1× |
+| `variable_path_count` | 13.8–14.6 | 6.75 / 7.16 / 7.21 / 7.21 | 约 2.0× |
+| `group_by_count` | 95.6–122.8 | 104.0–107.1 | 无回归 |
+| `distinct_limit` | 114.3–136.2 | 121.7–128.2 | 无回归 |
+| 九条纯计数 | 0.146–0.654 | 0.155–0.686 | 噪声内 |
+
+`EXPLAIN ANALYZE` 中 `ExpandAll` 从约 15.3 ms 降到约 7.8 ms，顶点扫描仍约 0.6 ms。实现中曾采用逐邻居解析外部 ID 的版本，两跳约 10 ms；改为一次批量解析后保留相同悬空邻居语义并恢复到约 7 ms。结论：阶段二剩余改进达成，两个目标用例相对上一轮各再降约一半；`join_two_hop` 相对 Ladybug 2.42 ms 仍约 2.6–2.8 倍，后续若继续下探需转向并行前沿或分区计数，属于另一阶段任务。日志与 JSON 落在 `perf-data/parity/results/2026-11-18/stage11-read-fusion/`，远端在 `/data/kkkqkx/linkrs/readfusion-results/` 与 `/data/kkkqkx/linkrs/readfusion-gate3.log`。
+
+## 21. 并行计数前沿漂移修复与放行恢复（2026-11-19）
+
+设计见 `docs/plan/parallel-frontier-partition-counting-plan.md`。同二进制 A/B 曾发现并行前沿结果在不同执行间波动：串行稳定返回 382018 / 400153，前沿开启时局部计数在 381895–382070 与 399086–400382 之间变化。逐层取证显示，同一批种子解析出的端点内部 ID 相同、边表分片相同、读时间戳与 pending gate 相同，但同一端点的度数不同；最终定位到 CSR 分组的共享无锁路由缓存：并发 worker 可能把一个新 `vid` 与旧槽位残留的 `(gid, local)` 组合起来，从而读到错误的行。
+
+修复移除该可变路由缓存，路由直接由不可变的 group bits 与 group map 推导；同时删除对应的阈值项与缓存并发测试。`EXPLAIN ANALYZE` 保留 `partition_count_check`，benchmark 在每次计时后校验结果值稳定性，脚本遇到 `result_stable=false` 即失败。配置开关仍默认关闭，元数据计数因缺少 shard-local 存储证明保持不生效。
+
+devs 上 release 编译通过；partitioning 47/47、streaming 419/419、DQL 322/322、`parallel_partition_execution` 27/27。冻结 golden DB、`threads=1`、每例 8 轮的同二进制 A/B 中，所有 case 的 `join_two_hop` / `variable_path_count` 均稳定返回 382018 / 400153，未再出现 `result_stable=false`。8 worker 下前沿中位数约 5.84 / 5.67 ms，对应关闭时约 5.80 / 6.16 ms；4 worker 下约 5.75 / 5.81 ms，对应关闭时约 5.69 / 6.05 ms；2 worker 因额外启动开销约 7.20 / 7.10 ms，仍不建议。默认保持关闭；若要启用，建议 `max_partitions` 不超过 8，并保留同轮结果稳定性检查。日志、EXPLAIN 样本与 JSON 落在 `perf-data/parity/results/2026-11-18/count-frontier/`，远端在 `/data/kkkqkx/linkrs/count-frontier-results/`、`/data/kkkqkx/linkrs/count-frontier-ab/` 与 `/data/kkkqkx/linkrs/count-frontier-{gate,matrix}-v9.log`。

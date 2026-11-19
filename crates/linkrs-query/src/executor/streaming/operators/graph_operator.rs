@@ -48,9 +48,18 @@ pub(super) struct ExpandCtx<'a> {
     /// fixes the edge-type set, so the flag is constant for the operator and
     /// is computed at most once per `ExpandCtx`.
     pub(super) ttl_active: Option<bool>,
+    /// Runtime used to report count-frontier fallbacks in EXPLAIN ANALYZE.
+    pub(super) runtime: Option<Arc<ExecutionRuntime>>,
 }
 
 impl ExpandCtx<'_> {
+    /// Record why a scalar count frontier degraded to materialized rows.
+    pub(super) fn record_count_fallback(&self, reason: &str) {
+        if let Some(runtime) = &self.runtime {
+            runtime.profile().record_count_fallback(reason);
+        }
+    }
+
     /// Whether any edge type this expand can reach has TTL configured.
     ///
     /// Topology fast paths read raw CSR adjacency and cannot evaluate TTL;

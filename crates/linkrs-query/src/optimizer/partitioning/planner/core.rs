@@ -10,6 +10,7 @@ use crate::planning::plan::{PartitionSource, PartitionSpec, PartitionStrategy, P
 use linkrs_core::types::operators::AggregateFunction;
 
 use super::anchored::decide_anchored_traversal;
+use super::count::{is_parallel_count_frontier, is_partition_metadata_count};
 use super::edge::{collect_vertex_scans, decide_edge_scan};
 use super::helpers::{collect_condition_properties, split_range};
 use super::multi_scan::decide_multi_scan;
@@ -203,13 +204,15 @@ impl PartitioningPlanner {
         layout: &PartitioningLayoutInfo,
     ) -> PartitioningDecision {
         if !self.config.enabled && !self.shape_allowlisted(root) {
+            if self.config.allow_partition_metadata_count && is_partition_metadata_count(root) {
+                return fallback(
+                    "partitioning is disabled; metadata count has no shard-local storage proof",
+                );
+            }
             return fallback("partitioning is disabled");
         }
         if self.config.max_partitions < 2 {
             return fallback("partitioning max_partitions is less than two");
-        }
-        if self.config.max_workers < 2 {
-            return fallback("ordered parallel expand requires more than one worker");
         }
         // The storage self-proven domain wins; the configured range is a
         // fallback for setups that explicitly trust a caller-supplied range.
@@ -227,6 +230,9 @@ impl PartitioningPlanner {
         };
         if range.start >= range.end {
             return fallback("vertex-id range is empty");
+        }
+        if self.config.max_workers < 2 {
+            return fallback("parallel execution requires more than one worker");
         }
 
         // One snapshot per decision: every estimate below reads it, so the
@@ -449,6 +455,14 @@ impl PartitioningPlanner {
     fn shape_allowlisted(&self, root: &PlanNodeEnum) -> bool {
         if self.config.allow_ordered_parallel_expand && is_ordered_parallel_expand(root) {
             return true;
+        }
+        if self.config.allow_parallel_count_frontier && is_parallel_count_frontier(root) {
+            return true;
+        }
+        // A metadata-count request must not silently select the generic
+        // scan-partition path: shard-local ownership is a separate proof.
+        if self.config.allow_partition_metadata_count && is_partition_metadata_count(root) {
+            return false;
         }
         let PlanNodeEnum::Aggregate(agg) = root else {
             return false;
