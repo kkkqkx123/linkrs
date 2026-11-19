@@ -440,6 +440,7 @@ impl<
             exchange_row_per_mille: 0,
             allow_pure_count_chain: parallel.allow_pure_count_chain,
             allow_global_aggregate: parallel.allow_global_aggregate,
+            allow_ordered_parallel_expand: parallel.allow_ordered_parallel_expand,
         }
     }
 

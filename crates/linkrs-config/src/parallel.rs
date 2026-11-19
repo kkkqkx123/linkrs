@@ -35,6 +35,11 @@ pub struct ParallelConfig {
     /// the disabled gate. Defaults to false.
     #[serde(default)]
     pub allow_global_aggregate: bool,
+    /// Gray-release allowlist: admit the de-materialized single-hop expand
+    /// front end feeding count, group-count, or ordered distinct. Defaults to
+    /// false.
+    #[serde(default)]
+    pub allow_ordered_parallel_expand: bool,
 }
 
 impl Default for ParallelConfig {
@@ -49,6 +54,7 @@ impl Default for ParallelConfig {
             vertex_id_end: None,
             allow_pure_count_chain: false,
             allow_global_aggregate: false,
+            allow_ordered_parallel_expand: false,
         }
     }
 }

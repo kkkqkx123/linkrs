@@ -8,6 +8,7 @@ use crate::planning::plan::{PartitionSource, PartitionSpec, PartitionStrategy, P
 use super::super::config::{PartitioningDecision, PartitioningLayoutInfo};
 use super::core::{fallback, PartitioningPlanner};
 use super::helpers::{hop_fanout, split_range};
+use super::ordered::is_ordered_parallel_expand;
 
 /// Choose a partition layout for an anchored bounded traversal (E4):
 /// a linear chain of `ExpandAll` hops above the anchor vertex
@@ -40,15 +41,18 @@ pub(crate) fn decide_anchored_traversal(
             "anchored traversal must contain at least one ExpandAll hop",
         ));
     }
-    // C1: every ExpandAll hop must be de-materialized (id_only/count_only)
-    // and filter-free, so each partition runs the full bounded chain over
-    // its anchor subrange without changing row semantics. Other columnar
-    // hops stay on the non-partitioned path by design.
+    // C1: every ExpandAll hop must be de-materialized and filter-free, so
+    // each partition runs the full bounded chain over its anchor subrange
+    // without changing row semantics. The rowless front end sets `skip_rows`
+    // without the older id_only/count_only flags, so it is admitted only
+    // through the narrow ordered-expand gate.
+    let rowless_gate =
+        planner.config().allow_ordered_parallel_expand && is_ordered_parallel_expand(root);
     let hops_ok = chain.iter().all(|n| match n {
         PlanNodeEnum::ExpandAll(expand) => {
             expand.filter().is_none()
                 && expand.step_limit().unwrap_or(1) == 1
-                && (expand.id_only() || expand.count_only())
+                && (expand.id_only() || expand.count_only() || (rowless_gate && expand.skip_rows()))
         }
         _ => true,
     });

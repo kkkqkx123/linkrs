@@ -161,9 +161,8 @@ fn build_pipeline(
     storage: &Arc<RwLock<GraphStorage>>,
     workers: usize,
 ) -> QueryPipelineManager<GraphStorage> {
-    let mut engine = OptimizerEngine::default();
-    if workers > 1 {
-        engine.set_partitioning_config(PartitioningConfig {
+    let config = if workers > 1 {
+        PartitioningConfig {
             enabled: true,
             min_rows_per_partition: 400,
             max_partitions: workers * 2,
@@ -176,13 +175,23 @@ fn build_pipeline(
             exchange_row_per_mille: 0,
             allow_pure_count_chain: false,
             allow_global_aggregate: false,
-        });
+            allow_ordered_parallel_expand: false,
+        }
     } else {
-        engine.set_partitioning_config(PartitioningConfig {
+        PartitioningConfig {
             max_workers: 1,
             ..PartitioningConfig::default()
-        });
-    }
+        }
+    };
+    build_pipeline_with_config(storage, config)
+}
+
+fn build_pipeline_with_config(
+    storage: &Arc<RwLock<GraphStorage>>,
+    config: PartitioningConfig,
+) -> QueryPipelineManager<GraphStorage> {
+    let mut engine = OptimizerEngine::default();
+    engine.set_partitioning_config(config);
     let stats = Arc::new(StatsManager::new());
     let pipeline = QueryPipelineManager::with_optimizer(storage.clone(), stats, Arc::new(engine));
     pipeline
@@ -975,6 +984,7 @@ fn storage_self_proven_domain_enables_partitioning_without_config_range() {
         exchange_row_per_mille: 0,
         allow_pure_count_chain: false,
         allow_global_aggregate: false,
+        allow_ordered_parallel_expand: false,
     });
     let stats = Arc::new(StatsManager::new());
     let mut pipeline =
@@ -1009,4 +1019,96 @@ fn storage_self_proven_domain_enables_partitioning_without_config_range() {
         actual >= 2,
         "storage-driven partitioning must use real workers, got actual={actual}:\n{plan}"
     );
+}
+
+#[test]
+fn ordered_parallel_expand_matches_serial_for_narrow_shapes() {
+    let storage = setup_storage();
+    let mut serial = build_pipeline(&storage, 1);
+    let config = PartitioningConfig {
+        enabled: false,
+        min_rows_per_partition: 100,
+        max_partitions: 4,
+        vertex_id_range: Some(0i64..2 * VERTEX_COUNT),
+        max_workers: 4,
+        max_buffered_chunks: 4,
+        fixed_overhead_rows: 0,
+        per_partition_rows: 0,
+        exchange_row_per_mille: 0,
+        allow_pure_count_chain: false,
+        allow_global_aggregate: false,
+        allow_ordered_parallel_expand: true,
+    };
+    let mut parallel = build_pipeline_with_config(&storage, config);
+
+    let queries = [
+        "MATCH (a:Node)-[:Link]->(b:Node) RETURN b.value, count(b) ORDER BY b.value LIMIT 10",
+        "MATCH (a:Node)-[:Link]->(b:Node) RETURN DISTINCT b.value ORDER BY b.value LIMIT 10",
+    ];
+    for query in queries {
+        let mut expected = query_rows(&mut serial, query);
+        let mut actual = query_rows(&mut parallel, query);
+        sorted(&mut expected);
+        sorted(&mut actual);
+        assert_eq!(
+            expected, actual,
+            "ordered parallel expand mismatch for {query}"
+        );
+
+        let analyzed = query_rows(&mut parallel, &format!("EXPLAIN ANALYZE {query}"));
+        let plan = analyzed[0][0].to_string().unwrap_or_default();
+        assert!(
+            plan.contains("Partitioning:"),
+            "narrow shape must be partitioned: {query}\n{plan}"
+        );
+        let workers = plan
+            .split("actual=")
+            .nth(1)
+            .and_then(|s| s.split(|c: char| !c.is_ascii_digit()).next())
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(0);
+        assert!(
+            workers >= 2,
+            "narrow shape must report real workers: {query}\n{plan}"
+        );
+        assert!(
+            !plan.contains("fallback_reason"),
+            "narrow shape must not report a serial fallback: {query}\n{plan}"
+        );
+    }
+}
+
+#[test]
+fn ordered_parallel_expand_gate_keeps_unlisted_shapes_serial() {
+    let storage = setup_storage();
+    let config = PartitioningConfig {
+        enabled: false,
+        min_rows_per_partition: 100,
+        max_partitions: 4,
+        vertex_id_range: Some(0i64..2 * VERTEX_COUNT),
+        max_workers: 4,
+        max_buffered_chunks: 4,
+        fixed_overhead_rows: 0,
+        per_partition_rows: 0,
+        exchange_row_per_mille: 0,
+        allow_pure_count_chain: false,
+        allow_global_aggregate: false,
+        allow_ordered_parallel_expand: true,
+    };
+    let mut pipeline = build_pipeline_with_config(&storage, config);
+
+    // Multiple hops and unbounded DISTINCT are outside the narrow gate even
+    // when the front end is de-materialized.
+    for query in [
+        "MATCH (a:Node)-[:Link]->(b:Node)-[:Link]->(c:Node) RETURN count(c)",
+        "MATCH (a:Node)-[:Link]->(b:Node) RETURN DISTINCT b.value",
+        "MATCH (a:Node)-[k:Link]->(b:Node) RETURN count(k)",
+    ] {
+        let analyzed = query_rows(&mut pipeline, &format!("EXPLAIN ANALYZE {query}"));
+        let plan = analyzed[0][0].to_string().unwrap_or_default();
+        assert!(
+            plan.contains("fallback_reason"),
+            "unlisted shape must stay serial: {query}\n{plan}"
+        );
+    }
 }

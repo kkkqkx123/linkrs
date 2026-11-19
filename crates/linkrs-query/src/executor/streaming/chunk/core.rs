@@ -364,20 +364,40 @@ impl DataChunk {
 
     /// Memory estimate for the *visible expanded* rows
     /// (`visible_count * multiplicity`), used for pool/tracker accounting.
+    /// Rowless chunks account their typed buffers so a typed-only pipeline
+    /// still consumes bounded pool capacity.
     pub fn estimated_bytes(&self) -> usize {
-        let base = crate::executor::base::MemoryBudget::estimate_rows_memory(&self.rows);
-        if self.rows.is_empty() || base == 0 {
+        let row_bytes = crate::executor::base::MemoryBudget::estimate_rows_memory(&self.rows);
+        let typed_bytes = self
+            .typed_columns
+            .as_ref()
+            .map(|columns| columns.iter().map(|column| column.estimated_size()).sum())
+            .unwrap_or(0);
+        let base = row_bytes.max(typed_bytes);
+        if base == 0 {
             return 0;
         }
-        let visible = self.visible_count();
-        if visible == self.rows.len() && self.multiplicity <= 1 {
+        let visible = if self.rows.is_empty() {
+            self.eval_len()
+        } else {
+            self.visible_count()
+        };
+        let physical = self.eval_len().max(1);
+        if visible == physical && self.multiplicity <= 1 {
             return base;
         }
-        let per_row = base.saturating_div(self.rows.len().max(1));
+        let per_row = base.saturating_div(physical);
         (visible as u64)
             .saturating_mul(self.multiplicity)
             .saturating_mul(per_row as u64)
             .min(usize::MAX as u64) as usize
+    }
+
+    /// Whether the chunk carries rows or typed values for downstream work.
+    /// `is_empty` only inspects the row view, so rowless typed chunks need an
+    /// explicit predicate at buffering and exchange boundaries.
+    pub fn has_data(&self) -> bool {
+        !self.rows.is_empty() || self.typed_len().is_some_and(|len| len > 0)
     }
 
     // ── Basic access ──

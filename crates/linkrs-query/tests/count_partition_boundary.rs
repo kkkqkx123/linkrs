@@ -97,6 +97,7 @@ fn build_pipeline(
             exchange_row_per_mille: 0,
             allow_pure_count_chain: false,
             allow_global_aggregate: false,
+            allow_ordered_parallel_expand: false,
         });
     } else {
         engine.set_partitioning_config(PartitioningConfig {

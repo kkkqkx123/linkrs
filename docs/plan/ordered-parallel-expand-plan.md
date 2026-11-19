@@ -106,6 +106,16 @@ PROFILE 中必须能看到 actual workers 大于一，否则性能结果不视�
 - 不在本阶段继续修改目的端读取接口；该方向已由两版原型证伪。
 - 不为了并行提前执行 TopN 或 LIMIT。
 
+## 落地细化（代码落点）
+
+- 形状闸门集中在 `optimizer/partitioning/planner/ordered.rs`：从根向下跳过 `TopN`/`Sort`/`Limit` 与恒真 `Filter`，只接受单列 `Dedup`（且上方必须有最终排序）或单键计数 `Aggregate`；再向下要求 rowless `Project` 与唯一一条 `step_limit=1`、无路径过滤、`skip_rows` 的 `ExpandAll`，底部是带标签的顶点扫描；`count_only` 展开必须排除，因为它已经走元数据/标量计数快路径。任一条件不满足时该形状不进入闸门。
+- `PartitioningConfig` / `ParallelConfig` 增加 `allow_ordered_parallel_expand`，默认关闭；与既有的纯计数、全局聚合放行位并列。闸门只在总开关关闭时参与放行；总开关打开时保持既有行为。worker 数小于二、分区数小于二同样回退。
+- 分区片段携带 `shard_slice`，物化器读取它并给整棵分区树写入 `partition_id`；状态 arena 与 PROFILE 键按计划中的分区数扩展，避免多 worker 争用 arena 0，也让每个分区的行数、spill 次数可见。
+- 并行边界仍由 `Exchange(Concatenate)` 承担：按分区序号确定性串联，错误和取消经既有 `PartitionHandle` 传播；有界缓冲改用运行时配置的 `max_buffered_chunks`。rowless typed chunk 在布局一致时直接透传，布局不一致才回退到行物化，避免并行段末端把 typed 结果重新转置成行。
+- 池的字节记账改用 `DataChunk::estimated_bytes`，rowless chunk 计入 typed 缓冲容量；`has_data()` 区分“无行但有 typed 值”与真正空块。
+- 分区局部聚合在 `PartialAggregate` 入口把 typed-only 块重建为行视图后走既有累加器与 spill 管理；最终合并仍是原来的 `FinalAggregate`/`Distinct`，`ORDER BY ... LIMIT` 只在合并后执行。
+- 嵌入式配置新增 `DatabaseConfig::with_parallel_config`，parity runner 新增 `--parallel-workers` 显式开启该形状；默认运行完全保持串行。`workers > 1` 时在数据库装配期创建共享调度器，避免每条语句重新拉起 worker 线程，从而不把纯计数快路径拖入线程启动开销。
+
 ## 验收
 
 - devs release 编译成功。

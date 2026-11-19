@@ -52,9 +52,13 @@ pub(crate) fn next_partial_aggregate(
         if let Some(rt) = ctx.runtime.as_ref() {
             rt.ensure_not_cancelled()?;
         }
-        // Opaque consumer: expand symbolic multiplicity so each logical row
-        // accumulates once. The selection vector stays in place (consumed via
-        // `visible_indices` below with no compaction benefit).
+        // Partial aggregation is an opaque consumer: rebuild the row view of
+        // a typed-only front end once per chunk so the generic accumulator
+        // loop sees the same values as the serial path.
+        chunk.materialize_typed_rows();
+        // Expand symbolic multiplicity so each logical row accumulates once.
+        // The selection vector stays in place (consumed via `visible_indices`
+        // below with no compaction benefit).
         let _ = chunk.expand_multiplicity_in_place();
         if col_names.is_empty() {
             col_names = chunk.col_names();

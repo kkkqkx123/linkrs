@@ -13,6 +13,7 @@ use super::anchored::decide_anchored_traversal;
 use super::edge::{collect_vertex_scans, decide_edge_scan};
 use super::helpers::{collect_condition_properties, split_range};
 use super::multi_scan::decide_multi_scan;
+use super::ordered::is_ordered_parallel_expand;
 
 /// Chooses a partition layout only for a single tagged vertex scan. More
 /// complex source topologies retain the existing single-tree path until they
@@ -206,6 +207,9 @@ impl PartitioningPlanner {
         }
         if self.config.max_partitions < 2 {
             return fallback("partitioning max_partitions is less than two");
+        }
+        if self.config.max_workers < 2 {
+            return fallback("ordered parallel expand requires more than one worker");
         }
         // The storage self-proven domain wins; the configured range is a
         // fallback for setups that explicitly trust a caller-supplied range.
@@ -427,7 +431,11 @@ fn is_pure_count_chain(agg: &AggregateNode) -> bool {
     if agg.aggregation_distinct().iter().any(|distinct| *distinct) {
         return false;
     }
-    if agg.aggregation_filters().iter().any(|filter| filter.is_some()) {
+    if agg
+        .aggregation_filters()
+        .iter()
+        .any(|filter| filter.is_some())
+    {
         return false;
     }
     true
@@ -439,6 +447,9 @@ impl PartitioningPlanner {
     /// admitted first; any other aggregate root needs the global flag.
     /// Non-aggregate roots never match, so their behavior is unchanged.
     fn shape_allowlisted(&self, root: &PlanNodeEnum) -> bool {
+        if self.config.allow_ordered_parallel_expand && is_ordered_parallel_expand(root) {
+            return true;
+        }
         let PlanNodeEnum::Aggregate(agg) = root else {
             return false;
         };

@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use crate::executor::base::{MemoryBudget, MemoryReservation};
+use crate::executor::base::MemoryReservation;
 use linkrs_core::error::QueryError;
 
 use super::chunk::DataChunk;
@@ -136,7 +136,7 @@ pub(crate) fn run_partition(
                 send_message(sender, PartitionMessage::Finished, stop, runtime)?;
                 return Ok(());
             };
-            let bytes = MemoryBudget::estimate_rows_memory(&chunk.rows);
+            let bytes = chunk.estimated_bytes();
             let reservation = runtime.memory_budget.reserve(bytes)?;
             let message = PartitionMessage::Chunk(BufferedChunk {
                 chunk,

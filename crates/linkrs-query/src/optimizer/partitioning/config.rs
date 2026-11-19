@@ -29,6 +29,10 @@ pub struct PartitioningConfig {
     /// Both default to false, so default behavior is unchanged.
     pub allow_pure_count_chain: bool,
     pub allow_global_aggregate: bool,
+    /// Gray-release switch for the narrow rowless expand front end: a
+    /// single-step de-materialized hop feeding count, group-count, or ordered
+    /// distinct. Other shapes keep the serial path even when this is on.
+    pub allow_ordered_parallel_expand: bool,
     /// Parallel fixed startup overhead in row-equivalents (fragment startup,
     /// exchange coordination). All-zero cost params disable the economic
     /// gate and leave the row-count threshold as the only gate.
@@ -51,6 +55,7 @@ impl Default for PartitioningConfig {
             max_buffered_chunks: 10,
             allow_pure_count_chain: false,
             allow_global_aggregate: false,
+            allow_ordered_parallel_expand: false,
             fixed_overhead_rows: 0,
             per_partition_rows: 0,
             exchange_row_per_mille: 0,

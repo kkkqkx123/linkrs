@@ -5,7 +5,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-pub use linkrs_config::SyncMode;
+pub use linkrs_config::{ParallelConfig, SyncMode};
 
 /// Database configuration
 ///
@@ -48,6 +48,9 @@ pub struct DatabaseConfig {
     pub checkpoint_on_close: bool,
     /// Vector subsystem configuration.
     pub vector: VectorConfig,
+    /// Query-internal parallel execution settings. Defaults keep embedded
+    /// execution serial.
+    pub parallel: ParallelConfig,
 }
 
 /// Which vector engine the embedded database should use.
@@ -100,6 +103,7 @@ impl DatabaseConfig {
             create_if_missing: true,
             checkpoint_on_close: false,
             vector: VectorConfig::default(),
+            parallel: ParallelConfig::default(),
         }
     }
 
@@ -115,6 +119,7 @@ impl DatabaseConfig {
             create_if_missing: true,
             checkpoint_on_close: false,
             vector: VectorConfig::default(),
+            parallel: ParallelConfig::default(),
         }
     }
 
@@ -162,6 +167,12 @@ impl DatabaseConfig {
     /// Create one final checkpoint on explicit close.
     pub fn with_checkpoint_on_close(mut self, enabled: bool) -> Self {
         self.checkpoint_on_close = enabled;
+        self
+    }
+
+    /// Apply query-internal parallel execution settings.
+    pub fn with_parallel_config(mut self, parallel: ParallelConfig) -> Self {
+        self.parallel = parallel;
         self
     }
 

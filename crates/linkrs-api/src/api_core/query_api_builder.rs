@@ -152,6 +152,14 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
         self.pipeline_manager.statistics_min_epoch_delta()
     }
 
+    /// Install a shared scheduler without a query registry. Assembly-time
+    /// only: embedded databases with `max_workers > 1` reuse one pool across
+    /// statements instead of spawning threads per query.
+    pub fn with_shared_scheduler(mut self, scheduler: Arc<SharedScheduler>) -> Self {
+        self.pipeline_manager.set_shared_scheduler(Some(scheduler));
+        self
+    }
+
     /// Install a shared scheduler and query registry into an existing
     /// pipeline (used when the pipeline was built by another constructor).
     pub fn install_shared_scheduler(

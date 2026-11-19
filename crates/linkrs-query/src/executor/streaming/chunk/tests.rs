@@ -1518,6 +1518,11 @@ fn rowless_chunk_evaluates_from_typed_layout() {
     ]);
     assert_eq!(chunk.typed_len(), Some(2));
     assert!(chunk.rows.is_empty());
+    assert!(chunk.has_data());
+    assert!(
+        chunk.estimated_bytes() > 0,
+        "typed buffers must reserve pool capacity"
+    );
 
     let var = Expression::variable("n");
     let cols = chunk

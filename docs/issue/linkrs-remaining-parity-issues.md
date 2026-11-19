@@ -314,3 +314,21 @@ PROFILE 中 `ExpandAll` 从约 0.39–0.40 秒降到约 0.27 秒，`Project` 仍
 结论：目的端半连接方向在当前规模下证伪。后续优化应转向执行层有序并行与分区预聚合，而不是继续改目的端读取接口。日志与 JSON 落在 `perf-data/parity/results/2026-11-18/stage7-final/`。
 
 设计文档见 `docs/plan/ordered-parallel-expand-plan.md`，作为下一阶段独立任务。
+
+## 17. 有序并行展开实测回填（2026-11-19）
+
+设计见 `docs/plan/ordered-parallel-expand-plan.md`，细化落点见该文档“落地细化”。本轮把扫描到 Project 的前段放进既有 morsel 工作池，以分区序号在 `Exchange` 恢复顺序；聚合与去重保留原有局部/最终合并语义。总开关默认关闭，新增 `allow_ordered_parallel_expand` 只放行单跳、rowless、无聚合 FILTER 的窄形状；`count_only` 快路径、多跳、无最终排序的 DISTINCT 继续串行。
+
+实现中修正了三处让并行形状无法闭环的问题：rowless typed chunk 在 `Exchange` 被当成空块并强制物化、有界缓冲按字节记账时忽略 typed 列、分区树未写入 `partition_id` 且状态 arena 未按计划分区数扩展。嵌入式装配改为共享调度器，避免每条语句重新拉起 worker 线程而拖慢纯计数。
+
+devs 上 release 编译通过；DQL 319/319、streaming lib 414/414、`parallel_partition_execution` 25/25。固定门用 `--parallel-workers 16` 两轮，warmup 1 + run 5，绑核 `16-31`：
+
+| 用例 | 阶段七基线两轮中位数 ms | 本轮两轮中位数 ms | 相对基线 |
+|---|---:|---:|---|
+| `distinct_limit` | 305 / 313 | 139 / 130 | 约 2.2–2.4× |
+| `group_by_count` | 283 / 306 | 128 / 149 | 约 2.0–2.4× |
+| 九条纯计数 | 0.14–0.60 | 0.14–0.58 | 无回归 |
+
+`EXPLAIN ANALYZE` 显示 `requested=16, actual=12`，并行 wall_time 约 125 ms、work_time 约 1.2 s、缓冲块峰值 11、缓冲字节峰值约 1.31 MB；PROFILE 中每个分区的扫描/展开/局部聚合独立可见且无 spill。零 worker 对照运行证明纯计数回归只是 worker 线程启动开销，共享调度器已消除。
+
+结论：本轮达成“至少 2 倍级别提升”的验证目标，但未达到问题清单中的十倍硬门；剩余成本主要是分区内单跳展开和局部聚合的行重建，继续下探需要先解决 typed 局部聚合的直接消费，而不是再加并行度。原始日志与 JSON 在 `perf-data/parity/results/2026-11-18/stage8-final/`，远端同名目录在 `/data/kkkqkx/linkrs/repo/perf-data/parity/results/2026-11-18/stage8-final/`。

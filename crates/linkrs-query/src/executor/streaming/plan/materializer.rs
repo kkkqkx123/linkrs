@@ -30,6 +30,7 @@ use super::super::operators::sink_operator::SinkOperator;
 use super::super::operators::source_operator::SourceOperator;
 use super::super::operators::source_operator::SourceOperatorKind;
 use super::super::operators::spec::ApplySpec;
+use super::super::operators::spec::SourceSpec;
 use super::super::operators::txn_operator::TxnOperator;
 use super::super::operators::unary_operator::UnaryOperator;
 use super::super::operators::vector_operator::VectorOperator;
@@ -90,7 +91,11 @@ impl PhysicalPlanMaterializer {
             None
         };
 
-        let runtime = Self::create_runtime(&mutable_bindings, parameter_values);
+        let partition_count = plan
+            .partition_spec()
+            .map(|spec| spec.partition_count())
+            .unwrap_or(0);
+        let runtime = Self::create_runtime(&mutable_bindings, parameter_values, partition_count);
 
         let topo_order = Self::topological_order(&plan.fragments)?;
 
@@ -352,6 +357,9 @@ impl PhysicalPlanMaterializer {
             QueryError::execution(format!("Fragment {:?} produced no operators", fragment.id))
         })?;
 
+        if let Some(partition_id) = partition_source_id(plan, fragment) {
+            root_executor.set_partition_id(partition_id);
+        }
         root_executor.set_chunk_size(bindings.chunk_size);
         root_executor.set_runtime(Some(runtime.clone()));
 
@@ -500,6 +508,7 @@ impl PhysicalPlanMaterializer {
         parameter_values: Option<
             std::sync::Arc<std::collections::HashMap<String, linkrs_core::Value>>,
         >,
+        partition_count: usize,
     ) -> Arc<ExecutionRuntime> {
         let mut runtime = ExecutionRuntime::new(
             crate::executor::streaming::runtime::QueryIdentity {
@@ -567,14 +576,29 @@ impl PhysicalPlanMaterializer {
 
         // Size state_arenas for partitioned execution so each
         // partition gets its own arena, eliminating contention on arena 0.
-        if bindings.partition_count > 0 {
-            runtime.set_partition_count(bindings.partition_count + 1);
+        if partition_count > 0 {
+            runtime.set_partition_count(partition_count + 1);
         }
 
         // Wire bumpalo arena into the runtime for temporary allocations.
         runtime.arena = bindings.arena.clone();
 
         Arc::new(runtime)
+    }
+}
+
+/// Partition index carried by a fragment's source spec. Only partitioned
+/// local fragments own a shard slice; serial fragments leave the operator
+/// global so their state and profile stay in arena 0.
+fn partition_source_id(plan: &PhysicalPlan, fragment: &FragmentSpec) -> Option<usize> {
+    let first = *fragment.operators.first()?;
+    let spec = plan.operator(first)?;
+    match &spec.spec {
+        OperatorKindSpec::Source(SourceSpec::StorageScanVertices { shard_slice, .. })
+        | OperatorKindSpec::Source(SourceSpec::StorageScanEdges { shard_slice, .. }) => {
+            shard_slice.map(|slice| slice.partition_id)
+        }
+        _ => None,
     }
 }
 

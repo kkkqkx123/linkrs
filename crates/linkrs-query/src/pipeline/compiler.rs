@@ -376,6 +376,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         config.max_workers.hash(&mut hasher);
         config.allow_pure_count_chain.hash(&mut hasher);
         config.allow_global_aggregate.hash(&mut hasher);
+        config.allow_ordered_parallel_expand.hash(&mut hasher);
         match &config.vertex_id_range {
             Some(range) => {
                 range.start.hash(&mut hasher);

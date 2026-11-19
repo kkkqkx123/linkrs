@@ -9,10 +9,14 @@ use crate::embedded::config::EmbeddedVectorEngine;
 use crate::embedded::result::QueryResult;
 use crate::embedded::session::{GraphDatabaseInner, Session};
 use linkrs_config::fulltext::FulltextConfig;
+use linkrs_config::ParallelConfig;
 use linkrs_core::Value;
 #[cfg(feature = "fulltext")]
 use linkrs_fulltext::FulltextIndexManager;
 use linkrs_metrics::StatsManager;
+use linkrs_query::executor::streaming::pool::SharedScheduler;
+use linkrs_query::optimizer::PartitioningConfig;
+use linkrs_query::OptimizerEngine;
 use linkrs_storage::{GraphStorage, PersistenceConfig, StorageClient, SyncWrapper};
 #[cfg(feature = "vector")]
 use linkrs_sync::backend::VectorBackend;
@@ -258,6 +262,23 @@ pub struct GraphDatabase<S: StorageClient + Clone + Send + Sync + 'static> {
     config: Arc<RwLock<DatabaseConfig>>,
 }
 
+fn partitioning_config_from(parallel: &ParallelConfig) -> PartitioningConfig {
+    PartitioningConfig {
+        enabled: parallel.enabled,
+        min_rows_per_partition: parallel.min_rows_per_partition,
+        max_partitions: parallel.max_partitions,
+        vertex_id_range: parallel.vertex_id_range(),
+        max_workers: parallel.workers,
+        max_buffered_chunks: parallel.max_buffered_chunks,
+        fixed_overhead_rows: 0,
+        per_partition_rows: 0,
+        exchange_row_per_mille: 0,
+        allow_pure_count_chain: parallel.allow_pure_count_chain,
+        allow_global_aggregate: parallel.allow_global_aggregate,
+        allow_ordered_parallel_expand: parallel.allow_ordered_parallel_expand,
+    }
+}
+
 impl GraphDatabase<GraphStorage> {
     /// Open or create a database (in file mode).
     ///
@@ -378,17 +399,31 @@ impl GraphDatabase<GraphStorage> {
             txn_manager.with_commit_sink(Arc::new(SyncWrapper::new(storage.read().clone())));
         let txn_manager = Arc::new(txn_manager);
 
+        let mut optimizer_engine = OptimizerEngine::default();
+        optimizer_engine.set_partitioning_config(partitioning_config_from(&config.parallel));
+        let optimizer_engine = Arc::new(optimizer_engine);
         let query_api = if let Some(ref sync) = sync_manager {
-            Arc::new(RwLock::new(
-                QueryApi::new(storage.clone(), stats_manager.clone())
-                    .with_sync_manager(sync.clone()),
-            ))
-        } else {
-            Arc::new(RwLock::new(QueryApi::new(
+            QueryApi::with_optimizer_engine(
                 storage.clone(),
                 stats_manager.clone(),
-            )))
+                optimizer_engine,
+                None,
+            )
+            .with_sync_manager(sync.clone())
+        } else {
+            QueryApi::with_optimizer_engine(
+                storage.clone(),
+                stats_manager.clone(),
+                optimizer_engine,
+                None,
+            )
         };
+        let query_api = if config.parallel.workers > 1 {
+            query_api.with_shared_scheduler(Arc::new(SharedScheduler::new(config.parallel.workers)))
+        } else {
+            query_api
+        };
+        let query_api = Arc::new(RwLock::new(query_api));
         let schema_api = SchemaApi::new(storage.clone());
 
         let hooks = crate::embedded::hooks::HookBus::with_txn_manager(

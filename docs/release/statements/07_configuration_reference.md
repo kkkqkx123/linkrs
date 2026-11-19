@@ -361,6 +361,9 @@ Linkrs 使用 TOML 格式的配置文件，默认配置文件为 `config.toml`�
 | max_buffered_chunks | usize | 10 | 每个分区 worker 的最大缓冲块数（背压） |
 | vertex_id_start | Option\<i64\> | null | 可选顶点 ID 范围下界（与 end 同时设置才生效） |
 | vertex_id_end | Option\<i64\> | null | 可选顶点 ID 范围上界（开区间） |
+| allow_pure_count_chain | bool | false | 总开关关闭时仍放行纯计数链 |
+| allow_global_aggregate | bool | false | 总开关关闭时仍放行其他聚合根形状 |
+| allow_ordered_parallel_expand | bool | false | 总开关关闭时仅放行单行展开的 rowless 计数、分组计数与有序去重 |
 
 ---
 

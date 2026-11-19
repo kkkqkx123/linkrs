@@ -33,7 +33,8 @@ fn main() {
                 "usage:\n  linkrs-parity-bench copy --dataset <name> --csv-dir <dir> \
                  --script <file.cypher> --db <path> [--force]\n  \
                  linkrs-parity-bench run --db <path> --space <name> --benchmark-dir <dir> \
-                 [--warmup N] [--run N] [--out <dir>] [--threads N] [--skip-file <path>]"
+                 [--warmup N] [--run N] [--out <dir>] [--threads N]
+                 [--parallel-workers N] [--skip-file <path>]"
             );
             std::process::exit(2);
         }
@@ -156,14 +157,11 @@ fn cmd_copy(args: &[String]) {
         "[copy] {dataset} total {total_ms:.1} ms over {} statement(s)",
         stats.len()
     );
-    if let Some(slowest) = stats
-        .iter()
-        .max_by(|a, b| {
-            a.elapsed_ms
-                .partial_cmp(&b.elapsed_ms)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })
-    {
+    if let Some(slowest) = stats.iter().max_by(|a, b| {
+        a.elapsed_ms
+            .partial_cmp(&b.elapsed_ms)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    }) {
         println!(
             "[copy] slowest: {} ({:.1} ms)",
             slowest.kind, slowest.elapsed_ms
@@ -643,13 +641,22 @@ fn cmd_run(args: &[String]) {
                 .map(|n| n.get() as u32)
                 .unwrap_or(1)
         });
+    let parallel_workers: usize = opt_value(args, "--parallel-workers")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
     let skip_file = opt_value(args, "--skip-file");
-    let skip_set = skip_file
-        .as_deref()
-        .map(load_skip_file)
-        .unwrap_or_default();
+    let skip_set = skip_file.as_deref().map(load_skip_file).unwrap_or_default();
 
-    let database = GraphDatabase::<GraphStorage>::open(&db)
+    let mut db_config = DatabaseConfig::file(&db).with_checkpoint_on_close(true);
+    if parallel_workers > 1 {
+        db_config = db_config.with_parallel_config(linkrs::config::ParallelConfig {
+            workers: parallel_workers,
+            max_partitions: parallel_workers,
+            allow_ordered_parallel_expand: true,
+            ..linkrs::config::ParallelConfig::default()
+        });
+    }
+    let database = GraphDatabase::<GraphStorage>::open_with_config(db_config)
         .unwrap_or_else(|e| die(format!("open db {}: {e}", db.display())));
     let session = database
         .session()
@@ -663,7 +670,8 @@ fn cmd_run(args: &[String]) {
     let files = collect_benchmark_files(&bench_dir);
 
     println!(
-        "[run] db={} space={space} warmup={warmup} run={runs} threads={threads} skipped={}",
+        "[run] db={} space={space} warmup={warmup} run={runs} threads={threads} \
+         parallel_workers={parallel_workers} skipped={}",
         db.display(),
         skip_set.len()
     );
@@ -827,10 +835,7 @@ fn load_skip_file(path: &str) -> HashSet<String> {
 /// Whether a benchmark name is covered by the skip list: exact match, or
 /// the entry ends with `/name` so group-qualified entries match plain names.
 fn is_skipped(skip_set: &HashSet<String>, name: &str) -> bool {
-    skip_set.contains(name)
-        || skip_set
-            .iter()
-            .any(|e| e.ends_with(&format!("/{name}")))
+    skip_set.contains(name) || skip_set.iter().any(|e| e.ends_with(&format!("/{name}")))
 }
 
 /// Process RSS peak (VmHWM) in kB from `/proc/self/status`.
@@ -919,11 +924,7 @@ fn write_run_result(
                 .join(", ");
             let _ = writeln!(json, "  \"execute_times_ms\": [{list}],");
             let _ = writeln!(json, "  \"execute_ms\": {:.3},", trimmed_mean(values));
-            let _ = writeln!(
-                json,
-                "  \"execute_median_ms\": {:.3},",
-                median(values)
-            );
+            let _ = writeln!(json, "  \"execute_median_ms\": {:.3},", median(values));
         }
         None => {
             json.push_str("  \"execute_times_ms\": [],\n");

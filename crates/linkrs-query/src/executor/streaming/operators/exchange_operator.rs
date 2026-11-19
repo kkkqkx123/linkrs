@@ -159,7 +159,10 @@ impl ExchangeOperator {
             let pool = rt.worker_pool.lock().clone();
             if let Some(pool) = pool {
                 if children.len() > 1 && pool.max_workers() > 1 {
-                    let max_buffered = self.config.chunk_size.clamp(1, 10);
+                    let max_buffered = rt
+                        .max_buffered_chunks
+                        .load(std::sync::atomic::Ordering::Relaxed)
+                        .max(1);
                     let (batch, receivers, error_rx) =
                         PartitionBatch::new(std::mem::take(children), rt.clone(), max_buffered);
                     let batch = Arc::new(batch);
@@ -200,12 +203,21 @@ impl ExchangeOperator {
                     if let Some(rt) = self.runtime.as_ref() {
                         rt.ensure_not_cancelled()?;
                     }
-                    if let Some(chunk) = advance_input(children, &mut self.handle, *current_index)?
+                    if let Some(mut chunk) =
+                        advance_input(children, &mut self.handle, *current_index)?
                     {
-                        if chunk.is_empty() {
+                        if !chunk.has_data() {
                             continue;
                         }
                         validate_schema(*current_index, &chunk, col_names)?;
+                        if chunk.rows.is_empty()
+                            && chunk.get_layout().names() == self.output_layout.names()
+                        {
+                            return Ok(Some(chunk));
+                        }
+                        if chunk.rows.is_empty() {
+                            chunk.materialize_typed_rows();
+                        }
                         return Ok(Some(DataChunk::new_with_layout(
                             chunk.rows,
                             Arc::clone(&self.output_layout),

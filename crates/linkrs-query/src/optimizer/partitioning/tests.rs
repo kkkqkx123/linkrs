@@ -36,6 +36,7 @@ fn selects_only_with_trusted_range_and_sufficient_statistics() {
         exchange_row_per_mille: 0,
         allow_pure_count_chain: false,
         allow_global_aggregate: false,
+        allow_ordered_parallel_expand: false,
     });
 
     let decision = planner.decide(&tagged_scan(), &view_of(&stats));
@@ -156,6 +157,7 @@ fn storage_self_proven_domain_overrides_config_range() {
         exchange_row_per_mille: 0,
         allow_pure_count_chain: false,
         allow_global_aggregate: false,
+        allow_ordered_parallel_expand: false,
     });
 
     // A narrower proven domain must be used (not the config range).
@@ -245,6 +247,7 @@ fn make_planner() -> PartitioningPlanner {
         exchange_row_per_mille: 0,
         allow_pure_count_chain: false,
         allow_global_aggregate: false,
+        allow_ordered_parallel_expand: false,
     })
 }
 
@@ -301,6 +304,7 @@ fn planner_with_min_rows(min_rows: u64) -> PartitioningPlanner {
         exchange_row_per_mille: 0,
         allow_pure_count_chain: false,
         allow_global_aggregate: false,
+        allow_ordered_parallel_expand: false,
     })
 }
 
@@ -746,6 +750,7 @@ fn partition_count_is_capped_by_available_workers() {
         exchange_row_per_mille: 0,
         allow_pure_count_chain: false,
         allow_global_aggregate: false,
+        allow_ordered_parallel_expand: false,
     });
 
     let decision = planner.decide(&tagged_scan(), &view_of(&stats));
@@ -773,6 +778,7 @@ fn partition_count_is_capped_by_economic_worker_bound() {
         exchange_row_per_mille: 0,
         allow_pure_count_chain: false,
         allow_global_aggregate: false,
+        allow_ordered_parallel_expand: false,
     });
 
     let decision = planner.decide(&tagged_scan(), &view_of(&stats));
@@ -799,6 +805,7 @@ fn partition_count_is_capped_by_max_partitions() {
         exchange_row_per_mille: 0,
         allow_pure_count_chain: false,
         allow_global_aggregate: false,
+        allow_ordered_parallel_expand: false,
     });
 
     let decision = planner.decide(&tagged_scan(), &view_of(&stats));
@@ -1187,6 +1194,7 @@ fn costed_planner(fixed: u64, per_partition: u64, per_mille: u32) -> Partitionin
         exchange_row_per_mille: per_mille,
         allow_pure_count_chain: false,
         allow_global_aggregate: false,
+        allow_ordered_parallel_expand: false,
     })
 }
 
@@ -1279,8 +1287,12 @@ fn grouped_aggregate_needs_global_flag() {
     let stats = make_stats();
     let grouped = || {
         let scan = tagged_scan();
-        let agg = AggregateNode::new(scan, vec!["city".to_string()], vec![AggregateFunction::Count])
-            .expect("grouped plan should build");
+        let agg = AggregateNode::new(
+            scan,
+            vec!["city".to_string()],
+            vec![AggregateFunction::Count],
+        )
+        .expect("grouped plan should build");
         PlanNodeEnum::Aggregate(agg)
     };
     let pure_only = PartitioningPlanner::new(PartitioningConfig {
@@ -1297,6 +1309,7 @@ fn grouped_aggregate_needs_global_flag() {
     let global = PartitioningPlanner::new(PartitioningConfig {
         enabled: false,
         allow_global_aggregate: true,
+        allow_ordered_parallel_expand: false,
         ..make_planner().config().clone()
     });
     let decision = global.decide(&grouped(), &view_of(&stats));
@@ -1314,6 +1327,7 @@ fn allowlist_does_not_leak_to_non_aggregate_roots() {
         enabled: false,
         allow_pure_count_chain: true,
         allow_global_aggregate: true,
+        allow_ordered_parallel_expand: false,
         ..make_planner().config().clone()
     });
     let decision = planner.decide(&tagged_scan(), &view_of(&stats));
