@@ -3,6 +3,7 @@ mod final_aggregate;
 mod group_by;
 mod partial_aggregate;
 mod shared;
+pub mod typed_group_count;
 
 pub(crate) use aggregate::{close_aggregate, next_aggregate, open_aggregate, spill_aggregate};
 pub(crate) use final_aggregate::{

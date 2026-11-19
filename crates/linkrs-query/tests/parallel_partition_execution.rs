@@ -531,6 +531,29 @@ fn partitioned_anchored_traversal_matches_serial_results() {
         "anchors 0..99 reach neighbors 1..101"
     );
 
+    // Duplicate edges are stored twice; grouped counts must keep that
+    // multiplicity on both paths, including a sparse tail of groups.
+    let q3 = "MATCH (a:Node)-[:Link]->(b:Node) WHERE a.value < 1000 AND b.value >= 995 RETURN b.value, count(*)";
+    let mut serial_rows = query_rows(&mut serial, q3);
+    let mut parallel_rows = query_rows(&mut parallel, q3);
+    sorted(&mut serial_rows);
+    sorted(&mut parallel_rows);
+    assert_eq!(
+        serial_rows, parallel_rows,
+        "E4 duplicate-edge groups mismatch"
+    );
+    assert!(serial_rows.len() >= 6, "expected a sparse group tail");
+
+    // A filter that matches no destination yields no groups at all.
+    let q4 = "MATCH (a:Node)-[:Link]->(b:Node) WHERE a.value < 1000 AND b.value >= 99999 RETURN b.value, count(*)";
+    let serial_rows = query_rows(&mut serial, q4);
+    let parallel_rows = query_rows(&mut parallel, q4);
+    assert!(
+        serial_rows.is_empty(),
+        "empty-group query must return no rows"
+    );
+    assert_eq!(serial_rows, parallel_rows, "E4 empty-group mismatch");
+
     // Selectivity-aware gating keeps this 100-anchor query serial: the
     // expanded work stays below the partition threshold, so a fallback
     // (not parallel execution) is the intended outcome here.

@@ -125,6 +125,8 @@ fn test_project_then_distinct_pipeline() {
                 output_expressions: vec![Expression::Literal(Value::Int(0))],
                 output_col_names: vec![],
                 state: Default::default(),
+                emit_rowless: false,
+                identity_as_unit: false,
             },
             empty_layout(),
         ),

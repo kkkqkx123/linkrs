@@ -17,10 +17,12 @@ use crate::executor::streaming::helpers::accumulator_states::{
 use super::super::aggregate::PartialAggregateState;
 use super::super::helpers::{aggregate_arg_field_name, emit_batch_slice, BlockingContext};
 use super::shared::eval_group_key;
+use super::typed_group_count::{deopt, try_accumulate, ACCUMULATOR_OVERHEAD_BYTES};
 
 pub(crate) fn open_partial_aggregate(state: &mut Option<PartialAggregateState>) {
     *state = Some(PartialAggregateState {
         group_map: HashMap::new(),
+        typed_group_count: None,
         col_names: vec![],
         result_batch: MaterializedBatch::new(0, 0),
         emitted_offset: 0,
@@ -52,14 +54,29 @@ pub(crate) fn next_partial_aggregate(
         if let Some(rt) = ctx.runtime.as_ref() {
             rt.ensure_not_cancelled()?;
         }
-        // Partial aggregation is an opaque consumer: rebuild the row view of
-        // a typed-only front end once per chunk so the generic accumulator
-        // loop sees the same values as the serial path.
-        chunk.materialize_typed_rows();
         // Expand symbolic multiplicity so each logical row accumulates once.
-        // The selection vector stays in place (consumed via `visible_indices`
-        // below with no compaction benefit).
+        // A typed-only chunk is consumed directly by the shared fixed-width
+        // group-count state; anything narrower than that transfers its counts
+        // to the generic map before this chunk takes the row loop. Mixing the
+        // two states for one chunk would double-count.
         let _ = chunk.expand_multiplicity_in_place();
+        let typed_consumed = chunk.rows.is_empty()
+            && chunk.typed_columns.is_some()
+            && try_accumulate(
+                &mut state.typed_group_count,
+                &state.group_map,
+                memory_tracker,
+                aggregate_functions.len() * ACCUMULATOR_OVERHEAD_BYTES,
+                aggregate_filters.iter().any(|f| f.is_some()),
+                group_by_expressions,
+                aggregate_functions,
+                &mut chunk,
+            );
+        if typed_consumed {
+            continue;
+        }
+        deopt(&mut state.typed_group_count, &mut state.group_map);
+        chunk.materialize_typed_rows();
         if col_names.is_empty() {
             col_names = chunk.col_names();
         }
@@ -128,6 +145,8 @@ pub(crate) fn next_partial_aggregate(
             }
         }
     }
+
+    deopt(&mut state.typed_group_count, &mut state.group_map);
 
     let mut result_rows: Vec<Vec<Value>> = Vec::new();
     let num_group_keys = group_by_expressions.len();

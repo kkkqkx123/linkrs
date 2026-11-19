@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use linkrs_core::columnar::{MaterializedBatch, RowKey};
 use linkrs_core::error::QueryError;
@@ -9,7 +9,7 @@ use linkrs_core::Value;
 
 use crate::executor::base::{MemoryBudget, MemoryTracker};
 use crate::executor::expression::evaluator::ExpressionEvaluator;
-use crate::executor::streaming::chunk::{bitmap_is_valid, DataChunk, TypedColumn};
+use crate::executor::streaming::chunk::DataChunk;
 use crate::executor::streaming::executor::{StreamingExecutor, ValueRowContext};
 use crate::executor::streaming::helpers::accumulator_states::{
     accumulator_to_value, AggregateAccumulator,
@@ -18,209 +18,14 @@ use crate::executor::streaming::spill::{
     finalize_partitions_with_runtime, HashPartitionConfig, HashPartitionSpiller, SpillManager,
 };
 
-use super::super::aggregate::{
-    value_to_partial_accumulator, AggregateState, TypedGroupCount, TypedGroupKey,
-    TypedGroupKeyKind, ACCUMULATOR_OVERHEAD_BYTES,
-};
+use super::super::aggregate::{value_to_partial_accumulator, AggregateState};
 use super::super::helpers::{
     count_identity_arg, count_star_arg, emit_batch_slice, BlockingContext,
 };
 use super::shared::eval_group_key;
+use super::typed_group_count::{deopt, try_accumulate, ACCUMULATOR_OVERHEAD_BYTES};
 
 type BatchEvalResult = Option<(Vec<Vec<Value>>, Vec<Vec<Value>>)>;
-
-fn typed_key_kind(column: &TypedColumn) -> Option<TypedGroupKeyKind> {
-    match column {
-        TypedColumn::I64(_) => Some(TypedGroupKeyKind::I64),
-        TypedColumn::I32(_) => Some(TypedGroupKeyKind::I32),
-        TypedColumn::Bool(_) => Some(TypedGroupKeyKind::Bool),
-        _ => None,
-    }
-}
-
-fn typed_key_at(
-    column: &TypedColumn,
-    kind: TypedGroupKeyKind,
-    idx: usize,
-) -> Option<TypedGroupKey> {
-    match (kind, column) {
-        (TypedGroupKeyKind::I64, TypedColumn::I64(values)) => {
-            values.get(idx).copied().map(TypedGroupKey::I64)
-        }
-        (TypedGroupKeyKind::I32, TypedColumn::I32(values)) => {
-            values.get(idx).copied().map(TypedGroupKey::I32)
-        }
-        (TypedGroupKeyKind::Bool, TypedColumn::Bool(values)) => {
-            values.get(idx).copied().map(TypedGroupKey::Bool)
-        }
-        _ => None,
-    }
-}
-
-fn typed_group_bytes(kind: TypedGroupKeyKind, overhead: usize) -> usize {
-    let sample = match kind {
-        TypedGroupKeyKind::I64 => TypedGroupKey::I64(0).into_value(),
-        TypedGroupKeyKind::I32 => TypedGroupKey::I32(0).into_value(),
-        TypedGroupKeyKind::Bool => TypedGroupKey::Bool(false).into_value(),
-    };
-    MemoryBudget::estimate_row_memory(&[sample]) + overhead
-}
-
-/// NULL bitmap of a `count(variable)` argument, with its typed length.
-/// `None` means every visible row contributes one to the count.
-fn typed_count_validity<'a>(
-    func: &AggregateFunction,
-    args: &[Expression],
-    chunk: &'a DataChunk,
-) -> Option<(Option<&'a [u64]>, usize)> {
-    if !matches!(func, AggregateFunction::Count) {
-        return None;
-    }
-    if args.is_empty() || count_star_arg(args) {
-        return Some((None, chunk.eval_len()));
-    }
-    let Expression::Variable(name) = args.first()? else {
-        return None;
-    };
-    let slot = chunk.get_layout().slot_id(name)?;
-    let column = chunk.typed_column(slot)?;
-    if column.is_nullable() && column.validity_bitmap().is_none() {
-        return None;
-    }
-    Some((column.validity_bitmap(), column.len()))
-}
-
-/// Accumulate one chunk through the typed group-count path. Returns false
-/// without touching `state` when the chunk does not satisfy the narrow
-/// shape, so the caller can process it on the generic path unchanged.
-fn try_typed_group_count(
-    state: &mut AggregateState,
-    memory_tracker: &mut MemoryTracker,
-    group_overhead: usize,
-    has_filters: bool,
-    group_by_expressions: &[Expression],
-    aggregate_functions: &[(AggregateFunction, Vec<Expression>)],
-    chunk: &mut DataChunk,
-) -> bool {
-    if has_filters
-        || state.partition_spiller.is_some()
-        || state.has_spilled
-        || !state.group_map.is_empty()
-        || group_by_expressions.len() != 1
-        || aggregate_functions.len() != 1
-    {
-        return false;
-    }
-    let Expression::Variable(group_name) = &group_by_expressions[0] else {
-        return false;
-    };
-    let rowless = chunk.rows.is_empty();
-    if !matches!(aggregate_functions[0].0, AggregateFunction::Count)
-        || chunk.selection().is_some()
-        || (rowless && chunk.typed_columns.is_none())
-    {
-        return false;
-    }
-    let len = if rowless {
-        chunk.typed_len().unwrap_or(0)
-    } else {
-        chunk.rows.len()
-    };
-    if len == 0 {
-        return false;
-    }
-
-    chunk.ensure_typed_columns();
-    let Some(group_slot) = chunk.get_layout().slot_id(group_name) else {
-        return false;
-    };
-    let Some(key_column) = chunk.typed_column(group_slot) else {
-        return false;
-    };
-    let Some(key_kind) = typed_key_kind(key_column) else {
-        return false;
-    };
-    if key_column.len() != len {
-        return false;
-    }
-    if state
-        .typed_group_count
-        .as_ref()
-        .is_some_and(|fast| fast.key_kind != key_kind)
-    {
-        return false;
-    }
-    let Some((validity, arg_len)) =
-        typed_count_validity(&aggregate_functions[0].0, &aggregate_functions[0].1, chunk)
-    else {
-        return false;
-    };
-    if arg_len != len {
-        return false;
-    }
-
-    let mut new_keys = HashSet::new();
-    for idx in 0..len {
-        let Some(key) = typed_key_at(key_column, key_kind, idx) else {
-            return false;
-        };
-        if state
-            .typed_group_count
-            .as_ref()
-            .is_none_or(|fast| !fast.counts.contains_key(&key))
-        {
-            new_keys.insert(key);
-        }
-    }
-
-    if state.typed_group_count.is_none() {
-        state.typed_group_count = Some(TypedGroupCount {
-            counts: HashMap::new(),
-            key_kind,
-            bytes_per_group: typed_group_bytes(key_kind, group_overhead),
-        });
-    }
-    let fast = state
-        .typed_group_count
-        .as_mut()
-        .expect("typed group count initialized above");
-    if !new_keys.is_empty()
-        && memory_tracker
-            .try_reserve(fast.bytes_per_group * new_keys.len())
-            .is_err()
-    {
-        return false;
-    }
-    for key in new_keys {
-        fast.counts.insert(key, 0);
-    }
-    for idx in 0..len {
-        let key = typed_key_at(key_column, key_kind, idx)
-            .expect("key was validated in the preflight pass");
-        let keep = validity.is_none_or(|bitmap| bitmap_is_valid(bitmap, idx));
-        if keep {
-            *fast
-                .counts
-                .get_mut(&key)
-                .expect("key was inserted in the preflight pass") += 1;
-        }
-    }
-    true
-}
-
-/// Move accumulated typed counts into the generic accumulator map before a
-/// chunk or a spill takes the generic path. Memory stays reserved because
-/// the same groups are still live.
-fn deopt_typed_group_count(state: &mut AggregateState) {
-    if let Some(fast) = state.typed_group_count.take() {
-        for (key, count) in fast.counts {
-            state.group_map.insert(
-                vec![key.into_value()],
-                vec![AggregateAccumulator::Count(count)],
-            );
-        }
-    }
-}
 
 pub(crate) fn open_aggregate(state: &mut Option<AggregateState>, num_agg_funcs: usize) {
     *state = Some(AggregateState {
@@ -365,18 +170,22 @@ pub(crate) fn next_aggregate(
                     // accumulates once. The selection vector stays in place (consumed via
                     // `visible_indices` below with no compaction benefit).
                     let _ = chunk.expand_multiplicity_in_place();
-                    if try_typed_group_count(
-                        state,
-                        memory_tracker,
-                        group_overhead,
-                        has_filters,
-                        group_by_expressions,
-                        aggregate_functions,
-                        &mut chunk,
-                    ) {
+                    if state.partition_spiller.is_none()
+                        && !state.has_spilled
+                        && try_accumulate(
+                            &mut state.typed_group_count,
+                            &state.group_map,
+                            memory_tracker,
+                            group_overhead,
+                            has_filters,
+                            group_by_expressions,
+                            aggregate_functions,
+                            &mut chunk,
+                        )
+                    {
                         continue;
                     }
-                    deopt_typed_group_count(state);
+                    deopt(&mut state.typed_group_count, &mut state.group_map);
                     // Per-chunk fast path flags: a `Count` over a bare
                     // variable backed by an identity column counts every
                     // visible row without evaluating its argument.
@@ -666,7 +475,7 @@ pub(crate) fn next_aggregate(
         // In-memory output: finalize accumulated groups into the result batch.
         // Fast-path counts merge into the single global group when a mixed
         // chunk forced the row loop; the pure fast path emits directly.
-        deopt_typed_group_count(state);
+        deopt(&mut state.typed_group_count, &mut state.group_map);
         let mut group_map = std::mem::take(&mut state.group_map);
         state.result_batch.clear();
         state.emitted_offset = 0;

@@ -870,6 +870,31 @@ fn multiplicity_expansion_preserves_typed_columns() {
 }
 
 #[test]
+fn multiplicity_expansion_preserves_rowless_typed_columns() {
+    // Rowless typed chunks carry their length in the typed layout, so the
+    // expansion must gather from that length instead of the empty row view.
+    let layout = Arc::new(SlotLayout::from_names(&["k0".to_string()]));
+    let columns = vec![TypedColumn::I64(vec![1, 2])];
+    let mut chunk = DataChunk::project_typed_columns(columns, layout)
+        .expect("typed chunk")
+        .with_multiplicity(2);
+    chunk.expand_multiplicity_in_place();
+    assert!(chunk.rows.is_empty());
+    let typed = chunk
+        .typed_column(0)
+        .expect("typed layout kept across expand");
+    assert_eq!(
+        typed.to_values(),
+        vec![
+            Value::BigInt(1),
+            Value::BigInt(2),
+            Value::BigInt(1),
+            Value::BigInt(2),
+        ]
+    );
+}
+
+#[test]
 fn expand_visible_rows_with_selection_preserves_typed_columns() {
     let layout = Arc::new(SlotLayout::from_names(&["k0".to_string()]));
     let rows: Vec<Vec<Value>> = (0..4).map(|i| vec![Value::BigInt(i as i64)]).collect();

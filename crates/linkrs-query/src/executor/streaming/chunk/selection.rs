@@ -187,7 +187,7 @@ impl DataChunk {
         // typed layout can be re-expanded in lockstep with the rows.
         let visible_indices: Vec<usize> = match &self.selection {
             Some(indices) => indices.clone(),
-            None => (0..self.rows.len()).collect(),
+            None => (0..self.eval_len()).collect(),
         };
         // Take visible rows once (same ownership discipline as
         // `expand_visible_rows`); hidden rows are dropped.

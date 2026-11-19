@@ -34,7 +34,8 @@ fn main() {
                  --script <file.cypher> --db <path> [--force]\n  \
                  linkrs-parity-bench run --db <path> --space <name> --benchmark-dir <dir> \
                  [--warmup N] [--run N] [--out <dir>] [--threads N]
-                 [--parallel-workers N] [--skip-file <path>]"
+                 [--parallel-workers N] [--min-rows-per-partition N]
+                 [--skip-file <path>]"
             );
             std::process::exit(2);
         }
@@ -644,17 +645,26 @@ fn cmd_run(args: &[String]) {
     let parallel_workers: usize = opt_value(args, "--parallel-workers")
         .and_then(|v| v.parse().ok())
         .unwrap_or(1);
+    let min_rows_per_partition = opt_value(args, "--min-rows-per-partition").map(|value| {
+        value
+            .parse::<u64>()
+            .unwrap_or_else(|e| die(format!("invalid --min-rows-per-partition {value}: {e}")))
+    });
     let skip_file = opt_value(args, "--skip-file");
     let skip_set = skip_file.as_deref().map(load_skip_file).unwrap_or_default();
 
     let mut db_config = DatabaseConfig::file(&db).with_checkpoint_on_close(true);
     if parallel_workers > 1 {
-        db_config = db_config.with_parallel_config(linkrs::config::ParallelConfig {
+        let mut parallel_config = linkrs::config::ParallelConfig {
             workers: parallel_workers,
             max_partitions: parallel_workers,
             allow_ordered_parallel_expand: true,
             ..linkrs::config::ParallelConfig::default()
-        });
+        };
+        if let Some(min_rows) = min_rows_per_partition {
+            parallel_config.min_rows_per_partition = min_rows;
+        }
+        db_config = db_config.with_parallel_config(parallel_config);
     }
     let database = GraphDatabase::<GraphStorage>::open_with_config(db_config)
         .unwrap_or_else(|e| die(format!("open db {}: {e}", db.display())));

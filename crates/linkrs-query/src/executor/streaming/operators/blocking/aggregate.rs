@@ -9,48 +9,9 @@ use linkrs_core::types::expr::Expression;
 use linkrs_core::types::operators::AggregateFunction;
 use linkrs_core::Value;
 
-/// Estimated in-memory overhead of one `AggregateAccumulator` instance
-/// (enum tag plus internal state) used for memory accounting. Charged once
-/// per aggregate function per group so workloads with many small keys are
-/// accounted for beyond the group key itself.
-pub const ACCUMULATOR_OVERHEAD_BYTES: usize = 64;
-
-/// Fixed-size group keys that can be accumulated without building one
-/// `Vec<Value>` per input row. Nullable and heap-backed typed columns are
-/// deliberately absent: their equality needs decoding and stays on the
-/// generic path.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum TypedGroupKey {
-    I64(i64),
-    I32(i32),
-    Bool(bool),
-}
-
-impl TypedGroupKey {
-    pub fn into_value(self) -> Value {
-        match self {
-            Self::I64(v) => Value::BigInt(v),
-            Self::I32(v) => Value::Int(v),
-            Self::Bool(v) => Value::Bool(v),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TypedGroupKeyKind {
-    I64,
-    I32,
-    Bool,
-}
-
-#[derive(Debug)]
-pub struct TypedGroupCount {
-    pub counts: HashMap<TypedGroupKey, u64>,
-    pub key_kind: TypedGroupKeyKind,
-    /// One reservation per distinct group, matching the generic path's
-    /// key-plus-accumulator accounting.
-    pub bytes_per_group: usize,
-}
+pub use super::aggregate_operator::typed_group_count::{
+    TypedGroupCount, ACCUMULATOR_OVERHEAD_BYTES,
+};
 
 #[derive(Debug)]
 pub struct AggregateState {
@@ -93,6 +54,7 @@ pub struct GroupByState {
 #[derive(Debug)]
 pub struct PartialAggregateState {
     pub group_map: HashMap<RowKey, Vec<AggregateAccumulator>>,
+    pub typed_group_count: Option<TypedGroupCount>,
     pub col_names: Vec<String>,
     /// Output buffer replacing the drained row iterator.
     pub result_batch: MaterializedBatch,

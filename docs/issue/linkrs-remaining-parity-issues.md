@@ -331,4 +331,20 @@ devs 上 release 编译通过；DQL 319/319、streaming lib 414/414、`parallel_
 
 `EXPLAIN ANALYZE` 显示 `requested=16, actual=12`，并行 wall_time 约 125 ms、work_time 约 1.2 s、缓冲块峰值 11、缓冲字节峰值约 1.31 MB；PROFILE 中每个分区的扫描/展开/局部聚合独立可见且无 spill。零 worker 对照运行证明纯计数回归只是 worker 线程启动开销，共享调度器已消除。
 
-结论：本轮达成“至少 2 倍级别提升”的验证目标，但未达到问题清单中的十倍硬门；剩余成本主要是分区内单跳展开和局部聚合的行重建，继续下探需要先解决 typed 局部聚合的直接消费，而不是再加并行度。原始日志与 JSON 在 `perf-data/parity/results/2026-11-18/stage8-final/`，远端同名目录在 `/data/kkkqkx/linkrs/repo/perf-data/parity/results/2026-11-18/stage8-final/`。
+结论：本轮达成“至少 2 倍级别提升”的验证目标，但未达到问题清单中的十倍硬门；剩余成本主要是分区内单跳展开和局部聚合的行重建，继续下探需要先解决 typed 局部聚合的直接消费，而不是再加并行度。下一阶段设计见 `docs/plan/typed-partition-aggregation-plan.md`。原始日志与 JSON 在 `perf-data/parity/results/2026-11-18/stage8-final/`，远端同名目录在 `/data/kkkqkx/linkrs/repo/perf-data/parity/results/2026-11-18/stage8-final/`。
+
+## 18. Typed 分区局部聚合实测回填（2026-11-19）
+
+设计见 `docs/plan/typed-partition-aggregation-plan.md`。本轮把固定宽度分组计数状态抽成 `Aggregate` 与 `PartialAggregate` 共用的模块；局部聚合在 typed-only chunk 上直接累计 I64/I32/Bool 键，遇到 nullable 键、多列分组、聚合 FILTER、selection 或预算不足时先把计数转入通用累加表，再让该 chunk 整体走逐行路径。最终合并与 Distinct 未改动，生产默认并行配置也未改动；benchmark 增加仅用于校准的 `--min-rows-per-partition` 覆盖参数。
+
+devs 上 release 编译通过；DQL 319/319、streaming lib 419/419（新增四个 typed 状态单测与一个 rowless multiplicity 回归测试）、`parallel_partition_execution` 25/25。固定门先在 `operators` 子目录做了两轮快速对照，随后按阶段八同口径（LSQB 根目录 + 两份方言跳过项）补跑六轮；下表以同口径六轮为准，每格为 warmup 1 + run 5 的中位数 ms：
+
+| 用例 | 阶段八两轮 | 本轮六轮 | 相对均值 |
+|---|---|---|---|
+| `group_by_count` | 128 / 149 | 118 / 97 / 113 / 116 / 114 / 113 | 约 −19% |
+| `distinct_limit` | 139 / 130 | 123 / 146 / 146 / 126 / 142 / 124 | 约 −0.1%，落在噪声范围 |
+| 九条纯计数 | 0.14–0.60 | 0.140–0.588（单轮噪声上探 0.606） | 无回归 |
+
+`EXPLAIN ANALYZE` 中 `Project` 后一行仍为 `rows: 0`，`PartialAggregate` 输出约 790–1180 行；分区 spill 为 0。两次 PROFILE 缓冲峰值为 10 块 / 1.18 MB 与 6 块 / 0.71 MB，`requested=16, actual=12`，wall_time 约 105–130 ms、work_time 约 1.04–1.38 s；把 `min_rows_per_partition` 从默认 100000 降到 50000 后实际分区数升到 16，但 wall_time 反而升到约 179 ms、work_time 约 2.47 s，说明收益来自 typed 消费而不是分区数，故不调整默认值。
+
+结论：`group_by_count` 达到并超过 15% 的改进门槛，`distinct_limit` 与九条纯计数无回归，保留本次改动。原始日志、逐用例 JSON 与校准 PROFILE 落在 `perf-data/parity/results/2026-11-18/stage9-typed-aggregation/`，远端同名目录在 `/data/kkkqkx/linkrs/repo/perf-data/parity/results/2026-11-18/stage9-typed-aggregation/`。
