@@ -237,10 +237,24 @@ fn missing_property_bypass_yields_null() {
 #[test]
 fn two_hop_count_matches_chained_shape() {
     let scenario = setup_line();
-    let scenario =
-        scenario.query("MATCH (a:Node)-[:Link]->(b:Node)-[:Link]->(c:Node) RETURN count(c)");
+    let shape = "MATCH (a:Node)-[:Link]->(b:Node)-[:Link]->(c:Node) RETURN count(c)";
+    let scenario = scenario.query(&format!("EXPLAIN FORMAT = DOT {shape}"));
+    let plan = plan_of(&scenario);
+    assert!(
+        plan.contains("mode: count_only") && plan.contains("steps: 2"),
+        "two-hop count must use the merged frontier, got:\n{plan}"
+    );
+    let scenario = scenario.assert_success().query(shape);
     let scenario = scenario.assert_success().assert_result_count(1);
     assert_eq!(count_value(&scenario), 3);
+    let scenario =
+        scenario.query("MATCH (a:Node)-[:Link]->(b:Node)-[:Link]->(c:Node) RETURN count(c.name)");
+    let scenario = scenario.assert_success().assert_result_count(1);
+    assert_eq!(
+        count_value(&scenario),
+        3,
+        "degree count must agree with the materializing reference"
+    );
 }
 
 #[test]
@@ -270,12 +284,26 @@ fn hub_two_hop_terminates_with_exact_count() {
 #[test]
 fn variable_length_union_matches_depths() {
     let scenario = setup_line();
-    let scenario = scenario.query("MATCH (a:Node)-[:Link*1..2]->(c:Node) RETURN count(c)");
+    let shape = "MATCH (a:Node)-[:Link*1..2]->(c:Node) RETURN count(c)";
+    let scenario = scenario.query(&format!("EXPLAIN FORMAT = DOT {shape}"));
+    let plan = plan_of(&scenario);
+    assert!(
+        plan.contains("mode: count_only") && plan.contains("steps: 1..2"),
+        "1..2 count must use the degree frontier, got:\n{plan}"
+    );
+    let scenario = scenario.assert_success().query(shape);
     let scenario = scenario.assert_success().assert_result_count(1);
     assert_eq!(
         count_value(&scenario),
         7,
         "depths 1..2 from all seeds give 4 + 3"
+    );
+    let scenario = scenario.query("MATCH (a:Node)-[:Link*1..2]->(c:Node) RETURN count(c.name)");
+    let scenario = scenario.assert_success().assert_result_count(1);
+    assert_eq!(
+        count_value(&scenario),
+        7,
+        "frontier count must agree with the materializing reference"
     );
     let scenario = scenario.query(
         "MATCH (a:Node)-[:Link*1..2]->(c:Node) WHERE a.name == \"0\" RETURN c.name ORDER BY c.name",
@@ -288,4 +316,44 @@ fn variable_length_union_matches_depths() {
     );
     let scenario = scenario.assert_success().assert_result_count(3);
     assert_eq!(sorted_rows(&scenario).len(), 3);
+}
+
+#[test]
+fn self_loop_frontier_counts_match_materialized_reference() {
+    let mut scenario = TestScenario::new()
+        .expect("scenario")
+        .setup_space("expand_columnar_self_loop")
+        .exec_ddl("CREATE TAG Node(name STRING)")
+        .assert_success()
+        .exec_ddl("CREATE EDGE Link(weight DOUBLE) FROM Node TO Node")
+        .assert_success();
+    for i in 0..2 {
+        scenario = scenario.exec_dml(&format!("INSERT VERTEX Node(name) VALUES {i}:(\"{i}\")"));
+    }
+    let scenario = scenario
+        .assert_success()
+        .exec_dml("INSERT EDGE Link(weight) VALUES 0 -> 1:(1.0)")
+        .assert_success()
+        .exec_dml("INSERT EDGE Link(weight) VALUES 1 -> 0:(1.0)")
+        .assert_success()
+        .exec_dml("INSERT EDGE Link(weight) VALUES 0 -> 0:(1.0)")
+        .assert_success();
+
+    let chained = scenario
+        .query("MATCH (a:Node)-[:Link]->(b:Node)-[:Link]->(c:Node) RETURN count(c)")
+        .assert_success();
+    assert_eq!(count_value(&chained), 5);
+    let two_hop = chained
+        .query("MATCH (a:Node)-[:Link]->(b:Node)-[:Link]->(c:Node) RETURN count(c.name)")
+        .assert_success();
+    assert_eq!(count_value(&two_hop), 5);
+
+    let range = two_hop
+        .query("MATCH (a:Node)-[:Link*1..2]->(c:Node) RETURN count(c)")
+        .assert_success();
+    assert_eq!(count_value(&range), 8, "3 one-hop and 5 two-hop walks");
+    let materialized = range
+        .query("MATCH (a:Node)-[:Link*1..2]->(c:Node) RETURN count(c.name)")
+        .assert_success();
+    assert_eq!(count_value(&materialized), 8);
 }

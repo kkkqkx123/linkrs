@@ -816,9 +816,9 @@ fn plan_cache_partition_fingerprint_changes_with_ranges() {
 
 #[test]
 fn two_hop_id_only_seeds_feed_next_hop() {
-    // A1.5: hop1 is annotated id_only (b feeds only the next hop), so hop2's
-    // seeds come from hop1's `Value::VertexId` output column. The chain must
-    // produce the same count as the full materialization path.
+    // The two-hop count folds into one fixed-depth frontier: the intermediate
+    // hop is only a seed source, so its destinations never materialize. The
+    // numeric result must still match the full materialization path.
     let storage = setup_storage();
     let mut serial = build_pipeline(&storage, 1);
     let mut parallel = build_pipeline(&storage, 2);
@@ -833,21 +833,20 @@ fn two_hop_id_only_seeds_feed_next_hop() {
     );
     assert_eq!(serial_rows, vec![vec![Value::BigInt(8000)]]);
 
-    // The plan must annotate hop1 id_only and hop2 count_only.
+    // The plan must expose one count-only 2-hop expand.
     let output = query_rows(
         &mut serial,
         "EXPLAIN MATCH (a:Node)-[:Link]->(b:Node)-[:Link]->(c:Node) RETURN count(c)",
     );
     let plan = output[0][0].to_string().unwrap_or_default();
-    let expand_pos = plan.find("ExpandAll").expect("expand");
-    let info_after_first = &plan[expand_pos..];
-    assert!(
-        info_after_first.contains("mode:id_only"),
-        "hop1 must be id_only, got:\n{plan}"
+    assert_eq!(
+        plan.matches("ExpandAll").count(),
+        1,
+        "the two hops must fold into one frontier, got:\n{plan}"
     );
     assert!(
-        info_after_first.contains("mode:count_only"),
-        "hop2 must be count_only, got:\n{plan}"
+        plan.contains("steps:2") && plan.contains("mode:count_only"),
+        "the folded hop must be a count-only 2-hop frontier, got:\n{plan}"
     );
 }
 

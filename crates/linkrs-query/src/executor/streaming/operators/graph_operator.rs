@@ -27,6 +27,7 @@ mod expand_seeds;
 mod subgraph;
 mod traverse;
 
+#[derive(Clone)]
 pub(super) struct ExpandCtx<'a> {
     pub(super) space_name: &'a str,
     pub(super) dst_tag: &'a str,

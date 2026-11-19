@@ -184,7 +184,12 @@ pub(super) fn handle_all(
             // so it only applies when no semantic constrains the walk. A
             // count-only plan with property demands is a contract error:
             // attribute counts observe nullability, not edge degrees.
-            if count_only && path_semantic.is_none() {
+            if count_only
+                && matches!(
+                    path_semantic,
+                    None | Some(crate::parser::ast::pattern::PathSemantic::Walk)
+                )
+            {
                 let edge_empty = matches!(edge_required_props.as_ref(), Some(v) if v.is_empty());
                 let dst_empty = matches!(dst_required_props.as_ref(), Some(v) if v.is_empty());
                 if !edge_empty || !dst_empty {
@@ -197,6 +202,7 @@ pub(super) fn handle_all(
                     chunk,
                     reader,
                     src_vids.clone(),
+                    step_limits.as_deref(),
                     &mut ExpandCtx {
                         space_name,
                         dst_tag,

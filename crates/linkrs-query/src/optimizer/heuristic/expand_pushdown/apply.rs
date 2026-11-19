@@ -16,6 +16,10 @@ pub(super) fn apply_decisions(
     let mut changed = false;
     if let PlanNodeEnum::ExpandAll(expand) = root {
         if let Some(decision) = decisions.get(&expand.id()) {
+            let steps_change = decision
+                .variable_steps
+                .as_deref()
+                .is_some_and(|steps| expand.step_limits().map(Vec::as_slice) != Some(steps));
             if expand.id_only() != decision.id_only
                 || expand.count_only() != decision.count_only
                 || expand.lightweight_source() != decision.lightweight_source
@@ -23,6 +27,8 @@ pub(super) fn apply_decisions(
                 || expand.dst_required_props() != decision.dst_props.as_deref()
                 || expand.closed_loop() != decision.closed_loop
                 || expand.skip_rows() != decision.skip_rows
+                || steps_change
+                || decision.collapsed_input.is_some()
             {
                 expand.set_id_only(decision.id_only);
                 expand.set_count_only(decision.count_only);
@@ -31,6 +37,17 @@ pub(super) fn apply_decisions(
                 expand.set_dst_required_props(decision.dst_props.clone());
                 expand.set_closed_loop(decision.closed_loop);
                 expand.set_skip_rows(decision.skip_rows);
+                if steps_change {
+                    let steps = decision
+                        .variable_steps
+                        .clone()
+                        .expect("step change implies a range");
+                    expand.clear_step_limit();
+                    expand.set_step_limits(steps);
+                }
+                if let Some(input) = decision.collapsed_input.clone() {
+                    *expand.inputs_mut() = input;
+                }
                 changed = true;
             }
         }

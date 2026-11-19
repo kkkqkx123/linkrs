@@ -113,6 +113,26 @@ fn degree_count_tail_excludes_expired_edges() {
 }
 
 #[test]
+fn range_count_frontier_excludes_expired_edges() {
+    let scenario = fast_path_graph(TTL_EDGE_DDL)
+        .query("MATCH (a:Node)-[:Link*1..2]->(c:Node) RETURN count(c)")
+        .assert_success();
+    assert_eq!(
+        count_value(&scenario),
+        4,
+        "three live one-hop edges plus the live 0->1->3 two-hop walk"
+    );
+}
+
+#[test]
+fn range_count_frontier_without_ttl_is_unfiltered() {
+    let scenario = fast_path_graph(PLAIN_EDGE_DDL)
+        .query("MATCH (a:Node)-[:Link*1..2]->(c:Node) RETURN count(c)")
+        .assert_success();
+    assert_eq!(count_value(&scenario), 6);
+}
+
+#[test]
 fn degree_count_tail_without_ttl_is_unfiltered() {
     let scenario = fast_path_graph(PLAIN_EDGE_DDL)
         .query("MATCH (a:Node)-[:Link]->(b:Node) RETURN count(b)")

@@ -279,6 +279,11 @@ impl ExpandAllNode {
         self.step_limit = Some(limit);
     }
 
+    /// Replace a single-step hop with a step-range hop.
+    pub fn clear_step_limit(&mut self) {
+        self.step_limit = None;
+    }
+
     /// Declare an unbounded hop count: the walk continues until the frontier
     /// is exhausted. Encoded as `step_limit == Some(0)`, a value no parsed
     /// range can produce because every range allows at least one hop.

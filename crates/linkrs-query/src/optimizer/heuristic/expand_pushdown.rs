@@ -23,8 +23,11 @@ use crate::optimizer::heuristic::context::RewriteContext;
 use crate::optimizer::heuristic::pattern::Pattern;
 use crate::optimizer::heuristic::result::{RewriteResult, TransformResult};
 use crate::optimizer::heuristic::rule::RewriteRule;
+use crate::parser::ast::pattern::PathSemantic;
 use crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
-use crate::planning::plan::core::nodes::base::plan_node_traits::{PlanNode, SingleInputNode};
+use crate::planning::plan::core::nodes::base::plan_node_traits::{
+    MultipleInputNode, PlanNode, SingleInputNode,
+};
 use crate::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode;
 use crate::planning::plan::core::nodes::traversal::traversal_node::ExpandAllNode;
 use linkrs_core::types::expr::Expression;
@@ -40,6 +43,10 @@ struct ExpandDecision {
     dst_props: Option<Vec<String>>,
     closed_loop: bool,
     skip_rows: bool,
+    /// Depth range installed when two single-step hops fold into one count.
+    variable_steps: Option<Vec<u32>>,
+    /// Input of the collapsed chain tail after the intermediate hop is removed.
+    collapsed_input: Option<Vec<PlanNodeEnum>>,
 }
 
 /// Whole-plan rule that annotates `ExpandAll` hops with id_only/count_only.
@@ -131,9 +138,32 @@ fn annotate_expand_all(root: &PlanNodeEnum) -> (PlanNodeEnum, bool) {
                     dst_props,
                     closed_loop,
                     skip_rows,
+                    variable_steps: None,
+                    collapsed_input: None,
                 },
             );
         }
+    }
+    if let Some((tail_id, collapsed_input)) = two_hop_count_collapse(&candidates, &decisions) {
+        let tail = candidates
+            .iter()
+            .find(|(expand, _)| expand.id() == tail_id)
+            .expect("collapse candidate must exist")
+            .0
+            .clone();
+        let decision = decisions.entry(tail_id).or_insert_with(|| ExpandDecision {
+            id_only: tail.id_only(),
+            count_only: tail.count_only(),
+            lightweight_source: tail.lightweight_source(),
+            edge_props: tail.edge_required_props().map(<[String]>::to_vec),
+            dst_props: tail.dst_required_props().map(<[String]>::to_vec),
+            closed_loop: tail.closed_loop(),
+            skip_rows: tail.skip_rows(),
+            variable_steps: None,
+            collapsed_input: None,
+        });
+        decision.variable_steps = Some(vec![2]);
+        decision.collapsed_input = Some(collapsed_input);
     }
     let mut new_root = root.clone();
     let expand_changed =
@@ -151,6 +181,92 @@ fn annotate_expand_all(root: &PlanNodeEnum) -> (PlanNodeEnum, bool) {
 
     let project_changed = apply_decisions(&mut new_root, &decisions, &rowless_projects);
     (new_root, expand_changed || project_changed)
+}
+
+/// Fold a two-hop count chain into one fixed-depth frontier count.
+///
+/// Both hops must be single-step, filter-free and schema-closed, and only the
+/// tail edge may be consumed by the count. Under those preconditions the
+/// per-seed second-hop degree sum equals the chained count, so the
+/// intermediate hop never needs to materialize destinations.
+fn two_hop_count_collapse(
+    candidates: &[(ExpandAllNode, Vec<&PlanNodeEnum>)],
+    decisions: &HashMap<i64, ExpandDecision>,
+) -> Option<(i64, Vec<PlanNodeEnum>)> {
+    for (tail, _) in candidates {
+        if !effective_count_only(tail, decisions)
+            || !single_step_count_hop(tail, decisions)
+            || tail.inputs().len() != 1
+        {
+            continue;
+        }
+        let PlanNodeEnum::ExpandAll(head) = through_flatten(&tail.inputs()[0]) else {
+            continue;
+        };
+        if !effective_id_only(head, decisions)
+            || !single_step_count_hop(head, decisions)
+            || head.inputs().len() != 1
+        {
+            continue;
+        }
+        if head.space_id() != tail.space_id()
+            || head.edge_types() != tail.edge_types()
+            || head.direction() != tail.direction()
+            || head.dst_tag() != tail.dst_tag()
+        {
+            continue;
+        }
+        let Some(bridge) = head.col_names().get(2) else {
+            continue;
+        };
+        if Some(bridge.as_str()) != tail.col_names().first().map(String::as_str) {
+            continue;
+        }
+        return Some((tail.id(), head.inputs().to_vec()));
+    }
+    None
+}
+
+/// Flatten only replays its input rows, so a chained count can fold across it.
+fn through_flatten(mut node: &PlanNodeEnum) -> &PlanNodeEnum {
+    while let PlanNodeEnum::Flatten(flatten) = node {
+        node = flatten.input();
+    }
+    node
+}
+
+fn effective_id_only(expand: &ExpandAllNode, decisions: &HashMap<i64, ExpandDecision>) -> bool {
+    decisions
+        .get(&expand.id())
+        .map(|decision| decision.id_only)
+        .unwrap_or_else(|| expand.id_only())
+}
+
+fn effective_count_only(expand: &ExpandAllNode, decisions: &HashMap<i64, ExpandDecision>) -> bool {
+    decisions
+        .get(&expand.id())
+        .map(|decision| decision.count_only)
+        .unwrap_or_else(|| expand.count_only())
+}
+
+fn effective_closed_loop(expand: &ExpandAllNode, decisions: &HashMap<i64, ExpandDecision>) -> bool {
+    decisions
+        .get(&expand.id())
+        .map(|decision| decision.closed_loop)
+        .unwrap_or_else(|| expand.closed_loop())
+}
+
+fn single_step_count_hop(expand: &ExpandAllNode, decisions: &HashMap<i64, ExpandDecision>) -> bool {
+    expand.step_limit() == Some(1)
+        && expand.step_limits().is_none()
+        && expand.filter().is_none()
+        && expand.src_vids().is_empty()
+        && expand.path_semantic().is_none()
+        && !expand.include_empty_paths()
+        && !expand.sample()
+        && !expand.join_input()
+        && expand_closed_loop(expand)
+        && effective_closed_loop(expand, decisions)
 }
 
 /// A passthrough Project over a rowless hop may keep its typed layout when
@@ -364,7 +480,7 @@ fn expand_count_only(
     edge_props: Option<&Vec<String>>,
     dst_props: Option<&Vec<String>>,
 ) -> bool {
-    if !fast_path_compatible(expand) {
+    if !count_shape_compatible(expand) {
         return false;
     }
     if !demand_is_empty(edge_props) || !demand_is_empty(dst_props) {
@@ -392,6 +508,35 @@ fn expand_count_only(
         }
     }
     false
+}
+
+/// Countable expand shapes: a single step, or the fixed `1..2` walk range.
+///
+/// The range counts depth-one and depth-two edges independently, which is
+/// only the walk union when every endpoint stays inside the same schema
+/// domain and no path-repeat rule is requested. Other ranges keep the row
+/// path because a frontier count cannot express their semantics.
+fn count_shape_compatible(expand: &ExpandAllNode) -> bool {
+    if fast_path_compatible(expand) {
+        return matches!(expand.path_semantic(), None | Some(PathSemantic::Walk))
+            && !expand.include_empty_paths();
+    }
+    if expand.step_limit().is_some()
+        || expand.step_limits().is_none()
+        || expand.filter().is_some()
+        || !expand.src_vids().is_empty()
+        || expand.include_empty_paths()
+        || expand.sample()
+        || expand.join_input()
+        || expand.any_edge_type()
+        || expand.edge_types().is_empty()
+    {
+        return false;
+    }
+    let limits = expand.step_limits().expect("step range checked above");
+    matches!(expand.path_semantic(), None | Some(PathSemantic::Walk))
+        && (limits.as_slice() == [1, 2] || limits.as_slice() == [2])
+        && expand_closed_loop(expand)
 }
 
 /// The single-step raw-id fast path (`expand_single_step`) is only taken when

@@ -307,10 +307,19 @@ pub fn physical_plan_to_plan_description(plan: &PhysicalPlan) -> PlanDescription
                 col_names,
                 edge_required_props,
                 dst_required_props,
+                step_limits,
                 ..
             },
         ) = &op_spec.spec
         {
+            if let Some(limits) = step_limits {
+                let steps = limits
+                    .iter()
+                    .map(|depth| depth.to_string())
+                    .collect::<Vec<_>>()
+                    .join("..");
+                pairs.push(Pair::new("steps", steps));
+            }
             if *count_only {
                 pairs.push(crate::planning::plan::explain::Pair::new(
                     "mode",

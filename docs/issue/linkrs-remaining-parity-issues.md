@@ -348,3 +348,21 @@ devs 上 release 编译通过；DQL 319/319、streaming lib 419/419（新增四�
 `EXPLAIN ANALYZE` 中 `Project` 后一行仍为 `rows: 0`，`PartialAggregate` 输出约 790–1180 行；分区 spill 为 0。两次 PROFILE 缓冲峰值为 10 块 / 1.18 MB 与 6 块 / 0.71 MB，`requested=16, actual=12`，wall_time 约 105–130 ms、work_time 约 1.04–1.38 s；把 `min_rows_per_partition` 从默认 100000 降到 50000 后实际分区数升到 16，但 wall_time 反而升到约 179 ms、work_time 约 2.47 s，说明收益来自 typed 消费而不是分区数，故不调整默认值。
 
 结论：`group_by_count` 达到并超过 15% 的改进门槛，`distinct_limit` 与九条纯计数无回归，保留本次改动。原始日志、逐用例 JSON 与校准 PROFILE 落在 `perf-data/parity/results/2026-11-18/stage9-typed-aggregation/`，远端同名目录在 `/data/kkkqkx/linkrs/repo/perf-data/parity/results/2026-11-18/stage9-typed-aggregation/`。
+
+## 19. 方案阶段二：两跳连接与变长路径计数回填（2026-11-19）
+
+按 `docs/plan/linkrs-remaining-parity-implementation-plan.md` 的阶段二执行。两跳计数在优化器里把「同标签、同边类型、同方向、无过滤与属性需求」的相邻两跳折叠成一次固定深度 `2` 的 count-only 展开；中间跳只作种子来源，不再物化目的地。`Flatten` 是行保持算子，折叠时穿过它。变长计数把无路径语义的 `*1..2` walk 收进同一套度数前沿：逐层用批量邻接读取推进前沿，用批量出度累加尾边数；TTL、开放 schema、受限重复规则与空路径语义一律回退到物化行数统计。EXPLAIN 增加 `steps` 标记，固定形状显示 `steps: 2` 或 `steps: 1..2`。
+
+正确性护栏：属性计数、Trail 语义、不同边类型链、带过滤形状全部保持慢路径；自环、重复边、空输入、TTL 过期边与小图物化对照均由 DQL 测试锁定；`count_only` 注解要求 `include_empty_paths` 关闭，避免 OPTIONAL 的 NULL 行被误计。
+
+devs 上 release 编译通过；`expand_pushdown` 单测 22/22、DQL 322/322、streaming lib 419/419、`parallel_partition_execution` 25/25。并行测试中原先断言「hop1 id_only + hop2 count_only」的计划形状已随折叠改为「单个 count-only 二跳前沿」，数值与并行一致性断言不变。固定门沿用 LSQB 根目录、`--parallel-workers 16`、绑核 `16-31`、warmup 1 + run 5，共四轮；每格为单轮执行中位数 ms：
+
+| 用例 | 阶段九中位数（六轮范围） | 本轮四轮 | 相对阶段九均值 |
+|---|---:|---:|---|
+| `join_two_hop` | 41（历史两轮） | 13.4 / 14.0 / 14.3 / 14.2 | 约 3× |
+| `variable_path_count` | 97–146 | 13.8 / 14.5 / 14.6 / 13.8 | 约 70–80× |
+| `group_by_count` | 95–118 | 95.6 / 99.2 / 122.8 / 95.6 | 无回归，噪声内 |
+| `distinct_limit` | 114–146 | 114.3 / 124.5 / 136.2 / 115.0 | 无回归，噪声内 |
+| 九条纯计数 | 0.140–0.606 | 0.146–0.654 | 无实质回归，单轮漂移 |
+
+`variable_path_count` 已从秒级降到十几毫秒，超过与 Ladybug 同数量级的目标；`join_two_hop` 约 14 ms，相对 Ladybug 的 2.42 ms 仍有约 5–6 倍差距，但已消除中间路径行物化。后续收益需来自更窄的度读取或并行前沿，而不是继续改聚合。原始日志与四轮 JSON 落在 `perf-data/parity/results/2026-11-18/stage10-two-hop-variable/`，远端在 `/data/kkkqkx/linkrs/stage2-results/` 与 `/data/kkkqkx/linkrs/stage2-gate3.log`。

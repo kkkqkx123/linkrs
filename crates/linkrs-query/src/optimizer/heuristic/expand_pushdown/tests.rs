@@ -3,6 +3,7 @@ use crate::planning::plan::core::nodes::access::graph_scan_node::ScanVerticesNod
 use crate::planning::plan::core::nodes::base::plan_node_traits::MultipleInputNode;
 use crate::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode;
 use crate::planning::plan::core::nodes::graph_operations::graph_operations_node::dedup_node::DedupNode;
+use crate::planning::plan::core::nodes::operation::flatten_node::FlattenNode;
 use crate::planning::plan::core::nodes::operation::project_node::ProjectNode;
 use crate::planning::plan::core::nodes::traversal::traversal_node::ExpandAllNode;
 use linkrs_core::types::expr::expression_context::ExpressionAnalysisContext;
@@ -29,6 +30,7 @@ fn hop(edge: &str, vars: [&str; 3], input: PlanNodeEnum) -> PlanNodeEnum {
     let mut expand = ExpandAllNode::new(1, vec![edge.to_string()], "OUT");
     expand.set_step_limit(1);
     expand.set_col_names(vars.iter().map(|s| s.to_string()).collect());
+    expand.set_include_empty_paths(false);
     expand.add_input(input);
     PlanNodeEnum::ExpandAll(expand)
 }
@@ -124,7 +126,7 @@ fn rowless_project_forwards_only_to_typed_consumers() {
 }
 
 #[test]
-fn two_hop_count_chain_is_annotated() {
+fn two_hop_count_chain_collapses_into_frontier() {
     // MATCH (a:Node)-[:Link]->(b)-[:Link]->(c) RETURN count(c)
     let chain = count_agg(project_pass_dst(
         hop(
@@ -137,19 +139,94 @@ fn two_hop_count_chain_is_annotated() {
     let (annotated, changed) = annotate_expand_all(&chain);
     assert!(changed, "annotation must change the plan");
     let hops = expand_alls(&annotated);
-    assert_eq!(hops.len(), 2);
-    let hop_b = hop_by_dst(&hops, "b");
-    let hop_c = hop_by_dst(&hops, "c");
-    assert!(hop_b.id_only(), "hop1 (b) must be id_only");
-    assert!(!hop_b.count_only(), "hop1 (b) must not be count_only");
-    assert!(
-        hop_b.lightweight_source(),
-        "hop1 source (a) is unreferenced, so its source column may be lightweight"
+    assert_eq!(
+        hops.len(),
+        1,
+        "the intermediate hop must fold into a 2-hop frontier count"
     );
-    assert!(hop_c.count_only(), "hop2 (c) must be count_only");
+    let tail = &hops[0];
+    assert!(tail.count_only(), "merged hop must still be count_only");
+    assert_eq!(tail.step_limits().map(Vec::as_slice), Some(&[2][..]));
+    assert_eq!(tail.step_limit(), None);
     assert!(
-        !hop_c.id_only(),
-        "hop2 (c) dst is referenced by the aggregate"
+        matches!(tail.inputs().first(), Some(PlanNodeEnum::ScanVertices(_))),
+        "collapsed hop must seed directly from the scan"
+    );
+}
+
+#[test]
+fn two_hop_count_folds_across_flatten() {
+    let head = hop("Link", ["a", "e1", "b"], anchor_scan("a"));
+    let flatten = PlanNodeEnum::Flatten(FlattenNode::new(head, 0).expect("flatten"));
+    let chain = count_agg(project_pass_dst(
+        hop("Link", ["b", "e2", "c"], flatten),
+        "c",
+    ));
+    let (annotated, _) = annotate_expand_all(&chain);
+    assert_eq!(
+        expand_alls(&annotated).len(),
+        1,
+        "Flatten is row-preserving and must not block the fold"
+    );
+}
+
+#[test]
+fn two_hop_count_with_different_edge_types_stays_chained() {
+    let chain = count_agg(project_pass_dst(
+        hop(
+            "Link2",
+            ["b", "e2", "c"],
+            hop("Link1", ["a", "e1", "b"], anchor_scan("a")),
+        ),
+        "c",
+    ));
+    let (annotated, _) = annotate_expand_all(&chain);
+    let hops = expand_alls(&annotated);
+    assert_eq!(hops.len(), 2, "different edge domains cannot be merged");
+    assert!(hop_by_dst(&hops, "b").id_only());
+    assert!(hop_by_dst(&hops, "c").count_only());
+    assert!(
+        hop_by_dst(&hops, "c").step_limits().is_none(),
+        "unmerged tail stays single-step"
+    );
+}
+
+fn variable_hop(limits: Vec<u32>, vars: [&str; 3], input: PlanNodeEnum) -> PlanNodeEnum {
+    let mut expand = ExpandAllNode::new(1, vec!["Link".to_string()], "OUT");
+    expand.set_step_limits(limits);
+    expand.set_col_names(vars.iter().map(|s| s.to_string()).collect());
+    expand.set_include_empty_paths(false);
+    expand.add_input(input);
+    PlanNodeEnum::ExpandAll(expand)
+}
+
+#[test]
+fn variable_one_to_two_count_uses_frontier() {
+    let chain = count_agg(project_pass_dst(
+        variable_hop(vec![1, 2], ["a", "e", "c"], anchor_scan("a")),
+        "e",
+    ));
+    let (annotated, _) = annotate_expand_all(&chain);
+    let hops = expand_alls(&annotated);
+    assert_eq!(hops.len(), 1);
+    assert!(
+        hops[0].count_only(),
+        "a closed 1..2 walk count can use the degree frontier"
+    );
+}
+
+#[test]
+fn trail_variable_count_stays_on_row_path() {
+    let mut expand = ExpandAllNode::new(1, vec!["Link".to_string()], "OUT");
+    expand.set_step_limits(vec![1, 2]);
+    expand.set_col_names(vec!["a".into(), "e".into(), "c".into()]);
+    expand.set_path_semantic(Some(crate::parser::ast::pattern::PathSemantic::Trail));
+    expand.add_input(anchor_scan("a"));
+    let chain = count_agg(project_pass_dst(PlanNodeEnum::ExpandAll(expand), "e"));
+    let (annotated, _) = annotate_expand_all(&chain);
+    assert!(
+        !expand_alls(&annotated)[0].count_only(),
+        "Trail repeat rules cannot be reduced to degree sums"
     );
 }
 
