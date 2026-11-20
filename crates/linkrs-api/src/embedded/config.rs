@@ -46,6 +46,9 @@ pub struct DatabaseConfig {
     pub create_if_missing: bool,
     /// Create one final checkpoint on explicit close. Off by default.
     pub checkpoint_on_close: bool,
+    /// Whether each checkpoint also creates a full snapshot copy. Snapshots
+    /// double checkpoint storage and are optional for read-mostly benchmarks.
+    pub enable_snapshots: bool,
     /// Vector subsystem configuration.
     pub vector: VectorConfig,
     /// Query-internal parallel execution settings. Defaults keep embedded
@@ -102,6 +105,7 @@ impl DatabaseConfig {
             read_only: false,
             create_if_missing: true,
             checkpoint_on_close: false,
+            enable_snapshots: true,
             vector: VectorConfig::default(),
             parallel: ParallelConfig::default(),
         }
@@ -118,6 +122,7 @@ impl DatabaseConfig {
             read_only: false,
             create_if_missing: true,
             checkpoint_on_close: false,
+            enable_snapshots: true,
             vector: VectorConfig::default(),
             parallel: ParallelConfig::default(),
         }
@@ -155,6 +160,12 @@ impl DatabaseConfig {
     /// Set whether the content should be read-only only.
     pub fn with_read_only(mut self, read_only: bool) -> Self {
         self.read_only = read_only;
+        self
+    }
+
+    /// Whether checkpoints also create full snapshot copies.
+    pub fn with_snapshots(mut self, enabled: bool) -> Self {
+        self.enable_snapshots = enabled;
         self
     }
 
@@ -228,6 +239,7 @@ mod tests {
         assert_eq!(config.cache_size_mb, 64);
         assert_eq!(config.default_timeout, Duration::from_secs(30));
         assert!(!config.checkpoint_on_close);
+        assert!(config.enable_snapshots);
     }
 
     #[test]

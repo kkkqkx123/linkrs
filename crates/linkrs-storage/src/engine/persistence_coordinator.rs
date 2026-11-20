@@ -38,7 +38,7 @@ use parking_lot::RwLock;
 
 use linkrs_sync::checkpoint_manifest::CheckpointManifestManager;
 
-use crate::engine::snapshot_manager::SnapshotManager;
+use crate::engine::snapshot_manager::{RetentionPolicy, SnapshotManager};
 use crate::engine::WalManager;
 use crate::index::shard_runtime::IndexBarrierRegistry;
 use linkrs_core::event_dispatch::{EventFilter, EventSubscriptions, SubscriptionId};
@@ -248,9 +248,14 @@ impl PersistenceCoordinator {
                     config.snapshot_dir.display()
                 ))
             })?;
-            let manager = SnapshotManager::new(
+            let retention_policy = RetentionPolicy {
+                max_snapshots: config.checkpoint_retention_count.max(1),
+                ..RetentionPolicy::default()
+            };
+            let manager = SnapshotManager::with_retention_policy(
                 config.snapshot_dir.clone(),
                 config.data_dir.join("snapshot_work"),
+                retention_policy,
             )
             .map_err(|error| {
                 error.with_context(format!(
@@ -844,6 +849,7 @@ mod tests {
         let config = PersistenceConfig {
             enable_snapshots: false,
             enable_wal: false,
+            checkpoint_retention_count: usize::MAX,
             ..PersistenceConfig::for_work_dir(temp_dir.path())
         };
         let coordinator = PersistenceCoordinator::new(config.clone()).expect("coordinator");
@@ -877,6 +883,7 @@ mod tests {
         let config = PersistenceConfig {
             enable_snapshots: false,
             enable_wal: false,
+            checkpoint_retention_count: usize::MAX,
             ..PersistenceConfig::for_work_dir(temp_dir.path())
         };
         let coordinator = PersistenceCoordinator::new(config.clone()).expect("coordinator");
@@ -898,6 +905,37 @@ mod tests {
 
         assert_eq!(coordinator.cleanup_old_checkpoints(1).expect("cleanup"), 2);
         assert!(config.checkpoint_dir.join("checkpoint_3").exists());
+    }
+
+    #[test]
+    fn completed_checkpoints_apply_retention_limit() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let config = PersistenceConfig {
+            enable_snapshots: false,
+            enable_wal: false,
+            ..PersistenceConfig::for_work_dir(temp_dir.path())
+        };
+        let coordinator = PersistenceCoordinator::new(config.clone()).expect("coordinator");
+        for sequence in 1..=4 {
+            coordinator
+                .create_checkpoint(
+                    |temporary_dir, _| {
+                        std::fs::write(temporary_dir.join("table.data"), b"data")?;
+                        Ok(CheckpointData {
+                            vertex_count: sequence,
+                            edge_count: 0,
+                            data_size: 4,
+                        })
+                    },
+                    sequence,
+                )
+                .expect("checkpoint should publish");
+        }
+
+        assert!(!config.checkpoint_dir.join("checkpoint_1").exists());
+        assert!(!config.checkpoint_dir.join("checkpoint_2").exists());
+        assert!(config.checkpoint_dir.join("checkpoint_3").exists());
+        assert!(config.checkpoint_dir.join("checkpoint_4").exists());
     }
 
     #[test]

@@ -426,3 +426,51 @@ devs 上 release 编译通过；存储谓词单测 3/3、storage lib 1406/1406�
 固定门沿用第 22 节口径，两轮中位数 ms：`aggregate_filtered_count` 1.18 / 1.18，`filter_id_range` 1.64 / 1.62，`filter_or` 1.50 / 1.49，`filter_count_pushed` 1.67 / 1.64，`filter_count_unpushed` 1.72 / 1.66，九条纯计数 0.140–0.583。数值与计划标记不变，过滤计数收益保持在约 2.3×；完整谓词替换仍关闭，解禁条件写入方案文档。
 
 本轮日志、JSON、EXPLAIN 与新增存储测试日志覆盖 `perf-data/parity/results/2026-11-18/filter-aggregate-final/`，远端同名目录在 `/data/kkkqkx/linkrs/filter-aggregate-results/`。
+
+## 24. 下一阶段差距分析与设计
+
+三方指标对照、有序并行 A/B、ref 实现参照与下一阶段任务已写入 `docs/plan/next-stage-parity-gap-design.md`。当前主要差距集中在 `distinct_limit`、`group_by_count`、少量微扫描算子和库体积；两项最大缺口在本轮默认测量中未启用有序并行，恢复可比基线后仍分别约为 Ladybug 的 14× 与 31×。下一阶段先冻结测量基线，再做分区扫描/展开/聚合融合、精确局部 TopN、窄前置存储下推与 WAL/checkpoint 体积回收。补齐 `ref/ladybug` 与 `ref/neug` 后，方案文档第 7 节进一步给出按源码定位的借鉴点：packed extend、multiplicity 加权聚合、typed TopN、按度数预取、活动/frozen 双 WAL 等。
+
+## 25. 下一阶段首轮实现与回测
+
+本轮按方案先冻结基线，再落地低风险的融合与观测改动：
+
+- 基准入口在 `parallel-workers > 1` 时默认请求有序并行展开，生产配置默认值不变；新增 `--require-parallel-explain`，对 `group_by_count` / `distinct_limit` 校验 EXPLAIN 的 `actual` 与 `actual_partitions`，不满足时把结果标为 `invalid_parallel` 并返回失败。
+- 共享 typed 分组计数直接消费 `chunk.multiplicity()` 作为权重，窄形状下不再展开符号重复行；其他形状仍在 opaque 边界展开后走通用表。
+- `DISTINCT` 单列键且 TopN 按同一键排序时，在每个分区 Exchange 前加局部 Distinct/TopK，全局算子保留，避免交换全量去重键；并列、多列键与聚合排序形状不进入该路径。
+- 完成检查点后按保留数 2 回收旧 checkpoint 目录；WAL 回收增加安全 LSN 判据，并保留一个 retired 段作为回退点。
+- parity JSON 增加 `db_size_bytes`、`rss_peak_kb`、`buffer_pool_bytes`、`spill_rows`，固定门脚本输出资源表。
+
+devs release 编译通过；typed group 单测 5/5、并行分区 27/27、DQL 324/324、checkpoint 保留 2/2、WAL writer 24/24、storage lib 全量通过。两轮固定门 EXPLAIN 均为 `actual=10`、`actual_partitions=10`，结果稳定：`group_by_count` 中位数 107.17 / 93.49 ms，`distinct_limit` 114.13 / 107.22 ms；微扫描算子 1.16–1.82 ms，全部 `spill_rows=0`。资源口径为库体积约 900 MB、RSS 峰值约 949 MB、buffer pool 上限 64 MB。
+
+分区局部 Distinct/TopK 已生效（每分区先收敛到 10 行再交换），但本轮墙钟收益不稳定，尚不能据此宣称达到 20 ms / 15 ms 门槛；主要耗时仍在分区扫描与单跳展开。现有 golden DB 的 WAL 段头均带当前 checkpoint seq，安全 LSN 未覆盖旧段，因此本轮回测中 WAL 文件数仍由 169 增至 171、库体积未下降；库体积目标需继续审计 manifest 的 safe LSN 写入与段头刷新时机。
+
+日志、两轮 JSON、EXPLAIN 与资源表已回填 `perf-data/parity/results/2026-11-18/next-stage-final/`，远端结果在 `/data/kkkqkx/linkrs/next-stage-results/`，固定门脚本为 `scripts/devs-next-stage-gate.sh`。
+
+## 26. 剩余任务设计首轮回测
+
+剩余任务设计写入 `docs/plan/next-stage-remaining-tasks-design.md`。本轮完成其中可安全冻结的基线与资源收尾：
+
+- 固定门新增 `--max-partitions 10`，把基准的经济分区数冻结为 10；生产配置不变。实测 16 分区受内存带宽与交换开销影响反而更慢，10 分区是本机稳定点。固定门仍校验 `actual > 1`。
+- 基准进程在计时与 EXPLAIN 后显式释放 session 并调用 `database.close()`；这是库体积问题的根因，此前 `checkpoint_on_close` 从未触发，每个基准进程只会多留一个 WAL 段。
+- checkpoint 保留数 2 同时约束快照保留数；新增 `DatabaseConfig::with_snapshots`，基准固定门关闭自动快照，避免每次 checkpoint 再复制一份全量目录。
+- WAL 回收保留活动段加一个 retired 段；checkpoint、快照与 WAL 目录回收都只在新检查点发布后执行。
+
+devs release 编译通过；typed group 5/5、并行分区 27/27、DQL 324/324、checkpoint 保留 2/2、WAL writer 24/24、embedded config 通过、storage lib 全量通过。两轮固定门均为 `actual=10`、`actual_partitions=10`：`group_by_count` 中位数 93.45 / 105.87 ms，`distinct_limit` 123.80 / 146.83 ms。微扫描算子仍在 1.2–2.6 ms 量级，全部 `spill_rows=0`。
+
+库体积从回收前的约 900 MB 降到 33.5 MB；目录收敛为 2 个 checkpoint、0 个快照、2 个 WAL 文件，达到 50 MB 目标。回收前后查询结果逐值一致，EXPLAIN 并行标记有效。
+
+日志、JSON、EXPLAIN 与资源表已回填 `perf-data/parity/results/2026-11-18/next-stage-remaining-final/`，远端结果仍为 `/data/kkkqkx/linkrs/next-stage-results/`。
+
+## 27. 精确局部 TopK 合并与回测
+
+按剩余任务设计完成第 3 项的算子级合并：分区内的 Distinct + TopN 替换为单一 `LocalTopKDistinct`。单列定长键直接维护 k 个最优键；遇到 NULL、非定长键或带 selection/multiplicity 的输入时精确退化为全量去重集合，仍由 Exchange 之上的全局 Distinct/TopN 决定最终顺序。新增重复键、并列、k 大于局部行数及退化路径单测。
+
+devs release 编译通过；local topk 4/4、typed group 5/5、并行分区 27/27、DQL 324/324、checkpoint 保留 2/2、WAL writer 24/24、embedded config 通过、storage lib 全量通过。两轮固定门均 `actual=10`：
+
+- `distinct_limit`：中位数 87.83 / 84.26 ms，相对首轮 114 / 107 ms 再次下降；
+- `group_by_count`：中位数 95.38 / 92.39 ms；
+
+两轮结果稳定，整数逐值相等，`spill_rows=0`。库体积保持约 33.7 MB，目录为 2 个 checkpoint、0 个快照、2 个 WAL 文件。微扫描算子与查询结果不变。
+
+日志、两轮 JSON、EXPLAIN 与资源表回填 `perf-data/parity/results/2026-11-18/next-stage-localtopk-final/`。分区/聚合进一步融合与微扫描下推仍按设计文档的精确性门槛执行，未在当前数据中开放。

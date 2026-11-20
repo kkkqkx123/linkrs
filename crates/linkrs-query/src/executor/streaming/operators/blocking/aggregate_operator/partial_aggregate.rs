@@ -54,12 +54,10 @@ pub(crate) fn next_partial_aggregate(
         if let Some(rt) = ctx.runtime.as_ref() {
             rt.ensure_not_cancelled()?;
         }
-        // Expand symbolic multiplicity so each logical row accumulates once.
-        // A typed-only chunk is consumed directly by the shared fixed-width
-        // group-count state; anything narrower than that transfers its counts
-        // to the generic map before this chunk takes the row loop. Mixing the
-        // two states for one chunk would double-count.
-        let _ = chunk.expand_multiplicity_in_place();
+        // The typed group-count state consumes symbolic multiplicity as a
+        // weight, so no row duplication is needed for the narrow shape. Only
+        // the generic row loop expands it at the opaque boundary.
+        let multiplicity = chunk.multiplicity();
         let typed_consumed = chunk.rows.is_empty()
             && chunk.typed_columns.is_some()
             && try_accumulate(
@@ -71,10 +69,12 @@ pub(crate) fn next_partial_aggregate(
                 group_by_expressions,
                 aggregate_functions,
                 &mut chunk,
+                multiplicity,
             );
         if typed_consumed {
             continue;
         }
+        let _ = chunk.expand_multiplicity_in_place();
         deopt(&mut state.typed_group_count, &mut state.group_map);
         chunk.materialize_typed_rows();
         if col_names.is_empty() {

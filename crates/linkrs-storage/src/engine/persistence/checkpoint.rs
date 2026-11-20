@@ -509,6 +509,13 @@ impl crate::engine::persistence_coordinator::PersistenceCoordinator {
         };
         *self.last_checkpoint_stats.write() = Some(stats.clone());
 
+        // Retention runs only after the new checkpoint and its manifest are
+        // durable. Failure to reclaim space is logged instead of failing an
+        // otherwise complete checkpoint.
+        if let Err(error) = self.cleanup_old_checkpoints(self.config.checkpoint_retention_count) {
+            log::warn!("Checkpoint retention failed: {error}");
+        }
+
         log::info!(
             "Checkpoint {} completed in {:?}",
             checkpoint.seq,

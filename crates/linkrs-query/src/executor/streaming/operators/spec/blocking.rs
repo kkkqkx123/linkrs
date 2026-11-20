@@ -38,6 +38,11 @@ pub enum BlockingSpec {
         sort_directions: Vec<SortDirection>,
     },
     Distinct,
+    LocalTopKDistinct {
+        key_name: String,
+        limit: u32,
+        direction: SortDirection,
+    },
     Materialize,
     DataCollect,
     RollUpApply {

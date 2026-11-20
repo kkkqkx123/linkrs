@@ -181,6 +181,17 @@ impl SnapshotManager {
         Ok(manager)
     }
 
+    /// Create a snapshot manager with an explicit retention policy.
+    pub fn with_retention_policy<P: AsRef<Path>>(
+        snapshots_dir: P,
+        work_dir: P,
+        retention_policy: RetentionPolicy,
+    ) -> StorageResult<Self> {
+        let mut manager = Self::new(snapshots_dir, work_dir)?;
+        manager.retention_policy = retention_policy;
+        Ok(manager)
+    }
+
     /// Initialize snapshot manager
     fn init(&mut self) -> StorageResult<()> {
         self.cleanup_deleting_directories()?;
@@ -727,6 +738,21 @@ mod tests {
             .expect("Failed to delete snapshot");
 
         assert_eq!(manager.snapshot_count(), 0);
+    }
+
+    #[test]
+    fn with_retention_policy_applies_snapshot_limit() {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let manager = SnapshotManager::with_retention_policy(
+            temp_dir.path().join("snapshots"),
+            temp_dir.path().join("work"),
+            RetentionPolicy {
+                max_snapshots: 2,
+                ..RetentionPolicy::default()
+            },
+        )
+        .expect("snapshot manager");
+        assert_eq!(manager.retention_policy.max_snapshots, 2);
     }
 
     #[test]

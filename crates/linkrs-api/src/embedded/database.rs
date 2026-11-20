@@ -338,6 +338,7 @@ impl GraphDatabase<GraphStorage> {
             persistence_config.enable_wal = enable_wal;
             persistence_config.sync_policy = sync_policy;
             persistence_config.checkpoint_on_close = config.checkpoint_on_close;
+            persistence_config.enable_snapshots = config.enable_snapshots;
             let storage =
                 GraphStorage::open_with_persistence_config(path.to_path_buf(), persistence_config)
                     .map_err(|e| {

@@ -9,6 +9,7 @@ use linkrs_core::error::QueryError;
 pub mod aggregate;
 pub mod aggregate_operator;
 pub mod helpers;
+pub mod local_topk;
 pub mod materialize;
 pub mod materialize_operator;
 pub mod sort;
@@ -79,6 +80,13 @@ pub enum BlockingOperatorKind {
     Distinct {
         memory_tracker: MemoryTracker,
         state: Option<DistinctState>,
+    },
+    LocalTopKDistinct {
+        limit: u32,
+        direction: crate::executor::streaming::executor::SortDirection,
+        key_name: String,
+        memory_tracker: MemoryTracker,
+        state: Option<local_topk::LocalTopKDistinctState>,
     },
     Materialize {
         memory_tracker: MemoryTracker,
@@ -201,6 +209,17 @@ impl BlockingOperator {
                 memory_tracker: crate::executor::base::MemoryTracker::new(memory_budget.clone()),
                 state: None,
             },
+            super::spec::BlockingSpec::LocalTopKDistinct {
+                key_name,
+                limit,
+                direction,
+            } => BlockingOperatorKind::LocalTopKDistinct {
+                limit: *limit,
+                direction: *direction,
+                key_name: key_name.clone(),
+                memory_tracker: crate::executor::base::MemoryTracker::new(memory_budget.clone()),
+                state: None,
+            },
             super::spec::BlockingSpec::Materialize => BlockingOperatorKind::Materialize {
                 memory_tracker: crate::executor::base::MemoryTracker::new(memory_budget.clone()),
                 state: None,
@@ -275,6 +294,7 @@ impl BlockingOperator {
             | BlockingOperatorKind::Window { memory_tracker, .. }
             | BlockingOperatorKind::TopN { memory_tracker, .. }
             | BlockingOperatorKind::Distinct { memory_tracker, .. }
+            | BlockingOperatorKind::LocalTopKDistinct { memory_tracker, .. }
             | BlockingOperatorKind::Materialize { memory_tracker, .. }
             | BlockingOperatorKind::DataCollect { memory_tracker, .. }
             | BlockingOperatorKind::RollUpApply { memory_tracker, .. }
@@ -309,6 +329,19 @@ impl BlockingOperator {
             }
             BlockingOperatorKind::Distinct { state, .. } => {
                 materialize_operator::open_distinct(state);
+            }
+            BlockingOperatorKind::LocalTopKDistinct {
+                state,
+                limit,
+                direction,
+                key_name,
+                ..
+            } => {
+                *state = Some(local_topk::LocalTopKDistinctState::new(
+                    *limit,
+                    *direction,
+                    key_name.clone(),
+                ));
             }
             BlockingOperatorKind::Materialize { state, .. } => {
                 materialize_operator::open_materialize(state);
@@ -442,6 +475,11 @@ impl BlockingOperator {
                 &ctx,
                 input,
             ),
+            BlockingOperatorKind::LocalTopKDistinct {
+                memory_tracker,
+                state,
+                ..
+            } => local_topk::next(memory_tracker, state.as_mut().unwrap(), &ctx, input),
             BlockingOperatorKind::Materialize {
                 memory_tracker,
                 state,
@@ -585,6 +623,15 @@ impl BlockingOperator {
                 memory_tracker.reset();
                 Ok(())
             }
+            BlockingOperatorKind::LocalTopKDistinct {
+                state,
+                memory_tracker,
+                ..
+            } => {
+                local_topk::close(state);
+                memory_tracker.reset();
+                Ok(())
+            }
             BlockingOperatorKind::PartialAggregate {
                 state,
                 memory_tracker,
@@ -686,6 +733,7 @@ impl BlockingOperator {
                 memory_tracker,
                 ..
             } => materialize_operator::spill_distinct(state.as_mut().unwrap(), memory_tracker, sm),
+            BlockingOperatorKind::LocalTopKDistinct { .. } => Ok(()),
             BlockingOperatorKind::Materialize {
                 state,
                 memory_tracker,
@@ -776,6 +824,7 @@ impl BlockingOperator {
             BlockingOperatorKind::Window { state, .. } => sum_runs!(state),
             BlockingOperatorKind::TopN { .. } => 0,
             BlockingOperatorKind::Distinct { state, .. } => sum_runs!(state),
+            BlockingOperatorKind::LocalTopKDistinct { .. } => 0,
             BlockingOperatorKind::Materialize { .. } => 0,
             BlockingOperatorKind::DataCollect { .. } => 0,
             BlockingOperatorKind::RollUpApply { .. } => 0,
@@ -806,6 +855,7 @@ impl BlockingOperator {
             BlockingOperatorKind::Window { state, .. } => sum_rows!(state),
             BlockingOperatorKind::TopN { .. } => 0,
             BlockingOperatorKind::Distinct { state, .. } => sum_rows!(state),
+            BlockingOperatorKind::LocalTopKDistinct { .. } => 0,
             BlockingOperatorKind::Materialize { .. } => 0,
             BlockingOperatorKind::DataCollect { .. } => 0,
             BlockingOperatorKind::RollUpApply { .. } => 0,

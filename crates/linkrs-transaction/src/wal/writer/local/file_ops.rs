@@ -214,8 +214,12 @@ impl LocalWalWriter {
         Ok(())
     }
 
-    /// Remove WAL files that are older than the current checkpoint boundary.
-    pub(crate) fn reclaim_before_checkpoint(&mut self) -> WalResult<usize> {
+    /// Keep the active segment and one retired segment, then remove older
+    /// segments that the checkpoint covers. A segment is covered when it was
+    /// written before the current checkpoint sequence or starts at or below
+    /// the checkpoint's safe LSN; the latter matters for files whose header
+    /// was refreshed when a writer was reopened.
+    pub(crate) fn reclaim_before_checkpoint(&mut self, safe_lsn: Lsn) -> WalResult<usize> {
         let current_file = self.current_file_path();
         let checkpoint_seq = self.checkpoint_seq;
 
@@ -228,31 +232,45 @@ impl LocalWalWriter {
             return Ok(0);
         }
 
-        let mut deleted_count = 0;
-
+        let mut segments: Vec<(u32, std::path::PathBuf)> = Vec::new();
         for entry in std::fs::read_dir(&wal_dir)? {
             let entry = entry?;
             let path = entry.path();
-
             if current_file
                 .as_ref()
                 .is_some_and(|current| current == &path)
+                || !self.is_managed_wal_file(&path)
             {
                 continue;
             }
-
-            if !self.is_managed_wal_file(&path) {
+            let Some(version) = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .and_then(|name| name.rsplit('_').next())
+                .and_then(|version| u32::from_str_radix(version, 16).ok())
+            else {
                 continue;
-            }
+            };
+            segments.push((version, path));
+        }
+        segments.sort_unstable_by_key(|(version, _)| *version);
+        let newest_retired = segments.last().map(|(version, _)| *version);
 
+        let mut deleted_count = 0;
+        for (version, path) in segments {
             let Some(header) = self.read_file_header(&path)? else {
                 continue;
             };
-
-            if header.thread_id != self.thread_id || header.checkpoint_seq >= checkpoint_seq {
+            if header.thread_id != self.thread_id {
                 continue;
             }
-
+            let covered_by_checkpoint = header.checkpoint_seq < checkpoint_seq;
+            let covered_by_lsn = safe_lsn != Lsn::ZERO && header.start_lsn <= u64::from(safe_lsn);
+            // LSN coverage alone leaves one retired segment as the fallback
+            // copy; an older checkpoint boundary is already strict enough.
+            if !covered_by_checkpoint && (!covered_by_lsn || Some(version) == newest_retired) {
+                continue;
+            }
             self.delete_or_archive_file(&path)?;
             deleted_count += 1;
         }
@@ -284,6 +302,6 @@ impl LocalWalWriter {
             }
         }
 
-        self.reclaim_before_checkpoint()
+        self.reclaim_before_checkpoint(lsn)
     }
 }

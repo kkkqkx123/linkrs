@@ -247,10 +247,10 @@ pub(crate) fn next_aggregate(
                     if let Some(rt) = ctx.runtime.as_ref() {
                         rt.ensure_not_cancelled()?;
                     }
-                    // Opaque consumer: expand symbolic multiplicity so each logical row
-                    // accumulates once. The selection vector stays in place (consumed via
-                    // `visible_indices` below with no compaction benefit).
-                    let _ = chunk.expand_multiplicity_in_place();
+                    // Typed group count consumes multiplicity as a weight;
+                    // the generic row loop below expands it at the opaque
+                    // boundary before evaluating expressions.
+                    let multiplicity = chunk.multiplicity();
                     if state.partition_spiller.is_none()
                         && !state.has_spilled
                         && try_accumulate(
@@ -262,10 +262,12 @@ pub(crate) fn next_aggregate(
                             group_by_expressions,
                             aggregate_functions,
                             &mut chunk,
+                            multiplicity,
                         )
                     {
                         continue;
                     }
+                    let _ = chunk.expand_multiplicity_in_place();
                     deopt(&mut state.typed_group_count, &mut state.group_map);
                     // Per-chunk fast path flags: a `Count` over a bare
                     // variable backed by an identity column counts every

@@ -34,9 +34,10 @@ fn main() {
                  --script <file.cypher> --db <path> [--force]\n  \
                  linkrs-parity-bench run --db <path> --space <name> --benchmark-dir <dir> \
                  [--warmup N] [--run N] [--out <dir>] [--threads N]
-                 [--parallel-workers N] [--min-rows-per-partition N]
+                 [--parallel-workers N] [--min-rows-per-partition N] [--max-partitions N]
                  [--count-frontier on|off] [--ordered-parallel-expand on|off]
-                 [--explain-dir <dir>] [--profile-runs N] [--no-checkpoint]
+                 [--require-parallel-explain name,name] [--explain-dir <dir>]
+                 [--profile-runs N] [--no-checkpoint] [--no-snapshots]
                  [--skip-file <path>]"
             );
             std::process::exit(2);
@@ -58,6 +59,53 @@ fn parse_switch(args: &[String], flag: &str, default: bool) -> bool {
         Some("off" | "false" | "0") => false,
         Some(value) => die(format!("invalid {flag} value {value}: expected on or off")),
     }
+}
+
+/// Resource figures shared by every result of one run. They are collected
+/// once because directory size and the process RSS peak do not change per
+/// query, and a parity table needs the same resource basis for all rows.
+#[derive(Debug, Clone, Copy, Default)]
+struct ResourceSample {
+    db_size_bytes: u64,
+    rss_peak_kb: u64,
+    buffer_pool_bytes: u64,
+}
+
+fn directory_size_bytes(path: &Path) -> u64 {
+    let Ok(entries) = fs::read_dir(path) else {
+        return 0;
+    };
+    entries.filter_map(Result::ok).fold(0u64, |total, entry| {
+        let Ok(meta) = entry.metadata() else {
+            return total;
+        };
+        if meta.is_dir() {
+            total.saturating_add(directory_size_bytes(&entry.path()))
+        } else {
+            total.saturating_add(meta.len())
+        }
+    })
+}
+
+/// Read a numeric `key=value` field from the first line containing it.
+/// EXPLAIN lines carry several such fields (`actual`, `actual_partitions`,
+/// `spill_rows`); this keeps the runner independent of column alignment.
+fn explain_metric(text: &str, key: &str) -> Option<u64> {
+    text.lines().find_map(|line| {
+        line.split(',').map(str::trim).find_map(|field| {
+            field
+                .strip_prefix(key)?
+                .strip_prefix('=')?
+                .trim()
+                .parse()
+                .ok()
+        })
+    })
+}
+
+fn has_parallel_execution(text: &str) -> bool {
+    explain_metric(text, "actual").is_some_and(|n| n > 1)
+        && explain_metric(text, "actual_partitions").is_some_and(|n| n > 1)
 }
 
 // ---------------------------------------------------------------------------
@@ -666,21 +714,45 @@ fn cmd_run(args: &[String]) {
             .parse::<u64>()
             .unwrap_or_else(|e| die(format!("invalid --min-rows-per-partition {value}: {e}")))
     });
+    let max_partitions = opt_value(args, "--max-partitions")
+        .map(|value| {
+            value
+                .parse::<usize>()
+                .unwrap_or_else(|e| die(format!("invalid --max-partitions {value}: {e}")))
+        })
+        .unwrap_or(parallel_workers);
     let explain_dir = opt_value(args, "--explain-dir").map(PathBuf::from);
     let profile_runs: usize = opt_value(args, "--profile-runs")
         .and_then(|value| value.parse().ok())
         .unwrap_or(1);
     let checkpoint_on_close = !args.iter().any(|a| a == "--no-checkpoint");
+    let enable_snapshots = !args.iter().any(|a| a == "--no-snapshots");
     let count_frontier = parse_switch(args, "--count-frontier", false);
-    let ordered_parallel_expand = parse_switch(args, "--ordered-parallel-expand", false);
+    // A benchmark that requests worker parallelism must measure the parallel
+    // plan; production defaults stay serial and are unchanged here.
+    let ordered_parallel_expand =
+        parse_switch(args, "--ordered-parallel-expand", parallel_workers > 1);
+    let required_parallel: HashSet<String> = opt_value(args, "--require-parallel-explain")
+        .map(|value| {
+            value
+                .split(',')
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
     let skip_file = opt_value(args, "--skip-file");
     let skip_set = skip_file.as_deref().map(load_skip_file).unwrap_or_default();
 
-    let mut db_config = DatabaseConfig::file(&db).with_checkpoint_on_close(checkpoint_on_close);
+    let mut db_config = DatabaseConfig::file(&db)
+        .with_checkpoint_on_close(checkpoint_on_close)
+        .with_snapshots(enable_snapshots);
+    let buffer_pool_bytes = (db_config.cache_size_mb as u64).saturating_mul(1024 * 1024);
     if parallel_workers > 1 {
         let mut parallel_config = linkrs::config::ParallelConfig {
             workers: parallel_workers,
-            max_partitions: parallel_workers,
+            max_partitions,
             allow_ordered_parallel_expand: ordered_parallel_expand,
             allow_parallel_count_frontier: count_frontier,
             ..linkrs::config::ParallelConfig::default()
@@ -703,6 +775,15 @@ fn cmd_run(args: &[String]) {
     if let Some(dir) = &explain_dir {
         fs::create_dir_all(dir).unwrap_or_else(|e| die(format!("create explain dir: {e}")));
     }
+    let resources = ResourceSample {
+        db_size_bytes: directory_size_bytes(&db),
+        rss_peak_kb: rss_peak_kb().unwrap_or(0),
+        buffer_pool_bytes,
+    };
+    println!(
+        "[run] resources: db_size_bytes={} rss_peak_kb={} buffer_pool_bytes={}",
+        resources.db_size_bytes, resources.rss_peak_kb, resources.buffer_pool_bytes
+    );
 
     let files = collect_benchmark_files(&bench_dir);
     let mut explain_targets: Vec<ExplainTarget> = Vec::new();
@@ -721,7 +802,9 @@ fn cmd_run(args: &[String]) {
         let bench = parse_benchmark_file(path);
         if is_skipped(&skip_set, &bench.name) {
             println!("[run] {} skipped by skip file", bench.name);
-            write_run_result(&out_dir, &bench, None, None, None, "skipped", threads);
+            write_run_result(
+                &out_dir, &bench, None, None, None, "skipped", threads, &resources,
+            );
             continue;
         }
         let mut warmup_failed = false;
@@ -736,6 +819,7 @@ fn cmd_run(args: &[String]) {
                     None,
                     &format!("prerun error: {e}"),
                     threads,
+                    &resources,
                 );
                 warmup_failed = true;
                 break;
@@ -752,6 +836,7 @@ fn cmd_run(args: &[String]) {
                     None,
                     &format!("warmup error: {e}"),
                     threads,
+                    &resources,
                 );
                 warmup_failed = true;
                 break;
@@ -798,7 +883,7 @@ fn cmd_run(args: &[String]) {
         }
         if let Some(err) = &error {
             eprintln!("[run] {} FAILED: {err}", bench.name);
-            write_run_result(&out_dir, &bench, None, None, None, err, threads);
+            write_run_result(&out_dir, &bench, None, None, None, err, threads, &resources);
             continue;
         }
         let mut status = "ok";
@@ -843,30 +928,78 @@ fn cmd_run(args: &[String]) {
             Some(&execute_ms),
             status,
             threads,
+            &resources,
         );
     }
     // Profile after every timed query has finished: EXPLAIN ANALYZE executes
     // its target and can update feedback statistics, so keeping it in a
     // separate pass prevents it from perturbing the measured runs.
+    let mut invalid_parallel = false;
     if let Some(dir) = &explain_dir {
         for target in &explain_targets {
             let safe_name = target.name.replace(['/', '\\', ' '], "_");
+            let mut explain_text = String::new();
             for profile in 1..=profile_runs {
                 match session.execute(&format!("EXPLAIN ANALYZE {}", target.query)) {
                     Ok(result) => {
+                        let text = format_rows(&result).join("\n");
                         let path = dir.join(format!("{safe_name}_r{profile}.txt"));
-                        if let Err(error) = fs::write(path, format_rows(&result).join("\n")) {
+                        if let Err(error) = fs::write(path, &text) {
                             eprintln!("[run] {} explain write failed: {error}", target.name);
                         }
+                        explain_text = text;
                     }
                     Err(error) => eprintln!("[run] {} explain failed: {error}", target.name),
                 }
             }
+            let spill_rows = explain_metric(&explain_text, "spill_rows").unwrap_or(0);
+            let parallel_ok =
+                !required_parallel.contains(&target.name) || has_parallel_execution(&explain_text);
+            if !parallel_ok {
+                eprintln!(
+                    "[run] {} is not a parallel plan; result is invalid for this gate",
+                    target.name
+                );
+                invalid_parallel = true;
+            }
+            patch_resource_result(&out_dir, &target.name, spill_rows, parallel_ok);
         }
     }
     if let Some(kb) = rss_peak_kb() {
         println!("[run] VmHWM peak at end: {kb} kB");
     }
+    drop(session);
+    database.close();
+    if invalid_parallel {
+        std::process::exit(2);
+    }
+}
+
+/// EXPLAIN runs after the timed queries, so the resource fields it supplies
+/// are appended to each already-written result file.
+fn patch_resource_result(out_dir: &Path, bench_name: &str, spill_rows: u64, parallel_ok: bool) {
+    let path = out_dir.join(format!("{}.json", bench_name.replace('/', "_")));
+    let Ok(text) = fs::read_to_string(&path) else {
+        return;
+    };
+    let mut text = text;
+    if !parallel_ok {
+        if let Some(start) = text.find("\"status\": ") {
+            let rest = &text[start + "\"status\": ".len()..];
+            if let Some(end) = rest.find(',') {
+                text.replace_range(
+                    start + "\"status\": ".len()..start + "\"status\": ".len() + end,
+                    "\"invalid_parallel\"",
+                );
+            }
+        }
+    }
+    text = text.replacen(
+        "  \"spill_rows\": 0",
+        &format!("  \"spill_rows\": {spill_rows}"),
+        1,
+    );
+    let _ = fs::write(path, text);
 }
 
 /// Materialize every row as `value|value` lines, mirroring the Ladybug
@@ -947,6 +1080,7 @@ fn write_run_result(
     execute: Option<&[f64]>,
     status: &str,
     threads: u32,
+    resources: &ResourceSample,
 ) {
     let mut json = String::from("{\n");
     let _ = writeln!(json, "  \"name\": {},", json_escape(&bench.name));
@@ -1008,8 +1142,15 @@ fn write_run_result(
             json.push_str("  \"execute_median_ms\": 0,\n");
         }
     }
-    let _ = writeln!(json, "  \"query\": {}", json_escape(&bench.query));
-    json.push_str("}\n");
+    let _ = writeln!(json, "  \"query\": {},", json_escape(&bench.query));
+    let _ = writeln!(json, "  \"db_size_bytes\": {},", resources.db_size_bytes);
+    let _ = writeln!(json, "  \"rss_peak_kb\": {},", resources.rss_peak_kb);
+    let _ = writeln!(
+        json,
+        "  \"buffer_pool_bytes\": {},",
+        resources.buffer_pool_bytes
+    );
+    json.push_str("  \"spill_rows\": 0\n}\n");
     let path = out_dir.join(format!("{}.json", bench.name.replace('/', "_")));
     fs::write(&path, json).ok();
 }
@@ -1061,6 +1202,17 @@ mod tests {
             "nested operator benchmark must be discovered, got {} file(s)",
             files.len()
         );
+    }
+
+    #[test]
+    fn explain_metric_ignores_longer_field_names() {
+        let text = "Parallel Workers: requested=16, requested_partitions=10, \
+                    actual_partitions=10, partition_mode=rows, actual=10, \
+                    wall_time=100us, spill_rows=0";
+        assert_eq!(explain_metric(text, "actual"), Some(10));
+        assert_eq!(explain_metric(text, "actual_partitions"), Some(10));
+        assert_eq!(explain_metric(text, "spill_rows"), Some(0));
+        assert!(has_parallel_execution(text));
     }
 
     #[test]

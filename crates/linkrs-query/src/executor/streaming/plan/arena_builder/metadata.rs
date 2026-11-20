@@ -354,6 +354,7 @@ fn choice_reason_for_spec(spec: &OperatorKindSpec) -> Option<String> {
             BlockingSpec::TopN { .. } => "topn".to_string(),
             BlockingSpec::Sort { .. } => "sort".to_string(),
             BlockingSpec::Distinct => "distinct".to_string(),
+            BlockingSpec::LocalTopKDistinct { .. } => "local_topk_distinct".to_string(),
             BlockingSpec::Aggregate { .. }
             | BlockingSpec::PartialAggregate { .. }
             | BlockingSpec::FinalAggregate { .. } => "aggregate".to_string(),
@@ -953,6 +954,7 @@ pub(super) fn blocking_explain_name(spec: &BlockingSpec) -> &'static str {
         BlockingSpec::Window { .. } => "Window",
         BlockingSpec::TopN { .. } => "TopN",
         BlockingSpec::Distinct => "Distinct",
+        BlockingSpec::LocalTopKDistinct { .. } => "LocalTopKDistinct",
         BlockingSpec::Materialize => "Materialize",
         BlockingSpec::DataCollect => "DataCollect",
         BlockingSpec::RollUpApply { .. } => "RollUpApply",

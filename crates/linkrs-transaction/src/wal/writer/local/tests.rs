@@ -173,6 +173,46 @@ fn test_set_checkpoint_seq_updates_open_file_header() {
 }
 
 #[test]
+fn test_truncate_keeps_one_retired_segment_when_headers_share_checkpoint_seq() {
+    use std::io::Write;
+
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let wal_path = temp_dir.path().to_string_lossy().to_string();
+
+    let mut writer = LocalWalWriter::new(&wal_path, 0);
+    writer.open().expect("Failed to open WAL");
+    writer
+        .append_entry(WalOpType::InsertVertex, 1, b"payload-filling-wal-segment")
+        .expect("Failed to append entry");
+
+    let retired: Vec<_> = (0x10..0x13)
+        .map(|version| {
+            let path = writer.get_wal_file_path(version);
+            let header = WalFileHeader::new(0, 1, Lsn::ZERO);
+            let mut file = std::fs::File::create(&path).expect("Failed to create retired WAL");
+            file.write_all(&header.as_bytes())
+                .expect("Failed to write WAL header");
+            path
+        })
+        .collect();
+
+    let current_lsn = writer.current_lsn();
+    writer
+        .set_checkpoint_seq(1)
+        .expect("Failed to update checkpoint seq");
+    let deleted = writer
+        .truncate(current_lsn)
+        .expect("Failed to reclaim WAL files");
+
+    assert_eq!(deleted, 2);
+    assert!(!retired[0].exists());
+    assert!(!retired[1].exists());
+    assert!(retired[2].exists());
+    assert!(writer.file_path.as_ref().expect("active path").exists());
+    writer.close();
+}
+
+#[test]
 fn test_truncate_reclaims_old_wal_files() {
     use std::io::Write;
 

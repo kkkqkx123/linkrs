@@ -129,6 +129,7 @@ pub(crate) fn try_accumulate(
     group_by_expressions: &[Expression],
     aggregate_functions: &[(AggregateFunction, Vec<Expression>)],
     chunk: &mut DataChunk,
+    multiplicity: u64,
 ) -> bool {
     if has_filters || !group_map.is_empty() || group_by_expressions.len() != 1 {
         return false;
@@ -145,7 +146,7 @@ pub(crate) fn try_accumulate(
         return false;
     }
     let len = chunk.eval_len();
-    if len == 0 {
+    if len == 0 || multiplicity == 0 {
         return false;
     }
 
@@ -216,7 +217,7 @@ pub(crate) fn try_accumulate(
             *fast
                 .counts
                 .get_mut(&key)
-                .expect("key was inserted in the preflight pass") += 1;
+                .expect("key was inserted in the preflight pass") += multiplicity;
         }
     }
     true
@@ -281,6 +282,7 @@ mod tests {
             &group("k"),
             &count("c"),
             chunk,
+            1,
         )
     }
 
@@ -376,6 +378,34 @@ mod tests {
             stored_count(group_map.get(&vec![Value::BigInt(7)])),
             Some(2)
         );
+    }
+
+    #[test]
+    fn symbolic_multiplicity_weights_each_key() {
+        let mut typed = None;
+        let group_map = HashMap::new();
+        let mut tracker = MemoryTracker::new(MemoryBudget::new(1024 * 1024));
+        let mut chunk = typed_chunk(
+            vec![TypedColumn::I64(vec![1, 2]), TypedColumn::I64(vec![1, 1])],
+            &["k", "c"],
+        )
+        .with_multiplicity(3);
+
+        assert!(try_accumulate(
+            &mut typed,
+            &group_map,
+            &mut tracker,
+            ACCUMULATOR_OVERHEAD_BYTES,
+            false,
+            &group("k"),
+            &count("c"),
+            &mut chunk,
+            3,
+        ));
+        assert_eq!(chunk.multiplicity(), 3);
+        let fast = typed.expect("typed state");
+        assert_eq!(fast.counts.get(&TypedGroupKey::I64(1)), Some(&3));
+        assert_eq!(fast.counts.get(&TypedGroupKey::I64(2)), Some(&3));
     }
 
     #[test]

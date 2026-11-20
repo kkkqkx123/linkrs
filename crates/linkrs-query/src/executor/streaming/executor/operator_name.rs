@@ -86,6 +86,7 @@ pub fn operator_name(exec: &StreamingExecutor) -> &'static str {
             BlockingOperatorKind::Window { .. } => "Window",
             BlockingOperatorKind::TopN { .. } => "TopN",
             BlockingOperatorKind::Distinct { .. } => "Distinct",
+            BlockingOperatorKind::LocalTopKDistinct { .. } => "LocalTopKDistinct",
             BlockingOperatorKind::Materialize { .. } => "Materialize",
             BlockingOperatorKind::DataCollect { .. } => "DataCollect",
             BlockingOperatorKind::RollUpApply { .. } => "RollUpApply",

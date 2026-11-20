@@ -6,7 +6,8 @@ use super::super::super::types::{
 use super::super::assembler::{ArenaFragmentAllocator, ArenaPlanAssembler, FragmentCtx};
 use super::super::specs::{
     build_expand_all_spec_with_flags, build_filter_spec, build_flatten_spec, build_project_spec,
-    build_source_spec, count_only_expand_below, is_count_only_aggregate, COUNT_ONLY_COLUMN,
+    build_source_spec, build_topn_spec, count_only_expand_below, is_count_only_aggregate,
+    COUNT_ONLY_COLUMN,
 };
 use super::global::push_global_op;
 use crate::executor::base::ExecutionContext;
@@ -251,6 +252,23 @@ pub(super) fn build_partition_local_fragments(
                 _ => unreachable!("local chain holds filter/project/expand/flatten operators only"),
             }
         }
+        // DISTINCT keyed by one column followed by TopN on that same key is
+        // monotone across partitions: the global top k can only draw from the
+        // per-partition top k. Truncating here keeps the global operators in
+        // place for correctness and shrinks the exchange payload.
+        if let Some((dedup, local_spec)) = local_distinct_topn(chain) {
+            ArenaPlanAssembler::push_blocking_op(
+                &mut FragmentCtx {
+                    operators,
+                    fragments,
+                    op_alloc,
+                },
+                fid,
+                dedup.id(),
+                local_spec,
+                PhysicalProperties::single_blocking_with_budget(),
+            )?;
+        }
         if let Some(agg) = chain.aggregate_split {
             let (partial, _) = split_aggregate(agg);
             ArenaPlanAssembler::push_blocking_op(
@@ -269,6 +287,55 @@ pub(super) fn build_partition_local_fragments(
     }
     Ok(partition_fids)
 }
+/// Narrow shape where Distinct and its following TopN can be truncated per
+/// partition without changing the final answer.
+fn local_distinct_topn<'a>(
+    chain: &'a PartitionedChain<'a>,
+) -> Option<(
+    &'a crate::planning::plan::core::nodes::graph_operations::DedupNode,
+    BlockingSpec,
+)> {
+    let dedup = match chain.global.first()? {
+        PlanNodeEnum::Dedup(dedup) if dedup.col_names().len() == 1 => dedup,
+        _ => return None,
+    };
+    let topn = match chain.global.get(1)? {
+        PlanNodeEnum::TopN(topn) => topn,
+        _ => return None,
+    };
+    let spec = build_topn_spec(topn).ok()?;
+    let BlockingSpec::TopN {
+        n,
+        sort_expressions,
+        sort_directions,
+    } = &spec
+    else {
+        return None;
+    };
+    let key_column = match (sort_expressions.as_slice(), n) {
+        ([Expression::Variable(name)], n) if *n > 0 => name.clone(),
+        ([Expression::Property { object, property }], n) if *n > 0 => {
+            let Expression::Variable(object) = object.as_ref() else {
+                return None;
+            };
+            format!("{object}.{property}")
+        }
+        _ => return None,
+    };
+    let direction = match sort_directions.as_slice() {
+        [direction] => *direction,
+        _ => return None,
+    };
+    (key_column == dedup.col_names()[0]).then_some((
+        dedup,
+        BlockingSpec::LocalTopKDistinct {
+            key_name: key_column,
+            limit: *n,
+            direction,
+        },
+    ))
+}
+
 /// Decompose the logical root into a partitionable chain, or return `None`
 /// when the tree is not a linear chain ending in a vertex scan.
 pub(super) fn decompose(node: &PlanNodeEnum) -> Option<PartitionedChain<'_>> {
