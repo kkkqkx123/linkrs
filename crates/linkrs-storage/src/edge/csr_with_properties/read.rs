@@ -313,9 +313,9 @@ impl CsrWithProperties {
     /// Whether one edge matches every pushed predicate at `query_ts`.
     ///
     /// Column-scan layer: only predicate columns are read, each through its
-    /// null bitmap, and no intermediate record is materialized. A missing
-    /// column, a missing row mapping or a null cell never matches, mirroring
-    /// the query NULL semantics where comparisons against NULL are false.
+    /// null bitmap, and no intermediate record is materialized. Missing or
+    /// null cells follow the predicate's NULL verdict, so upper-only ranges
+    /// keep the rows that expression evaluation would select.
     pub fn matches_predicates_for_edge(
         &self,
         edge_id: EdgeId,
@@ -325,34 +325,29 @@ impl CsrWithProperties {
         if predicates.is_empty() {
             return true;
         }
-        let Some(resolved) = self.resolve_predicate_columns(predicates) else {
-            return false;
-        };
+        let resolved = self.resolve_predicate_columns(predicates);
         let Some(row) = self.mapped_row(edge_id) else {
             return false;
         };
         resolved.iter().all(|(column, predicate)| {
-            self.pushdown_cell(row, *column, query_ts)
-                .is_some_and(|value| predicate.matches_value(&value))
+            column
+                .and_then(|index| self.pushdown_cell(row, index, query_ts))
+                .map_or_else(|| predicate.matches_null(), |value| predicate.matches_value(&value))
         })
     }
 
     /// Resolve predicate columns to positions once.
     ///
     /// Shared by the single-edge and batch matchers so a multi-edge filter
-    /// pays one schema lookup per predicate instead of one per edge.
-    /// `None` when any predicate references a missing column: the
-    /// conjunction can never match, and callers report no hit.
+    /// pays one schema lookup per predicate instead of one per edge. A
+    /// missing column is kept as `None` and treated like a NULL cell below.
     fn resolve_predicate_columns<'a>(
         &self,
         predicates: &'a [ScanPredicate],
-    ) -> Option<Vec<(usize, &'a ScanPredicate)>> {
+    ) -> Vec<(Option<usize>, &'a ScanPredicate)> {
         predicates
             .iter()
-            .map(|predicate| {
-                self.column_index(predicate.column())
-                    .map(|col| (col, predicate))
-            })
+            .map(|predicate| (self.column_index(predicate.column()), predicate))
             .collect()
     }
 
@@ -422,9 +417,7 @@ impl CsrWithProperties {
         if predicates.is_empty() {
             return candidates.map_or_else(|| self.edge_ids().collect(), <[EdgeId]>::to_vec);
         }
-        let Some(resolved) = self.resolve_predicate_columns(predicates) else {
-            return Vec::new();
-        };
+        let resolved = self.resolve_predicate_columns(predicates);
         // Zone-map short-circuit: every merged range must overlap its
         // column bounds, else no row can match. Bounds only widen and row
         // matching uses the same ordering, so a disjoint range provably
@@ -439,16 +432,14 @@ impl CsrWithProperties {
                 }
             }
         }
-        // Per-chunk liveness from the same merged ranges: every predicate
-        // column resolves here (resolution above already proved all
-        // predicate columns exist), so a missing entry is unreachable and
-        // fails closed to no match.
+        // Per-chunk liveness from the same merged ranges. A missing column
+        // contributes no bounds and stays live; its rows are decided by the
+        // per-predicate NULL verdict below.
         let mut ranges = Vec::with_capacity(merged.len());
         for range in merged {
-            let Some(col) = self.column_index(&range.column) else {
-                return Vec::new();
-            };
-            ranges.push((col, range));
+            if let Some(col) = self.column_index(&range.column) {
+                ranges.push((col, range));
+            }
         }
         let live = self.live_row_chunks(&ranges);
         match candidates {
@@ -463,8 +454,12 @@ impl CsrWithProperties {
                         return false;
                     }
                     resolved.iter().all(|(column, predicate)| {
-                        self.pushdown_cell(row, *column, query_ts)
-                            .is_some_and(|value| predicate.matches_value(&value))
+                        column
+                            .and_then(|index| self.pushdown_cell(row, index, query_ts))
+                            .map_or_else(
+                                || predicate.matches_null(),
+                                |value| predicate.matches_value(&value),
+                            )
                     })
                 })
                 .collect(),
@@ -478,8 +473,12 @@ impl CsrWithProperties {
                     resolved
                         .iter()
                         .all(|(column, predicate)| {
-                            self.pushdown_cell(row, *column, query_ts)
-                                .is_some_and(|value| predicate.matches_value(&value))
+                            column
+                                .and_then(|index| self.pushdown_cell(row, index, query_ts))
+                                .map_or_else(
+                                    || predicate.matches_null(),
+                                    |value| predicate.matches_value(&value),
+                                )
                         })
                         .then_some(edge_id)
                 })

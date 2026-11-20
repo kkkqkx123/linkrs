@@ -27,6 +27,87 @@ use super::typed_group_count::{deopt, try_accumulate, ACCUMULATOR_OVERHEAD_BYTES
 
 type BatchEvalResult = Option<(Vec<Vec<Value>>, Vec<Vec<Value>>)>;
 
+/// Count rows accepted by each global `count` aggregate's `FILTER` in one
+/// batch.
+///
+/// Both the filter verdicts and any non-unit count arguments are evaluated
+/// column-wise; the row loop only observes booleans and null-ness. `None`
+/// hands the whole chunk back to the generic path for shapes that cannot be
+/// decided here: non-count functions, unsupported expressions, or rowless
+/// chunks.
+fn filtered_count_masks(
+    chunk: &mut DataChunk,
+    aggregate_functions: &[(AggregateFunction, Vec<Expression>)],
+    aggregate_filters: &[Option<Expression>],
+    count_units: &[bool],
+) -> Option<Vec<u64>> {
+    if chunk.rows.is_empty() {
+        return None;
+    }
+    let mut expressions: Vec<Expression> = aggregate_filters.iter().flatten().cloned().collect();
+    if expressions.is_empty() {
+        return None;
+    }
+    let mut arg_columns = vec![None; aggregate_functions.len()];
+    for (index, (func, args)) in aggregate_functions.iter().enumerate() {
+        if !matches!(func, AggregateFunction::Count) {
+            return None;
+        }
+        if count_units[index] || args.is_empty() || count_star_arg(args) {
+            continue;
+        }
+        let arg = args.first()?.clone();
+        arg_columns[index] = Some(expressions.len());
+        expressions.push(arg);
+    }
+
+    let visible_len = chunk.visible_indices().len();
+    let columns = if chunk.selection.is_none() {
+        match chunk.try_evaluate_expressions_typed(&expressions, None) {
+            Ok(Some(columns)) => columns,
+            _ => {
+                let mut columns = Vec::with_capacity(expressions.len());
+                for expression in &expressions {
+                    columns.push(chunk.evaluate_expression(expression, None).ok()?);
+                }
+                columns
+            }
+        }
+    } else {
+        let mut columns = Vec::with_capacity(expressions.len());
+        for expression in &expressions {
+            columns.push(chunk.evaluate_expression_visible(expression, None).ok()?);
+        }
+        columns
+    };
+    if columns.iter().any(|column| column.len() != visible_len) {
+        return None;
+    }
+
+    let mut counts = Vec::with_capacity(aggregate_functions.len());
+    let mut next_filter = 0;
+    for (index, filter) in aggregate_filters.iter().enumerate() {
+        let verdicts = filter.as_ref().map(|_| {
+            let column = &columns[next_filter];
+            next_filter += 1;
+            column
+        });
+        let arg_column = arg_columns[index].map(|position| &columns[position]);
+        let mut count = 0u64;
+        for row in 0..visible_len {
+            if verdicts.is_some_and(|column| !matches!(&column[row], Value::Bool(true))) {
+                continue;
+            }
+            if arg_column.is_some_and(|column| matches!(&column[row], Value::Null(_))) {
+                continue;
+            }
+            count += 1;
+        }
+        counts.push(count);
+    }
+    Some(counts)
+}
+
 pub(crate) fn open_aggregate(state: &mut Option<AggregateState>, num_agg_funcs: usize) {
     *state = Some(AggregateState {
         group_map: HashMap::new(),
@@ -218,6 +299,28 @@ pub(crate) fn next_aggregate(
                             state.col_names = chunk.col_names();
                         }
                         continue;
+                    }
+                    if has_filters
+                        && !has_group_keys
+                        && state.partition_spiller.is_none()
+                        && !state.has_spilled
+                        && state.group_map.is_empty()
+                    {
+                        if let Some(counts) = filtered_count_masks(
+                            &mut chunk,
+                            aggregate_functions,
+                            aggregate_filters,
+                            &count_units,
+                        ) {
+                            for (total, count) in fast_counts.iter_mut().zip(counts) {
+                                *total += count;
+                            }
+                            fast_active = true;
+                            if state.col_names.is_empty() {
+                                state.col_names = chunk.col_names();
+                            }
+                            continue;
+                        }
                     }
                     if state.col_names.is_empty() {
                         state.col_names = chunk.col_names();

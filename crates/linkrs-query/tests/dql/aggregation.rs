@@ -553,6 +553,68 @@ fn test_filtered_count_matches_where_count_on_nonempty_input() {
 }
 
 #[test]
+fn test_filtered_count_mask_matches_where_count_with_null_keys() {
+    // NULL sorts below scalars in expression evaluation. Both the batch
+    // mask and the residual filter must keep the NULL row for comparisons
+    // that select it, and drop it for comparisons that reject it.
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("filtered_count_nulls")
+        .exec_ddl("CREATE TAG Item(id INT, score INT)")
+        .exec_dml("INSERT VERTEX Item(score) VALUES 1:(10), 2:(NULL), 3:(30)")
+        .assert_success()
+        .query("MATCH (n:Item) RETURN count(n) FILTER (WHERE n.score > 15) AS c")
+        .assert_success()
+        .assert_result_contains(vec![Value::BigInt(1)])
+        .query("MATCH (n:Item) WHERE n.score > 15 RETURN count(n) AS c")
+        .assert_success()
+        .assert_result_contains(vec![Value::BigInt(1)])
+        .query("MATCH (n:Item) RETURN count(n) FILTER (WHERE n.score = 30) AS c")
+        .assert_success()
+        .assert_result_contains(vec![Value::BigInt(1)])
+        .query("MATCH (n:Item) WHERE n.score = 30 RETURN count(n) AS c")
+        .assert_success()
+        .assert_result_contains(vec![Value::BigInt(1)])
+        .query("MATCH (n:Item) RETURN count(n) FILTER (WHERE n.score < 15) AS c")
+        .assert_success()
+        .assert_result_contains(vec![Value::BigInt(2)])
+        .query("MATCH (n:Item) WHERE n.score < 15 RETURN count(n) AS c")
+        .assert_success()
+        .assert_result_contains(vec![Value::BigInt(2)])
+        .query("MATCH (n:Item) RETURN count(n) FILTER (WHERE 15 > n.score) AS c")
+        .assert_success()
+        .assert_result_contains(vec![Value::BigInt(2)])
+        .query("MATCH (n:Item) WHERE 15 > n.score RETURN count(n) AS c")
+        .assert_success()
+        .assert_result_contains(vec![Value::BigInt(2)])
+        .query("MATCH (n:Item) RETURN count(n) FILTER (WHERE n.score <= 10) AS c")
+        .assert_success()
+        .assert_result_contains(vec![Value::BigInt(2)])
+        .query("MATCH (n:Item) WHERE n.score <= 10 RETURN count(n) AS c")
+        .assert_success()
+        .assert_result_contains(vec![Value::BigInt(2)]);
+}
+
+#[test]
+fn test_filtered_count_mixed_aggregates_and_expression_fallback() {
+    // An expression outside the typed batch set keeps the generic row path;
+    // the unfiltered aggregate beside it must still count every row.
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("filtered_count_mixed")
+        .exec_ddl("CREATE TAG Item(id INT, score INT)")
+        .exec_dml("INSERT VERTEX Item(score) VALUES 1:(10), 2:(20), 3:(35)")
+        .assert_success()
+        .query(
+            "MATCH (n:Item) RETURN count(n) FILTER (WHERE abs(n.score) > 15) AS c, \
+             count(n) AS total",
+        )
+        .assert_success()
+        .assert_result_count(1)
+        .assert_result_contains(vec![Value::BigInt(2), Value::BigInt(3)]);
+}
+
+#[test]
 fn test_typed_group_count_numeric_keys() {
     // The numeric group key takes the typed path; the assertion locks the
     // exact group/count pairs against the generic aggregation path.

@@ -333,6 +333,12 @@ impl EdgeStore {
         if !self.is_index_usable() {
             return None;
         }
+        // The ordered index cannot enumerate NULL cells together with a
+        // scalar range; upper-only ranges also match NULL, so use the
+        // segment path that evaluates the predicate on decoded cells.
+        if predicates.iter().any(|predicate| predicate.matches_null()) {
+            return None;
+        }
         let codec = linkrs_core::value::ordered_codec::OrderedCodec::new();
         let mut merged: Option<HashSet<EdgeId>> = None;
         for predicate in predicates {

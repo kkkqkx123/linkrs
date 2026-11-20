@@ -390,3 +390,39 @@ devs 上 release 编译通过；`expand_pushdown` 单测 22/22、DQL 322/322、s
 修复移除该可变路由缓存，路由直接由不可变的 group bits 与 group map 推导；同时删除对应的阈值项与缓存并发测试。`EXPLAIN ANALYZE` 保留 `partition_count_check`，benchmark 在每次计时后校验结果值稳定性，脚本遇到 `result_stable=false` 即失败。配置开关仍默认关闭，元数据计数因缺少 shard-local 存储证明保持不生效。
 
 devs 上 release 编译通过；partitioning 47/47、streaming 419/419、DQL 322/322、`parallel_partition_execution` 27/27。冻结 golden DB、`threads=1`、每例 8 轮的同二进制 A/B 中，所有 case 的 `join_two_hop` / `variable_path_count` 均稳定返回 382018 / 400153，未再出现 `result_stable=false`。8 worker 下前沿中位数约 5.84 / 5.67 ms，对应关闭时约 5.80 / 6.16 ms；4 worker 下约 5.75 / 5.81 ms，对应关闭时约 5.69 / 6.05 ms；2 worker 因额外启动开销约 7.20 / 7.10 ms，仍不建议。默认保持关闭；若要启用，建议 `max_partitions` 不超过 8，并保留同轮结果稳定性检查。日志、EXPLAIN 样本与 JSON 落在 `perf-data/parity/results/2026-11-18/count-frontier/`，远端在 `/data/kkkqkx/linkrs/count-frontier-results/`、`/data/kkkqkx/linkrs/count-frontier-ab/` 与 `/data/kkkqkx/linkrs/count-frontier-{gate,matrix}-v9.log`。
+
+## 22. 过滤聚合向量化与谓词下推边界回填（2026-11-20）
+
+按修改方案的阶段三执行。聚合算子为全局 `count` 的逐聚合 `FILTER` 增加批内掩码路径：一次批量求值过滤谓词和必要的计数参数，只遍历布尔结果与 NULL 性累加，不再为每个输入行构造 `ValueRowContext` 与逐聚合裁决。任一聚合不是 `Count`、表达式不在批量求值集合内、或输入为 rowless 时，整批交回通用行路径。分组键、去重计数、并行局部聚合和 spill 路径均未改动。
+
+新增两个 DQL 门：NULL 分组列上的 `FILTER` 与 `WHERE` 在 `>`、`=` 上逐值相等；带函数谓词的过滤计数与同批未过滤计数结果一致。同时新增两条 LSQB 算子基准，`filter_count_pushed` 使用可下推范围谓词，`filter_count_unpushed` 追加一个不可下推的 `<>` 合取，作为快慢路径对照与后续扫描谓词工作的基线。
+
+完整谓词替换的尝试已撤回并保留原计划形状：identity/flat 投影扫描、TTL 表和跨数值类型谓词上，扫描侧谓词与上层 `Filter` 并不等价，删除残余 `Filter` 会造成 14→20、TTL 1→0 等数值回归。缩小 `<`/`<=` 下推白名单的尝试也已撤回：它改变了扫描算子的实际行数与反馈样本，`feedback_does_not_learn_partition_bias_from_range_slices` 会从并行退回串行。NULL 语义差异改由存储侧修复，见第 23 节；`filter_id_range` 等形状继续保留扫描谓词 + 残余 `Filter` 的双层结构。
+
+devs 上 release 编译通过（BUILD_EXIT=0）；`scan_predicate` 9/9、下推规则 2/2、DQL 324/324、streaming lib 419/419、`parallel_partition_execution` 27/27。固定门沿用 LSQB 根目录、`--parallel-workers 16`、绑核 `16-31`、warmup 1 + run 5，两轮；跳过文件只保留方言专用的 `shortest_path`，使 `aggregate_filtered_count` 也进入本地测量。每格为单轮中位数 ms：
+
+| 用例 | 上一轮同口径 | 本轮两轮 | 变化与判定 |
+|---|---:|---:|---|
+| `aggregate_filtered_count` | 2.67 / 2.98（问题清单历史基线） | 1.23 / 1.24 | 约 2.2–2.4×，批内掩码生效 |
+| `filter_id_range` | 1.85（阶段十一） | 1.65 / 1.65 | 噪声内改善，计划标记未变 |
+| `filter_or` | 1.69（阶段十一） | 1.49 / 1.50 | 不可下推形状保持残差过滤 |
+| `filter_count_pushed` / `filter_count_unpushed` | 新增 | 1.67 / 1.65 与 1.67 / 1.66 | 当前下推形状无差异，作为后续 A/B 基线 |
+| 九条纯计数 | 0.14–0.61 | 0.140–0.581 | 无回归 |
+
+`EXPLAIN ANALYZE` 中 `aggregate_filtered_count` 的 `Aggregate` 自身从约 2457 µs 降至约 959 µs，`Project` 与扫描耗时不变；`filter_id_range` 仍显示扫描谓词 `est_rows:1` 与上层 `Filter`，`filter_or` 仍显示 `selection_attached=1` / `selection_pushed=1`，数值分别稳定为 1700 与 1603。结论：过滤计数的向量化目标已闭环；扫描谓词完整替换仍不放行，`<`/`<=` 的 NULL 语义修复见第 23 节。
+
+原始构建日志、测试日志、两轮 JSON、EXPLAIN 与 runner 输出落在 `perf-data/parity/results/2026-11-18/filter-aggregate-final/`，远端同名目录在 `/data/kkkqkx/linkrs/filter-aggregate-results/`，总控日志为 `/data/kkkqkx/linkrs/filter-aggregate-gate.log`，编译日志为 `/data/kkkqkx/linkrs/filter-aggregate-build.log`。
+
+## 23. 扫描谓词 NULL 语义修复回填（2026-11-20）
+
+分析与方案见 `docs/plan/scan-predicate-null-semantics-plan.md`。问题根因不是优化器写法，而是 `ScanPredicate` 与 evaluator 对 NULL 的排序语义不同：NULL 排在标量之前，`<`、`<=` 以及 `literal > property`、`literal >= property` 在 evaluator 下选中 NULL，而存储谓词一律拒绝 NULL。上界区间归一化后就是 `<` / `<=`，因此修复集中在存储侧谓词语义，而非收紧查询层白名单。
+
+改动落点：`ScanPredicate` 新增统一 NULL 判定，上界区间匹配 NULL 与缺失属性；`matches`、`matches_column`、`matches_value` 共用该判定；`PredicateRange::overlaps` 对上界区间不再按非 NULL zone 边界剪枝；列式边过滤把缺失列与 NULL 单元交给同一判定，索引候选路径遇到上界区间退回段扫描。查询层下推规则、`Filter`、并行反馈与分区配置均未改，因此物理行数和计划形状保持稳定。
+
+只做“逻辑统计 / 物理过滤”拆分的替代方案已实测撤回：停止物理下推会改变扫描算子实际行数，范围反馈用例再次退回串行。保留物理下推并修正其 NULL 语义才能同时满足正确性与分区门控。
+
+devs 上 release 编译通过；存储谓词单测 3/3、storage lib 1406/1406、`scan_predicate` 9/9、下推规则 2/2、DQL 324/324、streaming lib 419/419、`parallel_partition_execution` 27/27。DQL 门扩展到 `<`、`<=`、`15 > n.score` 四种 NULL 选中形状，`FILTER` 与 `WHERE` 计数逐值相等；NULL 在 `>`、`=` 上继续被两边同时拒绝。
+
+固定门沿用第 22 节口径，两轮中位数 ms：`aggregate_filtered_count` 1.18 / 1.18，`filter_id_range` 1.64 / 1.62，`filter_or` 1.50 / 1.49，`filter_count_pushed` 1.67 / 1.64，`filter_count_unpushed` 1.72 / 1.66，九条纯计数 0.140–0.583。数值与计划标记不变，过滤计数收益保持在约 2.3×；完整谓词替换仍关闭，解禁条件写入方案文档。
+
+本轮日志、JSON、EXPLAIN 与新增存储测试日志覆盖 `perf-data/parity/results/2026-11-18/filter-aggregate-final/`，远端同名目录在 `/data/kkkqkx/linkrs/filter-aggregate-results/`。

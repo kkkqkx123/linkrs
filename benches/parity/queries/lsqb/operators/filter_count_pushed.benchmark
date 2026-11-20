@@ -1,0 +1,6 @@
+----name
+lsqb/operators/filter_count_pushed
+----query
+MATCH (n:Person) WHERE n.id > 0 RETURN count(n)
+----expected
+1700

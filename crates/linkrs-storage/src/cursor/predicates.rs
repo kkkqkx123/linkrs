@@ -18,12 +18,10 @@ pub enum IndexPredicate {
 /// A single-column comparison predicate pushed from the query layer into a
 /// physical scan.
 ///
-/// This is the whitelist of filter conjuncts the planner can push into the
-/// storage layer.  A list of predicates forms a conjunction (every predicate
-/// must match).  Rows with a missing property never match, mirroring the
-/// query engine's NULL semantics where comparisons against NULL are false.
-/// The original filter expression still runs on top of the scan, so the
-/// pushdown is a pure pre-filter and can never change results.
+/// A list of predicates forms a conjunction (every predicate must match).
+/// NULL rows follow the query engine's ordering: NULL sorts below every
+/// scalar, so an upper-only interval also matches NULL. The original filter
+/// expression still runs on top of the scan.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ScanPredicate {
     /// `column = value`
@@ -52,7 +50,7 @@ impl ScanPredicate {
             .find(|(name, _)| name.as_ref() == self.column())
             .map(|(_, v)| v)
         else {
-            return false;
+            return self.matches_null();
         };
         match self {
             ScanPredicate::ColumnEqual {
@@ -90,6 +88,22 @@ impl ScanPredicate {
                 true
             }
         }
+    }
+
+    /// Whether a NULL property satisfies this predicate.
+    ///
+    /// An upper-only range is the normalized form of `<` and `<=`. NULL
+    /// sorts below every scalar literal, so those comparisons select NULL;
+    /// equality and lower-bounded ranges reject it.
+    pub fn matches_null(&self) -> bool {
+        matches!(
+            self,
+            ScanPredicate::ColumnRange {
+                lower: None,
+                upper: Some(_),
+                ..
+            }
+        )
     }
 
     /// The property column this predicate compares.
@@ -199,6 +213,11 @@ impl PredicateRange {
     /// matching this range. Conservative: returns `true` unless the chunk
     /// provably lies entirely outside.
     pub fn overlaps(&self, min: &linkrs_core::Value, max: &linkrs_core::Value) -> bool {
+        // An upper-only interval also matches NULL rows, which the non-null
+        // zone bounds cannot describe. Keep the chunk live for pruning.
+        if self.lower.is_none() && self.upper.is_some() {
+            return true;
+        }
         if let Some(ref lower) = self.lower {
             // Chunk max must reach the query lower bound.
             let ord = compare_scalar(max, lower);
@@ -278,22 +297,23 @@ impl PredicateRange {
 
 impl ScanPredicate {
     /// Columnar variant of [`matches`](Self::matches): evaluate against one
-    /// [`ColumnValues`] at row `idx`.  A null value never matches, mirroring
-    /// the row-based NULL semantics.
+    /// [`ColumnValues`] at row `idx`. A null cell follows the same ordering
+    /// as a NULL property in the row path.
     pub fn matches_column(&self, column: &ColumnValues, idx: usize) -> bool {
-        let Some(value) = column.value_at(idx) else {
-            return false;
-        };
-        self.matches_scalar(&value)
+        match column.value_at(idx) {
+            Some(value) => self.matches_scalar(&value),
+            None => self.matches_null(),
+        }
     }
 
     /// Evaluate the predicate against a single decoded value.
     ///
     /// Column-scan pushdown entry point: the caller already selected the
-    /// predicate column, so no property-set lookup happens here. A null
-    /// value never reaches this method; callers return false for nulls to
-    /// keep bitmap null semantics.
+    /// predicate column, so no property-set lookup happens here.
     pub fn matches_value(&self, value: &linkrs_core::Value) -> bool {
+        if matches!(value, linkrs_core::Value::Null(_)) {
+            return self.matches_null();
+        }
         self.matches_scalar(value)
     }
 
@@ -374,5 +394,59 @@ fn as_f64(value: &linkrs_core::Value) -> Option<f64> {
         linkrs_core::Value::Float(v) => Some(*v as f64),
         linkrs_core::Value::Double(v) => Some(*v),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use linkrs_core::value::NullType;
+
+    fn upper_only() -> ScanPredicate {
+        ScanPredicate::ColumnRange {
+            column: "score".into(),
+            lower: None,
+            upper: Some(linkrs_core::Value::Int(15)),
+            include_lower: false,
+            include_upper: false,
+        }
+    }
+
+    #[test]
+    fn upper_only_range_selects_null_and_missing_properties() {
+        let predicate = upper_only();
+        let null = (Arc::from("score"), linkrs_core::Value::Null(NullType::Null));
+        assert!(predicate.matches(std::slice::from_ref(&null)));
+        assert!(predicate.matches(&[]));
+        assert!(predicate.matches_value(&linkrs_core::Value::Null(NullType::Null)));
+        assert!(predicate.matches_value(&linkrs_core::Value::Int(10)));
+        assert!(!predicate.matches_value(&linkrs_core::Value::Int(20)));
+    }
+
+    #[test]
+    fn equality_and_lower_bounded_ranges_reject_null() {
+        let equal = ScanPredicate::ColumnEqual {
+            column: "score".into(),
+            value: linkrs_core::Value::Int(15),
+        };
+        let lower = ScanPredicate::ColumnRange {
+            column: "score".into(),
+            lower: Some(linkrs_core::Value::Int(15)),
+            upper: None,
+            include_lower: false,
+            include_upper: false,
+        };
+        let null = linkrs_core::Value::Null(NullType::Null);
+        assert!(!equal.matches_value(&null));
+        assert!(!lower.matches_value(&null));
+    }
+
+    #[test]
+    fn upper_only_range_is_not_zone_pruned() {
+        let predicate = upper_only();
+        let range = ScanPredicate::merged_ranges(std::slice::from_ref(&predicate)).remove(0);
+        let min = linkrs_core::Value::Int(100);
+        let max = linkrs_core::Value::Int(200);
+        assert!(range.overlaps(&min, &max));
     }
 }
