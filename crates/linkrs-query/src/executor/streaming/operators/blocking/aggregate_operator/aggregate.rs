@@ -251,9 +251,8 @@ pub(crate) fn next_aggregate(
                     // the generic row loop below expands it at the opaque
                     // boundary before evaluating expressions.
                     let multiplicity = chunk.multiplicity();
-                    if state.partition_spiller.is_none()
-                        && !state.has_spilled
-                        && try_accumulate(
+                    if state.partition_spiller.is_none() && !state.has_spilled {
+                        let typed = try_accumulate(
                             &mut state.typed_group_count,
                             &state.group_map,
                             memory_tracker,
@@ -263,9 +262,18 @@ pub(crate) fn next_aggregate(
                             aggregate_functions,
                             &mut chunk,
                             multiplicity,
-                        )
-                    {
-                        continue;
+                        );
+                        if let Some(rt) = ctx.runtime.as_ref() {
+                            let stats = rt.columnar_stats();
+                            if typed {
+                                stats.record_typed_group_hit();
+                            } else {
+                                stats.record_typed_group_fallback();
+                            }
+                        }
+                        if typed {
+                            continue;
+                        }
                     }
                     let _ = chunk.expand_multiplicity_in_place();
                     deopt(&mut state.typed_group_count, &mut state.group_map);

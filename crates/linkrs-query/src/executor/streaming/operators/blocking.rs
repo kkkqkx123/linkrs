@@ -213,6 +213,7 @@ impl BlockingOperator {
                 key_name,
                 limit,
                 direction,
+                ..
             } => BlockingOperatorKind::LocalTopKDistinct {
                 limit: *limit,
                 direction: *direction,

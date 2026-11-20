@@ -49,6 +49,8 @@ pub struct DatabaseConfig {
     /// Whether each checkpoint also creates a full snapshot copy. Snapshots
     /// double checkpoint storage and are optional for read-mostly benchmarks.
     pub enable_snapshots: bool,
+    /// Maximum number of snapshot copies to retain when snapshots are enabled.
+    pub snapshot_retention_count: usize,
     /// Vector subsystem configuration.
     pub vector: VectorConfig,
     /// Query-internal parallel execution settings. Defaults keep embedded
@@ -106,6 +108,7 @@ impl DatabaseConfig {
             create_if_missing: true,
             checkpoint_on_close: false,
             enable_snapshots: true,
+            snapshot_retention_count: 10,
             vector: VectorConfig::default(),
             parallel: ParallelConfig::default(),
         }
@@ -123,6 +126,7 @@ impl DatabaseConfig {
             create_if_missing: true,
             checkpoint_on_close: false,
             enable_snapshots: true,
+            snapshot_retention_count: 10,
             vector: VectorConfig::default(),
             parallel: ParallelConfig::default(),
         }
@@ -166,6 +170,12 @@ impl DatabaseConfig {
     /// Whether checkpoints also create full snapshot copies.
     pub fn with_snapshots(mut self, enabled: bool) -> Self {
         self.enable_snapshots = enabled;
+        self
+    }
+
+    /// Maximum number of snapshot copies to retain.
+    pub fn with_snapshot_retention(mut self, count: usize) -> Self {
+        self.snapshot_retention_count = count.max(1);
         self
     }
 
@@ -240,6 +250,7 @@ mod tests {
         assert_eq!(config.default_timeout, Duration::from_secs(30));
         assert!(!config.checkpoint_on_close);
         assert!(config.enable_snapshots);
+        assert_eq!(config.snapshot_retention_count, 10);
     }
 
     #[test]

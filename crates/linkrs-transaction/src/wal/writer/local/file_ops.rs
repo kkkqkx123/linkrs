@@ -254,6 +254,7 @@ impl LocalWalWriter {
             segments.push((version, path));
         }
         segments.sort_unstable_by_key(|(version, _)| *version);
+        let keep_newest = segments.len() > 1;
         let newest_retired = segments.last().map(|(version, _)| *version);
 
         let mut deleted_count = 0;
@@ -264,11 +265,15 @@ impl LocalWalWriter {
             if header.thread_id != self.thread_id {
                 continue;
             }
+            // `set_checkpoint_seq` refreshes the active file header at every
+            // checkpoint, so a strictly older header belongs to a segment
+            // closed before that checkpoint. The safe LSN covers segments
+            // whose header was refreshed while reopening an older writer.
             let covered_by_checkpoint = header.checkpoint_seq < checkpoint_seq;
             let covered_by_lsn = safe_lsn != Lsn::ZERO && header.start_lsn <= u64::from(safe_lsn);
-            // LSN coverage alone leaves one retired segment as the fallback
-            // copy; an older checkpoint boundary is already strict enough.
-            if !covered_by_checkpoint && (!covered_by_lsn || Some(version) == newest_retired) {
+            if !(covered_by_checkpoint || covered_by_lsn)
+                || (keep_newest && Some(version) == newest_retired)
+            {
                 continue;
             }
             self.delete_or_archive_file(&path)?;

@@ -73,6 +73,67 @@ fn test_update_and_lookup_vertex_index() {
     assert_eq!(results[0], vertex_id);
 }
 
+#[test]
+fn index_cursor_honors_offset_and_limit_in_key_order() {
+    let manager = IndexDataManagerImpl::new();
+    let index = Index::new(IndexConfig {
+        id: 1,
+        name: "idx_person_name".into(),
+        space_id: 1,
+        schema_name: "person".into(),
+        fields: vec![IndexField::new("name".into(), Value::string(""), false)],
+        properties: vec!["name".into()],
+        index_type: IndexType::TagIndex,
+        is_unique: false,
+        covering: true,
+        partial_condition: None,
+    });
+    manager.register_native_index(1, &index).expect("register");
+    names().into_iter().enumerate().for_each(|(idx, name)| {
+        manager
+            .update_vertex_indexes_mvcc(
+                1,
+                &Value::Int(idx as i32 + 1),
+                "idx_person_name",
+                &[("name".into(), Value::string(name))],
+                MAX_TIMESTAMP,
+            )
+            .expect("update index");
+    });
+    let plan = IndexScanPlan {
+        space: "space".into(),
+        index_id: 1,
+        predicate: IndexPredicate::All,
+        partition: PartitionSelector::All,
+        partition_id_range: None,
+        projection: Some(vec!["name".into()]),
+        limit: Some(2),
+        offset: 1,
+        read_timestamp: MAX_TIMESTAMP,
+    };
+    let mut cursor = manager
+        .open_tag_index_cursor_full(1, &index, &plan, None, None)
+        .expect("cursor");
+    let mut values = Vec::new();
+    loop {
+        let batch = cursor.next_batch(64).expect("batch");
+        if batch.is_empty() {
+            break;
+        }
+        for row in batch {
+            let IndexRow::Covering { columns, .. } = row else {
+                panic!("expected covering row");
+            };
+            values.push(columns[0].1.clone());
+        }
+    }
+    assert_eq!(values, vec![Value::string("b"), Value::string("c")]);
+}
+
+fn names() -> [&'static str; 4] {
+    ["a", "b", "c", "d"]
+}
+
 /// Same index id in different spaces uses isolated runtimes.
 #[test]
 fn same_index_id_in_different_spaces_uses_isolated_runtimes() {

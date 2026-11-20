@@ -17,6 +17,10 @@ pub struct PersistenceConfig {
     /// Keep the newest checkpoint plus one fallback recovery point. Older
     /// checkpoint directories are removed after a successful checkpoint.
     pub checkpoint_retention_count: usize,
+    /// Maximum number of snapshot copies to keep. Independent from the
+    /// checkpoint retention policy so manual snapshots are not trimmed by
+    /// recovery-point settings.
+    pub snapshot_retention_count: usize,
     pub max_wal_size: u64,
     pub enable_snapshots: bool,
     pub snapshot_interval: Duration,
@@ -58,6 +62,7 @@ impl Default for PersistenceConfig {
             auto_checkpoint_interval: Duration::from_secs(300),
             checkpoint_threshold: 10000,
             checkpoint_retention_count: 2,
+            snapshot_retention_count: 10,
             max_wal_size: 100 * 1024 * 1024,
             enable_snapshots: true,
             snapshot_interval: Duration::from_secs(3600),

@@ -335,15 +335,14 @@ impl PartitioningPlanner {
     /// Number of partitions to cut for a relation with `rows` estimated rows.
     ///
     /// The baseline is `rows / min_rows_per_partition` (one partition per
-    /// threshold bucket), but the result is additionally bounded by the
-    /// available worker threads (`max_workers`) so we never cut more
-    /// partitions than can run concurrently, and by the economic worker
-    /// bound so each partition carries at least two threshold buckets.
-    /// The two-bucket floor mirrors the `2 * min_rows` admission gate every
-    /// decide path shares: one bucket per partition leaves no margin for
-    /// exchange overhead, which is where throughput plateaus past four
-    /// workers. Small relations are rejected earlier via that same gate;
-    /// a zero-size relation here clamps to the minimum of 2.
+    /// threshold bucket), bounded by the worker count and the two-bucket
+    /// floor that every decide path shares. When cost parameters are set,
+    /// the final choice maximizes `saving - overhead`: parallel work saved
+    /// minus fixed startup and per-partition row-equivalent costs. Exchange
+    /// cost is independent of partition count for a fixed output size, so
+    /// `cost_gate_reason` remains responsible for rejecting a plan whose
+    /// total exchange cost exceeds the saving. All-zero costs preserve the
+    /// original deterministic count.
     pub(crate) fn desired_partition_count(&self, rows: u64) -> usize {
         let by_rows = usize::try_from(rows / self.config.min_rows_per_partition)
             .unwrap_or(self.config.max_partitions);
@@ -352,10 +351,22 @@ impl PartitioningPlanner {
             .unwrap_or(self.config.max_partitions)
             .max(2);
         let by_workers = self.config.max_workers;
-        by_rows
+        let upper = by_rows
             .clamp(2, self.config.max_partitions)
             .min(by_economics)
-            .min(by_workers.max(2))
+            .min(by_workers.max(2));
+        let fixed = self.config.fixed_overhead_rows;
+        let per_partition = self.config.per_partition_rows;
+        if fixed == 0 && per_partition == 0 {
+            return upper;
+        }
+        (2..=upper)
+            .max_by_key(|&count| {
+                let saving = rows.saturating_sub(rows / count as u64);
+                let overhead = fixed.saturating_add((count as u64).saturating_mul(per_partition));
+                saving.saturating_sub(overhead)
+            })
+            .unwrap_or(upper)
     }
 }
 

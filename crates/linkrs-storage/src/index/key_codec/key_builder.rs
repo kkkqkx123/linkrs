@@ -270,6 +270,16 @@ mod tests {
     }
 
     #[test]
+    fn equal_property_values_are_ordered_by_entity_id() {
+        let prop = Value::BigInt(42);
+        let low = KeyBuilder::build_vertex_index_key(1, "idx", &prop, &Value::BigInt(1))
+            .expect("low key");
+        let high = KeyBuilder::build_vertex_index_key(1, "idx", &prop, &Value::BigInt(2))
+            .expect("high key");
+        assert!(low.0 < high.0);
+    }
+
+    #[test]
     fn test_build_vertex_reverse_key_v2() {
         let space_id = 1u64;
         let vertex_id = Value::Int(456);

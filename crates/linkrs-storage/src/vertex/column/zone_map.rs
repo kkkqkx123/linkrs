@@ -302,35 +302,14 @@ fn collect_json_key_fp(value: &serde_json::Value, fp: &mut u64) {
     }
 }
 
-/// Compare two scalar values with the same semantics as pushed-predicate
-/// evaluation: exact `i64` for integer kinds, `f64` when a float is
-/// involved, otherwise `Value` ordering.
+/// Compare two scalar values with the same ordering as expression
+/// evaluation and pushed predicates.
+///
+/// Zone bounds are only pruning envelopes: using the exact evaluator
+/// ordering prevents a zone from being skipped for a value the filter would
+/// have accepted, including NaN and cross-kind numeric comparisons.
 pub fn compare_values(a: &Value, b: &Value) -> std::cmp::Ordering {
-    fn as_i64(value: &Value) -> Option<i64> {
-        match value {
-            Value::SmallInt(v) => Some(*v as i64),
-            Value::Int(v) => Some(*v as i64),
-            Value::BigInt(v) => Some(*v),
-            _ => None,
-        }
-    }
-    fn as_f64(value: &Value) -> Option<f64> {
-        match value {
-            Value::SmallInt(v) => Some(*v as f64),
-            Value::Int(v) => Some(*v as f64),
-            Value::BigInt(v) => Some(*v as f64),
-            Value::Float(v) => Some(*v as f64),
-            Value::Double(v) => Some(*v),
-            _ => None,
-        }
-    }
-    match (as_i64(a), as_i64(b)) {
-        (Some(x), Some(y)) => x.cmp(&y),
-        _ => match (as_f64(a), as_f64(b)) {
-            (Some(x), Some(y)) => x.partial_cmp(&y).unwrap_or(std::cmp::Ordering::Equal),
-            _ => Value::cmp(a, b),
-        },
-    }
+    Value::cmp(a, b)
 }
 
 // ---------------------------------------------------------------------------

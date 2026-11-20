@@ -5,5 +5,5 @@ pub mod projection_set;
 pub use graph_scan_node::{
     GetEdgesNode, GetNeighborsNode, GetVerticesNode, ScanEdgesNode, ScanVerticesNode,
 };
-pub use index_scan::{IndexLimit, IndexScanNode, OrderByItem, ScanType};
+pub use index_scan::{IndexLimit, IndexOrderProof, IndexScanNode, OrderByItem, ScanType};
 pub use projection_set::ProjectionSet;

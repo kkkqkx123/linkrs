@@ -18,6 +18,8 @@ pub struct PersistenceDiagnostics {
     pub last_checkpoint_error: Option<String>,
     pub last_snapshot_error: Option<String>,
     pub temporary_checkpoint_count: usize,
+    /// Failed checkpoint/snapshot/WAL reclaim passes observed by the engine.
+    pub reclaim_failures: u64,
     pub last_checkpoint_stats: Option<CheckpointStats>,
     /// Number of catalog lock acquisitions observed by the storage engine.
     pub catalog_lock_acquisitions: u64,
@@ -154,6 +156,7 @@ impl crate::engine::persistence_coordinator::PersistenceCoordinator {
             last_checkpoint_error: self.last_checkpoint_error.read().clone(),
             last_snapshot_error: self.last_snapshot_error.read().clone(),
             temporary_checkpoint_count,
+            reclaim_failures: self.reclaim_failures(),
             last_checkpoint_stats: self.last_checkpoint_stats.read().clone(),
             catalog_lock_acquisitions: 0,
             catalog_lock_wait_nanos: 0,

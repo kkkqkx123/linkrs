@@ -65,6 +65,7 @@ impl CsrWithProperties {
             hll,
             min_value: bounds.as_ref().map(|(lower, _)| lower.clone()),
             max_value: bounds.as_ref().map(|(_, upper)| upper.clone()),
+            bounds_are_exact: false,
         })
     }
 

@@ -9,25 +9,22 @@ use crate::index::vertex_index_manager::{compute_vertex_index_scan_range, Vertex
 use crate::index::IndexDataManagerImpl;
 use linkrs_core::types::Index;
 use linkrs_core::{StorageError, StorageResult};
-use std::collections::HashSet;
+use std::cmp::Reverse;
+use std::collections::{BinaryHeap, HashSet};
 use std::sync::Arc;
 
 /// Lazy forward iterator over a generation chain for a single shard.
 ///
-/// Loads entries from one generation at a time (newest first), tracking
-/// seen and tombstoned keys to properly handle the chain semantics without
-/// pre‑merging the entire data set.  Entries are yielded in gen‑by‑gen order
-/// (all visible keys from gen N, then filler keys from gen N‑1, …), so the
-/// cursor must not assume global key ordering across generations.
+/// Each generation is already sorted by key. A k-way merge keeps the output
+/// globally sorted while preserving MVCC chain semantics: the newest
+/// generation appears first for a duplicate key, so it decides visibility
+/// and tombstones before older generations are considered.
+type EntryStream = std::vec::IntoIter<(SecondaryIndexKey, IndexRecord)>;
+
 pub(crate) struct ChainForwardIterator {
-    chain: Vec<Arc<GenerationRuntime>>,
-    shard_id: u32,
+    streams: Vec<EntryStream>,
+    heap: BinaryHeap<Reverse<(SecondaryIndexKey, usize)>>,
     read_ts: u64,
-    range_start: Vec<u8>,
-    range_end: Vec<u8>,
-    gen_idx: usize,
-    pos: usize,
-    current_entries: Vec<(SecondaryIndexKey, IndexRecord)>,
     seen: HashSet<SecondaryIndexKey>,
     tombstoned: HashSet<SecondaryIndexKey>,
 }
@@ -40,38 +37,32 @@ impl ChainForwardIterator {
         range_start: Vec<u8>,
         range_end: Vec<u8>,
     ) -> Self {
+        let mut streams: Vec<EntryStream> = Vec::new();
+        for generation in chain {
+            let Some(shard) = generation.shard(shard_id) else {
+                continue;
+            };
+            if !shard.forward_may_have_range(&range_start, &range_end) {
+                continue;
+            }
+            let entries: Vec<_> = shard.forward_range(&range_start, &range_end).collect();
+            if !entries.is_empty() {
+                streams.push(entries.into_iter());
+            }
+        }
+        let mut heap = BinaryHeap::new();
+        for (generation_index, stream) in streams.iter_mut().enumerate() {
+            if let Some((key, _)) = stream.as_slice().first() {
+                heap.push(Reverse((key.clone(), generation_index)));
+            }
+        }
         Self {
-            chain,
-            shard_id,
+            streams,
+            heap,
             read_ts,
-            range_start,
-            range_end,
-            gen_idx: 0,
-            pos: 0,
-            current_entries: Vec::new(),
             seen: HashSet::new(),
             tombstoned: HashSet::new(),
         }
-    }
-
-    fn load_next_gen(&mut self) {
-        while self.gen_idx < self.chain.len() {
-            if let Some(shard) = self.chain[self.gen_idx].shard(self.shard_id) {
-                if shard.forward_may_have_range(&self.range_start, &self.range_end) {
-                    self.current_entries = shard
-                        .forward_range(&self.range_start, &self.range_end)
-                        .collect();
-                }
-                self.gen_idx += 1;
-                if !self.current_entries.is_empty() {
-                    self.pos = 0;
-                    return;
-                }
-            } else {
-                self.gen_idx += 1;
-            }
-        }
-        self.current_entries = Vec::new();
     }
 }
 
@@ -79,36 +70,33 @@ impl Iterator for ChainForwardIterator {
     type Item = (SecondaryIndexKey, IndexRecord);
 
     fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            if self.pos >= self.current_entries.len() {
-                self.load_next_gen();
-                if self.current_entries.is_empty() {
-                    return None;
-                }
+        while let Some(Reverse((key, generation_index))) = self.heap.pop() {
+            let Some((entry_key, entry)) = self.streams[generation_index].next() else {
+                continue;
+            };
+            debug_assert_eq!(entry_key, key);
+            if let Some((next_key, _)) = self.streams[generation_index].as_slice().first() {
+                self.heap
+                    .push(Reverse((next_key.clone(), generation_index)));
             }
-
-            let (key, entry) = &self.current_entries[self.pos];
-            self.pos += 1;
-
-            let key = key.clone();
-            let entry = entry.clone();
 
             if entry.created_ts > self.read_ts {
                 continue;
             }
             if entry.deleted_ts.is_some_and(|d| d <= self.read_ts) {
-                self.tombstoned.insert(key);
+                self.tombstoned.insert(entry_key);
                 continue;
             }
-            if self.tombstoned.contains(&key) {
+            if self.tombstoned.contains(&entry_key) {
                 continue;
             }
-            if !self.seen.insert(key.clone()) {
+            if !self.seen.insert(entry_key.clone()) {
                 continue;
             }
 
-            return Some((key, entry));
+            return Some((entry_key, entry));
         }
+        None
     }
 }
 
@@ -247,4 +235,67 @@ fn pin_chain_manifests(
         .iter()
         .filter_map(|gen| catalog.acquire_generation(gen.generation))
         .collect()
+}
+
+#[cfg(test)]
+mod chain_merge_tests {
+    use super::*;
+
+    fn stream(keys: &[&str], created_ts: u64) -> EntryStream {
+        keys.iter()
+            .map(|key| (key.as_bytes().to_vec(), IndexRecord::new(created_ts)))
+            .collect::<Vec<_>>()
+            .into_iter()
+    }
+
+    #[test]
+    fn generations_merge_into_global_key_order() {
+        let mut streams = vec![
+            stream(&["c", "d"], 20),
+            stream(&["a", "c"], 10),
+            stream(&["b", "e"], 5),
+        ];
+        let mut heap = BinaryHeap::new();
+        for (generation_index, stream) in streams.iter_mut().enumerate() {
+            if let Some((key, _)) = stream.as_slice().first() {
+                heap.push(Reverse((key.clone(), generation_index)));
+            }
+        }
+        let iterator = ChainForwardIterator {
+            streams,
+            heap,
+            read_ts: 20,
+            seen: HashSet::new(),
+            tombstoned: HashSet::new(),
+        };
+        let keys: Vec<String> = iterator
+            .map(|(key, _)| String::from_utf8(key).expect("utf8 key"))
+            .collect();
+        assert_eq!(keys, ["a", "b", "c", "d", "e"]);
+    }
+
+    #[test]
+    fn newest_generation_decides_duplicate_visibility() {
+        let mut streams = vec![stream(&["c"], 30), stream(&["c"], 10)];
+        let mut heap = BinaryHeap::new();
+        for (generation_index, stream) in streams.iter_mut().enumerate() {
+            if let Some((key, _)) = stream.as_slice().first() {
+                heap.push(Reverse((key.clone(), generation_index)));
+            }
+        }
+        let iterator = ChainForwardIterator {
+            streams,
+            heap,
+            read_ts: 20,
+            seen: HashSet::new(),
+            tombstoned: HashSet::new(),
+        };
+        let keys: Vec<String> = iterator
+            .map(|(key, entry)| {
+                assert_eq!(entry.created_ts, 10, "older visible version is used");
+                String::from_utf8(key).expect("utf8 key")
+            })
+            .collect();
+        assert_eq!(keys, ["c"]);
+    }
 }

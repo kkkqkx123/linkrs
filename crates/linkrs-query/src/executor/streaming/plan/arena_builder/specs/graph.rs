@@ -696,8 +696,15 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_topn_spec(
 ) -> Result<BlockingSpec, PlanBuildError> {
     let sort_items = node.sort_items();
     let (sort_expressions, sort_directions) = sort_items_to_expressions(sort_items)?;
+    let n = u32::try_from(node.limit()).map_err(|_| {
+        PlanBuildError::unsupported(
+            "TopN",
+            node.id(),
+            "limit must fit in u32 for physical execution",
+        )
+    })?;
     Ok(BlockingSpec::TopN {
-        n: node.limit() as u32,
+        n,
         sort_expressions,
         sort_directions,
     })

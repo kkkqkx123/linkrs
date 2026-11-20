@@ -1350,3 +1350,16 @@ fn allowlist_does_not_leak_to_non_aggregate_roots() {
     assert!(decision.partition_spec.is_none());
     assert!(decision.reason.contains("disabled"));
 }
+
+#[test]
+fn desired_partition_count_trades_per_partition_cost_against_saving() {
+    let mut config = make_planner().config().clone();
+    config.min_rows_per_partition = 1_000;
+    config.max_partitions = 8;
+    config.max_workers = 8;
+    config.fixed_overhead_rows = 0;
+    config.per_partition_rows = 5_000;
+    config.exchange_row_per_mille = 0;
+    let planner = PartitioningPlanner::new(config);
+    assert_eq!(planner.desired_partition_count(100_000), 5);
+}

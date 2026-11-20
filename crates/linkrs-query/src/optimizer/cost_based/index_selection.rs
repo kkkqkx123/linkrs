@@ -17,7 +17,9 @@ use crate::optimizer::cost_based::{
 };
 use crate::optimizer::stats::StatisticsManager;
 use crate::planning::plan::core::nodes::access::graph_scan_node::ScanVerticesNode;
-use crate::planning::plan::core::nodes::access::index_scan::{IndexLimit, IndexScanNode, ScanType};
+use crate::planning::plan::core::nodes::access::index_scan::{
+    IndexLimit, IndexOrderProof, IndexScanNode, ScanType,
+};
 use crate::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
 use crate::planning::plan::logical::logical_node_traits::LogicalSingleInputNode;
 use crate::planning::plan::logical::logical_nodes::access::IndexHint;
@@ -26,6 +28,7 @@ use crate::planning::plan::logical::logical_nodes::operation::LogicalFilterNode;
 use crate::planning::plan::logical::LogicalNodeEnum;
 use crate::planning::plan::PlanNodeEnum;
 use linkrs_core::types::expr::Expression;
+use linkrs_core::types::graph_schema::OrderDirection;
 use linkrs_core::types::operators::BinaryOperator;
 use linkrs_core::types::Index;
 use linkrs_core::value::Value;
@@ -115,6 +118,9 @@ fn try_rewrite_scan(
         decision.scan_type,
     );
     index_scan.set_scan_limits(decision.scan_limits);
+    if let Some(proof) = decision.order_proof {
+        index_scan.set_order_proof(proof);
+    }
     index_scan.set_col_names(scan.col_names().to_vec());
     if let Some(output_var) = scan.output_var() {
         index_scan.set_output_var(output_var.to_string());
@@ -302,8 +308,54 @@ fn full_scan_cost(
 /// through this single core, so threshold and scan-type choices cannot drift
 /// between the two trees. Adapters only translate the decision into their own
 /// node type.
+/// Build the narrow proof needed to move a limit past an ordered sort.
+///
+/// Only a unique, non-null, single-column index with a codec-compatible
+/// scalar kind has a total order that matches the executor. Multi-shard or
+/// descending order is not claimed here: the cursor validates those facts
+/// before a limit is accepted.
+fn build_order_proof(index: &Index, scan_limits: &[IndexLimit]) -> Option<IndexOrderProof> {
+    if !index.is_unique || index.partial_condition.is_some() {
+        return None;
+    }
+    if index.fields.len() != 1 || index.properties.len() != 1 {
+        return None;
+    }
+    let field = &index.fields[0];
+    if field.is_nullable {
+        return None;
+    }
+    let codec_compatible = matches!(
+        field.value_type,
+        Value::Bool(_)
+            | Value::SmallInt(_)
+            | Value::Int(_)
+            | Value::BigInt(_)
+            | Value::String(_)
+            | Value::FixedString(_)
+            | Value::Decimal128(_)
+            | Value::Uuid(_)
+    );
+    if !codec_compatible {
+        return None;
+    }
+    let column = index.properties[0].clone();
+    if scan_limits.iter().any(|limit| limit.column != column) {
+        return None;
+    }
+    Some(IndexOrderProof {
+        column: column.clone(),
+        direction: OrderDirection::Asc,
+        reason: format!(
+            "unique single-column non-null index '{}' on '{}'",
+            index.name, column
+        ),
+    })
+}
+
 struct IndexDecision {
     index_name: String,
+    order_proof: Option<IndexOrderProof>,
     tag_id: i32,
     index_id: u64,
     scan_type: ScanType,
@@ -353,6 +405,7 @@ fn decide_index_scan(
         return None;
     }
 
+    let order_proof = build_order_proof(index, &scan_limits);
     let scan_type = if scan_limits.len() == 1 && scan_limits[0].scan_type == ScanType::Unique {
         ScanType::Unique
     } else {
@@ -371,6 +424,7 @@ fn decide_index_scan(
 
     Some(IndexDecision {
         index_name,
+        order_proof,
         tag_id,
         index_id: index.id,
         scan_type,

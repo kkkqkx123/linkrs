@@ -22,6 +22,17 @@ use crate::executor::streaming::helpers::accumulator_states::AggregateAccumulato
 /// accounted for beyond the group key itself.
 pub const ACCUMULATOR_OVERHEAD_BYTES: usize = 64;
 
+/// Column emitted by a count-only expand frontier and summed by the
+/// aggregate rewrite. Its values are non-negative per-chunk edge counts.
+const COUNT_ONLY_COLUMN: &str = "_expand_count";
+
+/// Which authoritative accumulator the typed counts represent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TypedAggregateMode {
+    Count,
+    SumExpandCount,
+}
+
 /// Fixed-size group keys that can be accumulated without building one
 /// `Vec<Value>` per input row. Nullable and heap-backed typed columns are
 /// deliberately absent: their equality needs decoding and stays on the
@@ -54,6 +65,7 @@ pub enum TypedGroupKeyKind {
 pub struct TypedGroupCount {
     pub counts: HashMap<TypedGroupKey, u64>,
     pub key_kind: TypedGroupKeyKind,
+    pub mode: TypedAggregateMode,
     /// One reservation per distinct group, matching the generic path's
     /// key-plus-accumulator accounting.
     pub bytes_per_group: usize,
@@ -83,6 +95,14 @@ fn key_at(column: &TypedColumn, kind: TypedGroupKeyKind, idx: usize) -> Option<T
     }
 }
 
+fn expand_count_values(chunk: &DataChunk) -> Option<Vec<i64>> {
+    let slot = chunk.get_layout().slot_id(COUNT_ONLY_COLUMN)?;
+    let TypedColumn::I64(values) = chunk.typed_column(slot)? else {
+        return None;
+    };
+    (values.len() == chunk.eval_len()).then(|| values.clone())
+}
+
 fn group_bytes(kind: TypedGroupKeyKind, overhead: usize) -> usize {
     let sample = match kind {
         TypedGroupKeyKind::I64 => TypedGroupKey::I64(0).into_value(),
@@ -110,6 +130,16 @@ fn count_validity<'a>(
     };
     let slot = chunk.get_layout().slot_id(name)?;
     let column = chunk.typed_column(slot)?;
+    // Identity-style columns are non-null by construction; the generic path
+    // has the same proof in `count_identity_arg`. Reuse it here so a typed
+    // group-count state does not fall back only because the COUNT argument
+    // is an edge or vertex identity rather than a scalar column.
+    if matches!(
+        column,
+        TypedColumn::VertexIdentity(_) | TypedColumn::VertexHandle(_) | TypedColumn::EdgeHeader(_)
+    ) {
+        return Some((None, column.len()));
+    }
     if column.is_nullable() && column.validity_bitmap().is_none() {
         return None;
     }
@@ -134,11 +164,13 @@ pub(crate) fn try_accumulate(
     if has_filters || !group_map.is_empty() || group_by_expressions.len() != 1 {
         return false;
     }
-    if aggregate_functions.len() != 1
-        || !matches!(aggregate_functions[0].0, AggregateFunction::Count)
-    {
-        return false;
-    }
+    let mode = match aggregate_functions {
+        [(AggregateFunction::Count, _)] => TypedAggregateMode::Count,
+        [(AggregateFunction::Sum, args)] if matches!(args.as_slice(), [Expression::Variable(name)] if name == COUNT_ONLY_COLUMN) => {
+            TypedAggregateMode::SumExpandCount
+        }
+        _ => return false,
+    };
     let Expression::Variable(group_name) = &group_by_expressions[0] else {
         return false;
     };
@@ -163,17 +195,31 @@ pub(crate) fn try_accumulate(
     if key_column.len() != len {
         return false;
     }
-    if state.as_ref().is_some_and(|fast| fast.key_kind != kind) {
+    if state
+        .as_ref()
+        .is_some_and(|fast| fast.key_kind != kind || fast.mode != mode)
+    {
         return false;
     }
-    let Some((validity, arg_len)) =
-        count_validity(&aggregate_functions[0].0, &aggregate_functions[0].1, chunk)
-    else {
-        return false;
+    let validity = match mode {
+        TypedAggregateMode::Count => {
+            let Some((validity, arg_len)) =
+                count_validity(&aggregate_functions[0].0, &aggregate_functions[0].1, chunk)
+            else {
+                return false;
+            };
+            if arg_len != len {
+                return false;
+            }
+            (validity, None)
+        }
+        TypedAggregateMode::SumExpandCount => {
+            let Some(values) = expand_count_values(chunk) else {
+                return false;
+            };
+            (None, Some(values))
+        }
     };
-    if arg_len != len {
-        return false;
-    }
 
     let mut new_keys = HashSet::new();
     for idx in 0..len {
@@ -203,6 +249,7 @@ pub(crate) fn try_accumulate(
         *state = Some(TypedGroupCount {
             counts: HashMap::new(),
             key_kind: kind,
+            mode,
             bytes_per_group,
         });
     }
@@ -210,15 +257,29 @@ pub(crate) fn try_accumulate(
     for key in new_keys {
         fast.counts.insert(key, 0);
     }
+    let (validity_bitmap, expand_counts) = validity;
     for idx in 0..len {
         let key = key_at(key_column, kind, idx).expect("key was validated in the preflight pass");
-        let keep = validity.is_none_or(|bitmap| bitmap_is_valid(bitmap, idx));
-        if keep {
-            *fast
-                .counts
-                .get_mut(&key)
-                .expect("key was inserted in the preflight pass") += multiplicity;
-        }
+        let contribution = match mode {
+            TypedAggregateMode::Count => {
+                if validity_bitmap.is_some_and(|bitmap| !bitmap_is_valid(bitmap, idx)) {
+                    0
+                } else {
+                    multiplicity
+                }
+            }
+            TypedAggregateMode::SumExpandCount => {
+                let value = expand_counts.as_ref().expect("sum values were validated")[idx];
+                if value < 0 {
+                    return false;
+                }
+                (value as u64).saturating_mul(multiplicity)
+            }
+        };
+        *fast
+            .counts
+            .get_mut(&key)
+            .expect("key was inserted in the preflight pass") += contribution;
     }
     true
 }
@@ -231,11 +292,13 @@ pub(crate) fn deopt(
     group_map: &mut HashMap<RowKey, Vec<AggregateAccumulator>>,
 ) {
     if let Some(fast) = state.take() {
+        let mode = fast.mode;
         for (key, count) in fast.counts {
-            group_map.insert(
-                vec![key.into_value()],
-                vec![AggregateAccumulator::Count(count)],
-            );
+            let accumulator = match mode {
+                TypedAggregateMode::Count => AggregateAccumulator::Count(count),
+                TypedAggregateMode::SumExpandCount => AggregateAccumulator::Sum(count as f64),
+            };
+            group_map.insert(vec![key.into_value()], vec![accumulator]);
         }
     }
 }
@@ -244,6 +307,7 @@ pub(crate) fn deopt(
 mod tests {
     use super::*;
     use crate::executor::streaming::slot::SlotLayout;
+    use linkrs_core::types::storage_ids::VertexId;
     use std::sync::Arc;
 
     fn typed_chunk(columns: Vec<TypedColumn>, names: &[&str]) -> DataChunk {
@@ -306,6 +370,61 @@ mod tests {
         // The NULL argument still creates its group but does not count.
         assert_eq!(fast.counts.get(&TypedGroupKey::I64(2)), Some(&0));
         assert_eq!(fast.counts.len(), 2);
+    }
+
+    #[test]
+    fn sum_expand_count_keeps_typed_state_and_deopts_to_sum() {
+        let mut typed = None;
+        let mut group_map: HashMap<RowKey, Vec<AggregateAccumulator>> = HashMap::new();
+        let mut tracker = MemoryTracker::new(MemoryBudget::new(1024 * 1024));
+        let mut chunk = typed_chunk(
+            vec![
+                TypedColumn::I64(vec![1, 2, 1]),
+                TypedColumn::I64(vec![2, 3, 4]),
+            ],
+            &["k", COUNT_ONLY_COLUMN],
+        );
+        let funcs = vec![(
+            AggregateFunction::Sum,
+            vec![Expression::variable(COUNT_ONLY_COLUMN.to_string())],
+        )];
+        assert!(try_accumulate(
+            &mut typed,
+            &group_map,
+            &mut tracker,
+            ACCUMULATOR_OVERHEAD_BYTES,
+            false,
+            &group("k"),
+            &funcs,
+            &mut chunk,
+            1,
+        ));
+        assert_eq!(
+            typed.as_ref().expect("typed state").counts,
+            HashMap::from([(TypedGroupKey::I64(1), 6), (TypedGroupKey::I64(2), 3)])
+        );
+        deopt(&mut typed, &mut group_map);
+        assert!(matches!(
+            group_map[&vec![Value::BigInt(1)]].as_slice(),
+            [AggregateAccumulator::Sum(value)] if *value == 6.0
+        ));
+    }
+
+    #[test]
+    fn identity_count_argument_is_always_valid() {
+        let id = VertexId::try_from_int64(7).expect("valid vertex id");
+        let chunk = typed_chunk(
+            vec![
+                TypedColumn::I64(vec![1, 1]),
+                TypedColumn::VertexIdentity(vec![id, id]),
+            ],
+            &["k", "h"],
+        );
+        let args = group("h");
+        assert_eq!(
+            count_validity(&AggregateFunction::Count, &args, &chunk),
+            Some((None, 2))
+        );
     }
 
     #[test]

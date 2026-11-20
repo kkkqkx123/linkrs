@@ -129,6 +129,10 @@ pub struct ColumnarStats {
     /// downstream consumer read them (`take_rows_for_reuse`, join build
     /// consumption). A high count means typed columns were built in vain.
     pub columnar_wasted_builds: AtomicU64,
+    /// Chunks accumulated by the typed group-count state.
+    pub typed_group_hits: AtomicU64,
+    /// Chunks that matched the aggregate shape but could not use typed state.
+    pub typed_group_fallbacks: AtomicU64,
 }
 
 impl Default for ColumnarStats {
@@ -149,6 +153,8 @@ impl Default for ColumnarStats {
             batch_outlets: AtomicU64::new(0),
             columnar_b_path_hits: AtomicU64::new(0),
             columnar_wasted_builds: AtomicU64::new(0),
+            typed_group_hits: AtomicU64::new(0),
+            typed_group_fallbacks: AtomicU64::new(0),
         }
     }
 }
@@ -180,6 +186,16 @@ impl ColumnarStats {
     /// Record a typed layout dropped before any downstream consumer read it.
     pub fn record_wasted_build(&self) {
         self.columnar_wasted_builds.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Record a chunk consumed by the typed group-count state.
+    pub fn record_typed_group_hit(&self) {
+        self.typed_group_hits.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Record a chunk that fell back from typed group counting.
+    pub fn record_typed_group_fallback(&self) {
+        self.typed_group_fallbacks.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Record a chunk handed downstream with a selection vector.
@@ -314,6 +330,8 @@ pub struct ColumnarStatsSnapshot {
     pub batch_outlets: u64,
     pub columnar_b_path_hits: u64,
     pub columnar_wasted_builds: u64,
+    pub typed_group_hits: u64,
+    pub typed_group_fallbacks: u64,
 }
 
 impl ColumnarStatsSnapshot {
@@ -333,6 +351,8 @@ impl ColumnarStatsSnapshot {
             batch_outlets: stats.batch_outlets.load(Ordering::Relaxed),
             columnar_b_path_hits: stats.columnar_b_path_hits.load(Ordering::Relaxed),
             columnar_wasted_builds: stats.columnar_wasted_builds.load(Ordering::Relaxed),
+            typed_group_hits: stats.typed_group_hits.load(Ordering::Relaxed),
+            typed_group_fallbacks: stats.typed_group_fallbacks.load(Ordering::Relaxed),
         }
     }
 
@@ -371,13 +391,15 @@ impl ColumnarStatsSnapshot {
     /// Human-readable one-line summary for PROFILE output.
     pub fn summary(&self) -> String {
         format!(
-            "columnar_hits={}, misses={}, hit_rate={:.3}, typed_hit_rate={:.3}, b_path_hits={}, wasted_builds={}, selection_attached={}, selection_materialized={}, selection_pushed={}, column_block_hits={}, multiplicity_expanded={}, spill_rows={}, spill_bytes={}, spill_runs={}, batch_outlets={}",
+            "columnar_hits={}, misses={}, hit_rate={:.3}, typed_hit_rate={:.3}, b_path_hits={}, wasted_builds={}, typed_group_hits={}, typed_group_fallbacks={}, selection_attached={}, selection_materialized={}, selection_pushed={}, column_block_hits={}, multiplicity_expanded={}, spill_rows={}, spill_bytes={}, spill_runs={}, batch_outlets={}",
             self.columnar_hits,
             self.columnar_misses,
             self.hit_rate(),
             self.typed_hit_rate(),
             self.columnar_b_path_hits,
             self.columnar_wasted_builds,
+            self.typed_group_hits,
+            self.typed_group_fallbacks,
             self.selection_attached,
             self.selection_materialized,
             self.selection_pushed,
@@ -440,6 +462,19 @@ mod tests {
         // Without an injected policy the flush is a no-op.
         let rt2 = ExecutionRuntime::default_budget();
         rt2.flush_columnar_stats_to_policy();
+    }
+
+    #[test]
+    fn typed_group_counters_snapshot_and_render() {
+        let stats = ColumnarStats::new();
+        stats.record_typed_group_hit();
+        stats.record_typed_group_hit();
+        stats.record_typed_group_fallback();
+        let snapshot = ColumnarStatsSnapshot::from_stats(&stats);
+        assert_eq!(snapshot.typed_group_hits, 2);
+        assert_eq!(snapshot.typed_group_fallbacks, 1);
+        assert!(snapshot.summary().contains("typed_group_hits=2"));
+        assert!(snapshot.summary().contains("typed_group_fallbacks=1"));
     }
 
     #[test]

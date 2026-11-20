@@ -58,8 +58,8 @@ pub(crate) fn next_partial_aggregate(
         // weight, so no row duplication is needed for the narrow shape. Only
         // the generic row loop expands it at the opaque boundary.
         let multiplicity = chunk.multiplicity();
-        let typed_consumed = chunk.rows.is_empty()
-            && chunk.typed_columns.is_some()
+        let typed_candidate = chunk.rows.is_empty() && chunk.typed_columns.is_some();
+        let typed_consumed = typed_candidate
             && try_accumulate(
                 &mut state.typed_group_count,
                 &state.group_map,
@@ -71,6 +71,16 @@ pub(crate) fn next_partial_aggregate(
                 &mut chunk,
                 multiplicity,
             );
+        if typed_candidate {
+            if let Some(rt) = ctx.runtime.as_ref() {
+                let stats = rt.columnar_stats();
+                if typed_consumed {
+                    stats.record_typed_group_hit();
+                } else {
+                    stats.record_typed_group_fallback();
+                }
+            }
+        }
         if typed_consumed {
             continue;
         }

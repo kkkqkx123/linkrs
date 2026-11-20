@@ -379,6 +379,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         let (
             (wall_us, work_us, workers, chunks_peak, bytes_peak),
             (partitions, partition_counts, count_fallbacks),
+            partition_work_times,
             columnar,
         ) = {
             let profile = instance.runtime().profile().flush_to_collector();
@@ -447,6 +448,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             (
                 profile.parallel_profile(),
                 profile.partition_profile(),
+                profile.partition_work_profile(),
                 crate::executor::streaming::runtime::ColumnarStatsSnapshot::from_stats(
                     &instance.runtime().columnar_stats(),
                 ),
@@ -465,6 +467,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         }
         plan_desc.partition_counts = partition_counts;
         plan_desc.count_fallback_reasons = count_fallbacks;
+        plan_desc.partition_work_times_us = partition_work_times;
         plan_desc.columnar_summary = columnar.summary();
         if plan_desc.actual_workers == 0
             && plan_desc.requested_workers > 1

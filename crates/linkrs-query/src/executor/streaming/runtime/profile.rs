@@ -162,6 +162,7 @@ pub struct ProfileBoard {
     pub parallel_buffered_chunks_peak: AtomicUsize,
     pub parallel_buffered_bytes_peak: AtomicUsize,
     partition_counts: RwLock<HashMap<usize, i64>>,
+    partition_work_time_us: RwLock<HashMap<usize, u64>>,
     count_fallback_reasons: Mutex<Vec<String>>,
 }
 
@@ -186,6 +187,7 @@ impl ProfileBoard {
             parallel_buffered_chunks_peak: AtomicUsize::new(0),
             parallel_buffered_bytes_peak: AtomicUsize::new(0),
             partition_counts: RwLock::new(HashMap::new()),
+            partition_work_time_us: RwLock::new(HashMap::new()),
             count_fallback_reasons: Mutex::new(Vec::new()),
         }
     }
@@ -230,6 +232,14 @@ impl ProfileBoard {
     }
 
     /// Record why a count frontier used materialized rows for one chunk.
+    pub fn record_partition_work_time(&self, partition_id: usize, elapsed_us: u64) {
+        *self
+            .partition_work_time_us
+            .write()
+            .entry(partition_id)
+            .or_insert(0) += elapsed_us;
+    }
+
     pub fn record_count_fallback(&self, reason: &str) {
         let mut guard = self.count_fallback_reasons.lock();
         if !guard.iter().any(|existing| existing.as_str() == reason) {
@@ -256,6 +266,11 @@ impl ProfileBoard {
         collector.parallel_work_time_us = self.parallel_work_time_us.load(Ordering::Relaxed);
         collector.parallel_workers = self.parallel_workers.load(Ordering::Relaxed);
         collector.parallel_partitions = self.parallel_partitions.load(Ordering::Relaxed);
+        let work = self.partition_work_time_us.read();
+        let mut work_ordered: Vec<_> = work.iter().map(|(id, us)| (*id, *us)).collect();
+        work_ordered.sort_by_key(|(id, _)| *id);
+        collector.partition_work_times_us = work_ordered;
+        drop(work);
         let counts = self.partition_counts.read();
         let mut ordered: Vec<_> = counts.iter().map(|(id, count)| (*id, *count)).collect();
         ordered.sort_by_key(|(id, _)| *id);
@@ -290,6 +305,8 @@ pub struct ProfileCollector {
     pub partition_counts: Vec<(usize, i64)>,
     /// Reasons a count frontier degraded to the materialized row path.
     pub count_fallback_reasons: Vec<String>,
+    /// Work time spent by each partition, in partition order.
+    pub partition_work_times_us: Vec<(usize, u64)>,
     /// Peak number of chunks retained in output queues.
     pub parallel_buffered_chunks_peak: usize,
     /// Peak accounted bytes retained in output queues.
@@ -334,6 +351,11 @@ impl ProfileCollector {
     }
 
     /// Snapshot of partition counts and count fallbacks for EXPLAIN output.
+    /// Partition work times in partition order.
+    pub fn partition_work_profile(&self) -> Vec<(usize, u64)> {
+        self.partition_work_times_us.clone()
+    }
+
     pub fn partition_profile(&self) -> (usize, Vec<(usize, i64)>, Vec<String>) {
         (
             self.parallel_partitions,

@@ -319,8 +319,22 @@ fn fallback_selectivity_factor(spec: &OperatorKindSpec) -> f64 {
 fn choice_reason_for_spec(spec: &OperatorKindSpec) -> Option<String> {
     match spec {
         OperatorKindSpec::Source(source) => Some(match source {
-            SourceSpec::IndexScan { index_name, .. } => {
-                format!("index_scan({})", index_name)
+            SourceSpec::IndexScan {
+                index_name,
+                order_proof,
+                limit,
+                offset,
+                ..
+            } => {
+                let proof = match order_proof {
+                    Some(reason) => format!("order_proof:{reason}"),
+                    None => "order_unproven".to_string(),
+                };
+                let bounds = match limit {
+                    Some(limit) => format!(",limit:{limit},offset:{offset}"),
+                    None => String::new(),
+                };
+                format!("index_scan({index_name},{proof}{bounds})")
             }
             SourceSpec::StorageScanVertices {
                 partition_range: Some(_),
@@ -354,7 +368,9 @@ fn choice_reason_for_spec(spec: &OperatorKindSpec) -> Option<String> {
             BlockingSpec::TopN { .. } => "topn".to_string(),
             BlockingSpec::Sort { .. } => "sort".to_string(),
             BlockingSpec::Distinct => "distinct".to_string(),
-            BlockingSpec::LocalTopKDistinct { .. } => "local_topk_distinct".to_string(),
+            BlockingSpec::LocalTopKDistinct { push_reason, .. } => {
+                format!("local_topk:pushed:{push_reason}")
+            }
             BlockingSpec::Aggregate { .. }
             | BlockingSpec::PartialAggregate { .. }
             | BlockingSpec::FinalAggregate { .. } => "aggregate".to_string(),

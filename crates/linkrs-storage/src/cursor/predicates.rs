@@ -55,7 +55,7 @@ impl ScanPredicate {
         match self {
             ScanPredicate::ColumnEqual {
                 value: expected, ..
-            } => compare_scalar(value, expected) == std::cmp::Ordering::Equal,
+            } => value == expected,
             ScanPredicate::ColumnRange {
                 lower,
                 upper,
@@ -322,7 +322,7 @@ impl ScanPredicate {
         match self {
             ScanPredicate::ColumnEqual {
                 value: expected, ..
-            } => compare_scalar(value, expected) == std::cmp::Ordering::Equal,
+            } => value == expected,
             ScanPredicate::ColumnRange {
                 lower,
                 upper,
@@ -370,31 +370,14 @@ pub fn compare_stat_values(a: &linkrs_core::Value, b: &linkrs_core::Value) -> st
     compare_scalar(a, b)
 }
 
+/// Compare two values exactly as the expression evaluator does.
+///
+/// Pushed predicates are only a pre-filter: the original expression still
+/// runs on top of the scan. Using the same ordering as the evaluator keeps
+/// the pre-filter conservative for every scalar kind, including NaN and
+/// cross-kind numerics.
 fn compare_scalar(a: &linkrs_core::Value, b: &linkrs_core::Value) -> std::cmp::Ordering {
-    match (as_i64(a), as_i64(b)) {
-        (Some(x), Some(y)) => x.cmp(&y),
-        _ => match (as_f64(a), as_f64(b)) {
-            (Some(x), Some(y)) => x.partial_cmp(&y).unwrap_or(std::cmp::Ordering::Equal),
-            _ => linkrs_core::Value::cmp(a, b),
-        },
-    }
-}
-
-fn as_i64(value: &linkrs_core::Value) -> Option<i64> {
-    match value {
-        linkrs_core::Value::SmallInt(v) => Some(*v as i64),
-        linkrs_core::Value::Int(v) => Some(*v as i64),
-        linkrs_core::Value::BigInt(v) => Some(*v),
-        _ => None,
-    }
-}
-
-fn as_f64(value: &linkrs_core::Value) -> Option<f64> {
-    match value {
-        linkrs_core::Value::Float(v) => Some(*v as f64),
-        linkrs_core::Value::Double(v) => Some(*v),
-        _ => None,
-    }
+    linkrs_core::Value::cmp(a, b)
 }
 
 #[cfg(test)]

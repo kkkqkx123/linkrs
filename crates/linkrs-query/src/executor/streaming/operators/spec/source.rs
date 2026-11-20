@@ -175,6 +175,11 @@ pub enum SourceSpec {
         predicate: Box<BoundIndexPredicate>,
         projection: IndexProjection,
         residual_filter: Option<linkrs_core::types::expr::Expression>,
+        /// Proof reason when the index order can back a pushed limit.
+        order_proof: Option<String>,
+        /// Rows to emit after skipping the leading `offset` rows.
+        limit: Option<usize>,
+        offset: usize,
         output_layout: Arc<SlotLayout>,
     },
     /// Produces one singleton row from which correlated apply can pull.

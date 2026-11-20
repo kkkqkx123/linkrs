@@ -157,6 +157,8 @@ pub struct PlanDescription {
     pub partition_counts: Vec<(usize, i64)>,
     /// Runtime reasons a count frontier used materialized rows.
     pub count_fallback_reasons: Vec<String>,
+    /// Work time spent by each partition, in partition order.
+    pub partition_work_times_us: Vec<(usize, u64)>,
     pub parallel_fallback_reason: String,
 
     // ── Cost-based decision notes (populated at plan build) ──
@@ -188,6 +190,7 @@ impl PlanDescription {
             partition_count_mode: String::new(),
             partition_counts: Vec::new(),
             count_fallback_reasons: Vec::new(),
+            partition_work_times_us: Vec::new(),
             parallel_fallback_reason: String::new(),
             cbo_notes: Vec::new(),
             statistics_summary: String::new(),

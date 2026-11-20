@@ -15,6 +15,18 @@ pub struct OrderByItem {
     pub direction: OrderDirection,
 }
 
+/// Proof that an index cursor emits rows in the same order as a sort key.
+///
+/// The token is produced only from index metadata that can prove a single
+/// ordered key, a unique tie-break, non-null values and a codec-compatible
+/// scalar kind. Rules that move a limit past a sort require this token.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexOrderProof {
+    pub column: String,
+    pub direction: OrderDirection,
+    pub reason: String,
+}
+
 impl OrderByItem {
     pub fn new(column: impl Into<String>, direction: OrderDirection) -> Self {
         Self {
@@ -148,7 +160,9 @@ define_plan_node! {
         filter: Option<ContextualExpression>,
         return_columns: Vec<String>,
         limit: Option<i64>,
+        offset: usize,
         order_by: Vec<OrderByItem>,
+        order_proof: Option<IndexOrderProof>,
     }
     enum: IndexScan
     input: ZeroInputNode
@@ -175,7 +189,9 @@ impl IndexScanNode {
             filter: None,
             return_columns: Vec::new(),
             limit: None,
+            offset: 0,
             order_by: Vec::new(),
+            order_proof: None,
             output_var: None,
             col_names: Vec::new(),
             column_types: vec![],
@@ -202,6 +218,14 @@ impl IndexScanNode {
 
     pub fn set_limit(&mut self, limit: i64) {
         self.limit = Some(limit);
+    }
+
+    pub fn offset(&self) -> usize {
+        self.offset
+    }
+
+    pub fn set_offset(&mut self, offset: usize) {
+        self.offset = offset;
     }
 
     pub fn set_order_by(&mut self, order_by: Vec<OrderByItem>) {
@@ -274,6 +298,14 @@ impl IndexScanNode {
 
     pub fn order_by(&self) -> &[OrderByItem] {
         &self.order_by
+    }
+
+    pub fn order_proof(&self) -> Option<&IndexOrderProof> {
+        self.order_proof.as_ref()
+    }
+
+    pub fn set_order_proof(&mut self, proof: IndexOrderProof) {
+        self.order_proof = Some(proof);
     }
 
     pub fn accept<V>(&self, visitor: &mut V) -> V::Result

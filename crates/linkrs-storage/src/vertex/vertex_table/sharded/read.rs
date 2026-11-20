@@ -673,6 +673,7 @@ impl ShardedVertexTable {
             hll,
             min_value: min,
             max_value: max,
+            bounds_are_exact: false,
         })
     }
 

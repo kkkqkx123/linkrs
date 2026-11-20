@@ -28,6 +28,8 @@ pub(crate) fn open(op: &mut SourceOperator) -> Result<(), QueryError> {
             index_id,
             predicate,
             projection,
+            limit,
+            offset,
             partition_range,
             cursor,
             ..
@@ -41,6 +43,8 @@ pub(crate) fn open(op: &mut SourceOperator) -> Result<(), QueryError> {
                 *index_id,
                 predicate,
                 projection,
+                *limit,
+                *offset,
                 partition_range.clone(),
             )?;
             *cursor =
@@ -79,6 +83,8 @@ fn build_index_scan_plan(
     index_id: u64,
     predicate: &BoundIndexPredicate,
     projection: &IndexProjection,
+    limit: Option<usize>,
+    offset: usize,
     partition_range: Option<Range<i64>>,
 ) -> Result<IndexScanPlan, QueryError> {
     let physical_predicate = match predicate {
@@ -130,8 +136,8 @@ fn build_index_scan_plan(
         partition: linkrs_storage::PartitionSelector::All,
         partition_id_range,
         projection,
-        limit: None,
-        offset: 0,
+        limit,
+        offset,
         read_timestamp,
     })
 }
@@ -482,6 +488,8 @@ mod tests {
                     value: Value::Int(2024),
                 },
                 projection: IndexProjection::RowIdOnly,
+                limit: None,
+                offset: 0,
                 output_layout: output_layout.clone(),
                 partition_range: None,
                 cursor: Some(Box::new(FakeIndexCursor::new(vec![IndexRow::RowId(
@@ -531,6 +539,8 @@ mod tests {
                     value: Value::Int(2024),
                 },
                 projection: IndexProjection::Columns(vec!["since".to_string()]),
+                limit: None,
+                offset: 0,
                 output_layout: output_layout.clone(),
                 partition_range: None,
                 cursor: Some(Box::new(FakeIndexCursor::new(vec![IndexRow::Covering {
@@ -633,6 +643,8 @@ mod tests {
                     value: Value::string("Alice"),
                 },
                 projection: IndexProjection::Columns(vec!["name".to_string(), "age".to_string()]),
+                limit: None,
+                offset: 0,
                 output_layout: output_layout.clone(),
                 partition_range: None,
                 cursor: Some(Box::new(FakeIndexCursor::new(vec![IndexRow::Covering {

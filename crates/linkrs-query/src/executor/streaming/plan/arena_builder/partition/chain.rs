@@ -326,12 +326,21 @@ fn local_distinct_topn<'a>(
         [direction] => *direction,
         _ => return None,
     };
-    (key_column == dedup.col_names()[0]).then_some((
+    if key_column != dedup.col_names()[0] {
+        return None;
+    }
+    let push_reason = match dedup.column_types() {
+        [] => "runtime".to_string(),
+        [linkrs_core::DataType::BigInt] => "typed".to_string(),
+        _ => return None,
+    };
+    Some((
         dedup,
         BlockingSpec::LocalTopKDistinct {
             key_name: key_column,
             limit: *n,
             direction,
+            push_reason,
         },
     ))
 }

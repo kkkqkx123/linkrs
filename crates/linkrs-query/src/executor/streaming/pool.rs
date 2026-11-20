@@ -672,9 +672,14 @@ impl MorselWorkerPool {
                 &batch.buffered_bytes,
                 &batch.buffered_bytes_peak,
             );
+            let elapsed_us = started.elapsed().as_micros() as u64;
             batch
                 .worker_time_us
-                .fetch_add(started.elapsed().as_micros() as u64, Ordering::Relaxed);
+                .fetch_add(elapsed_us, Ordering::Relaxed);
+            batch
+                .runtime
+                .profile()
+                .record_partition_work_time(index, elapsed_us);
 
             if let Err(error) = result {
                 batch.stop.store(true, Ordering::Relaxed);

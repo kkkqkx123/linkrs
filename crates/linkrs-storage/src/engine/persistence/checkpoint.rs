@@ -513,6 +513,7 @@ impl crate::engine::persistence_coordinator::PersistenceCoordinator {
         // durable. Failure to reclaim space is logged instead of failing an
         // otherwise complete checkpoint.
         if let Err(error) = self.cleanup_old_checkpoints(self.config.checkpoint_retention_count) {
+            self.record_reclaim_failure();
             log::warn!("Checkpoint retention failed: {error}");
         }
 

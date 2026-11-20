@@ -153,6 +153,11 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_source_spec(
                 predicate: Box::new(predicate),
                 projection,
                 residual_filter: None,
+                order_proof: scan_node.order_proof().map(|proof| proof.reason.clone()),
+                limit: scan_node
+                    .limit()
+                    .and_then(|value| usize::try_from(value).ok()),
+                offset: scan_node.offset(),
                 output_layout,
             })
         }

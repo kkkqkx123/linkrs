@@ -31,6 +31,12 @@ tail -n 5 "$OUT/unit-local-topk.log"
 cargo test -p linkrs-query --test parallel_partition_execution > "$OUT/parallel.log" 2>&1
 echo "PARALLEL_EXIT=$?"
 tail -n 5 "$OUT/parallel.log"
+cargo test -p linkrs-query --test predicate_comparator_proof > "$OUT/predicate-proof.log" 2>&1
+echo "PREDICATE_PROOF_EXIT=$?"
+tail -n 5 "$OUT/predicate-proof.log"
+cargo test -p linkrs-query --test order_limit_pushdown_proof > "$OUT/order-limit-proof.log" 2>&1
+echo "ORDER_LIMIT_PROOF_EXIT=$?"
+tail -n 5 "$OUT/order-limit-proof.log"
 cargo test -p linkrs-query --test dql > "$OUT/dql.log" 2>&1
 echo "DQL_EXIT=$?"
 tail -n 5 "$OUT/dql.log"
@@ -51,7 +57,7 @@ DB="$ROOT/parity/lsqb-sf0.1-v4/db"
 echo "=== database size before ==="
 du -sb "$DB"
 find "$DB/wal" -maxdepth 1 -type f | wc -l
-find "$DB/checkpoint" -mindepth 1 -maxdepth 1 -type d | wc -l
+find "$DB/checkpoint" -mindepth 1 -maxdepth 1 -type d -name 'checkpoint_*' | wc -l
 
 BIN=target/release/linkrs-parity-bench
 SKIP="$OUT/skip-gate.txt"
@@ -78,7 +84,7 @@ done
 echo "=== database size after ==="
 du -sb "$DB"
 find "$DB/wal" -maxdepth 1 -type f | wc -l
-find "$DB/checkpoint" -mindepth 1 -maxdepth 1 -type d | wc -l
+find "$DB/checkpoint" -mindepth 1 -maxdepth 1 -type d -name 'checkpoint_*' | wc -l
 
 echo "=== resource table ==="
 python3 - "$OUT" <<'PY'

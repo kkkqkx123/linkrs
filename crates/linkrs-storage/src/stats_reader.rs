@@ -31,6 +31,12 @@ pub struct ColumnStatsSnapshot {
     pub min_value: Option<Value>,
     /// Global maximum over non-null values.
     pub max_value: Option<Value>,
+    /// Whether `min_value`/`max_value` are exact for the relation at the
+    /// snapshot timestamp. Zone-map bounds widen after writes and deletions,
+    /// so they are pruning envelopes only. Only a proven full scan may set
+    /// this flag; consumers must use `exact_min_value`/`exact_max_value` for
+    /// results rather than reading the bounds directly.
+    pub bounds_are_exact: bool,
 }
 
 /// Immutable point-in-time cardinality for one vertex tag or edge type.
@@ -86,6 +92,24 @@ impl ColumnStatsSnapshot {
         self.min_value.is_some() || self.max_value.is_some()
     }
 
+    /// Exact lower bound, available only with an exactness proof.
+    pub fn exact_min_value(&self) -> Option<&Value> {
+        if self.bounds_are_exact {
+            self.min_value.as_ref()
+        } else {
+            None
+        }
+    }
+
+    /// Exact upper bound, available only with an exactness proof.
+    pub fn exact_max_value(&self) -> Option<&Value> {
+        if self.bounds_are_exact {
+            self.max_value.as_ref()
+        } else {
+            None
+        }
+    }
+
     /// Merge `other` into `self` so that `self` covers the union of both
     /// snapshots' rows:
     /// - row counts add up;
@@ -123,6 +147,7 @@ impl ColumnStatsSnapshot {
         }
         merge_min(&mut self.min_value, other.min_value.clone());
         merge_max(&mut self.max_value, other.max_value.clone());
+        self.bounds_are_exact &= other.bounds_are_exact;
     }
 
     /// Attach an HLL estimator and refresh the distinct estimate from it.
@@ -229,6 +254,7 @@ mod tests {
             hll: None,
             min_value: min,
             max_value: max,
+            bounds_are_exact: false,
         }
     }
 
@@ -238,6 +264,22 @@ mod tests {
             hll.add_value(&Value::Int(*v));
         }
         hll
+    }
+
+    #[test]
+    fn pruning_bounds_are_never_reported_as_exact() {
+        let mut snapshot = snap(4, Some(Value::Int(1)), Some(Value::Int(9)));
+        assert!(snapshot.has_envelope());
+        assert_eq!(snapshot.exact_min_value(), None);
+        assert_eq!(snapshot.exact_max_value(), None);
+
+        snapshot.bounds_are_exact = true;
+        let mut other = snap(4, Some(Value::Int(2)), Some(Value::Int(8)));
+        other.bounds_are_exact = false;
+        snapshot.absorb(&other);
+        assert!(!snapshot.bounds_are_exact);
+        assert_eq!(snapshot.exact_min_value(), None);
+        assert_eq!(snapshot.exact_max_value(), None);
     }
 
     #[test]

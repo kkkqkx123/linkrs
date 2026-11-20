@@ -171,6 +171,8 @@ pub enum SourceOperatorKind {
         tag: String,
         predicate: BoundIndexPredicate,
         projection: IndexProjection,
+        limit: Option<usize>,
+        offset: usize,
         output_layout: Arc<SlotLayout>,
         partition_range: Option<Range<i64>>,
         cursor: Option<Box<dyn IndexCursor<Row = IndexRow>>>,
@@ -363,6 +365,8 @@ impl SourceOperator {
                 tag,
                 predicate,
                 projection,
+                limit,
+                offset,
                 output_layout,
                 ..
             } => SourceOperatorKind::IndexScan {
@@ -373,6 +377,8 @@ impl SourceOperator {
                 tag: tag.clone(),
                 predicate: (**predicate).clone(),
                 projection: projection.clone(),
+                limit: *limit,
+                offset: *offset,
                 output_layout: output_layout.clone(),
                 partition_range: None,
                 cursor: None,

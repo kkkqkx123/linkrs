@@ -30,7 +30,7 @@
 
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Instant, SystemTime};
 
@@ -140,6 +140,10 @@ pub struct PersistenceCoordinator {
     /// session exits. Entered/exited by
     /// [`crate::engine::graph_storage::bulk_load::BulkLoadSession`].
     bulk_load_sessions: AtomicUsize,
+    /// Failed retention/reclaim passes. Durability wins over disk space, so
+    /// failures are logged instead of failing a checkpoint; this counter makes
+    /// them observable without log scraping.
+    reclaim_failures: AtomicU64,
 }
 
 impl PersistenceCoordinator {
@@ -249,7 +253,7 @@ impl PersistenceCoordinator {
                 ))
             })?;
             let retention_policy = RetentionPolicy {
-                max_snapshots: config.checkpoint_retention_count.max(1),
+                max_snapshots: config.snapshot_retention_count.max(1),
                 ..RetentionPolicy::default()
             };
             let manager = SnapshotManager::with_retention_policy(
@@ -288,6 +292,7 @@ impl PersistenceCoordinator {
             storage_callbacks: Arc::new(EventSubscriptions::new()),
             checkpoint_watermark: RwLock::new((None, CommitLsn::ZERO)),
             bulk_load_sessions: AtomicUsize::new(0),
+            reclaim_failures: AtomicU64::new(0),
         })
     }
 
@@ -372,6 +377,17 @@ impl PersistenceCoordinator {
     /// this process lifetime.
     pub(crate) fn checkpoint_watermark(&self) -> (Option<Timestamp>, CommitLsn) {
         *self.checkpoint_watermark.read()
+    }
+
+    /// Count a failed retention/reclaim pass. The error is still propagated
+    /// to the caller so it can log the cause; this counter makes the failure
+    /// visible to diagnostics.
+    pub fn record_reclaim_failure(&self) {
+        self.reclaim_failures.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn reclaim_failures(&self) -> u64 {
+        self.reclaim_failures.load(Ordering::Relaxed)
     }
 
     /// Notify observers that a GC pass reclaimed entries.
@@ -875,6 +891,9 @@ mod tests {
         assert!(!config.checkpoint_dir.join("checkpoint_1").exists());
         assert!(!config.checkpoint_dir.join("checkpoint_2").exists());
         assert!(config.checkpoint_dir.join("checkpoint_3").exists());
+        assert_eq!(coordinator.diagnostics().reclaim_failures, 0);
+        coordinator.record_reclaim_failure();
+        assert_eq!(coordinator.diagnostics().reclaim_failures, 1);
     }
 
     #[test]

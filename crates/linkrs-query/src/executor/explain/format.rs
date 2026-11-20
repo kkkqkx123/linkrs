@@ -66,12 +66,24 @@ pub fn format_parallel_header(plan_desc: &PlanDescription) -> String {
         } else {
             format!(", partition_counts=[{counts}]")
         };
+        let work = plan_desc
+            .partition_work_times_us
+            .iter()
+            .map(|(id, us)| format!("{id}:{us}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        let work_field = if work.is_empty() {
+            String::new()
+        } else {
+            format!(", partition_work_us=[{work}]")
+        };
         header.push_str(&format!(
-            ", requested_partitions={}, actual_partitions={}, partition_mode={}{}",
+            ", requested_partitions={}, actual_partitions={}, partition_mode={}{}{}",
             plan_desc.requested_partitions,
             plan_desc.actual_partitions,
             plan_desc.partition_count_mode,
             counts_field,
+            work_field,
         ));
     }
     if !plan_desc.count_fallback_reasons.is_empty() {
@@ -700,12 +712,14 @@ mod tests {
         plan_desc.actual_partitions = 4;
         plan_desc.partition_count_mode = "count_frontier".to_string();
         plan_desc.partition_counts = vec![(0, 7), (1, 9)];
+        plan_desc.partition_work_times_us = vec![(0, 120), (1, 480)];
         plan_desc.count_fallback_reasons = vec!["count frontier: TTL on edge type".to_string()];
 
         let table = format_plan_as_table(&plan_desc);
         assert!(table.contains("requested_partitions=4"));
         assert!(table.contains("actual_partitions=4"));
         assert!(table.contains("partition_mode=count_frontier"));
+        assert!(table.contains("partition_work_us=[0:120,1:480]"));
         assert!(table.contains("partition_counts=[0:7,1:9]"));
         assert!(table.contains("count_fallback=[count frontier: TTL on edge type]"));
 

@@ -194,9 +194,7 @@ impl IndexCursor for EdgeIndexCursor {
             ));
             self.emitted += 1;
             if self.limit.is_some_and(|limit| self.emitted >= limit) {
-                if self.current_range + 1 >= self.shard_iterators.len() {
-                    self.exhausted = true;
-                }
+                self.exhausted = true;
                 break;
             }
         }
