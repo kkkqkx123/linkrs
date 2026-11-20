@@ -13,7 +13,7 @@ use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashSet};
 use std::sync::Arc;
 
-/// Lazy forward iterator over a generation chain for a single shard.
+/// Forward iterator over a generation chain for a single shard.
 ///
 /// Each generation is already sorted by key. A k-way merge keeps the output
 /// globally sorted while preserving MVCC chain semantics: the newest
@@ -240,6 +240,9 @@ fn pin_chain_manifests(
 #[cfg(test)]
 mod chain_merge_tests {
     use super::*;
+    use crate::cursor::{IndexCursor, IndexPredicate, PartitionSelector};
+    use linkrs_core::types::VertexId;
+    use linkrs_core::wal::EntityRef;
 
     fn stream(keys: &[&str], created_ts: u64) -> EntryStream {
         keys.iter()
@@ -272,6 +275,58 @@ mod chain_merge_tests {
             .map(|(key, _)| String::from_utf8(key).expect("utf8 key"))
             .collect();
         assert_eq!(keys, ["a", "b", "c", "d", "e"]);
+    }
+
+    #[test]
+    fn cursor_limit_holds_across_batches_and_shards() {
+        let make_shard = |ids: &[u64]| {
+            let entries = ids
+                .iter()
+                .map(|id| {
+                    (
+                        id.to_be_bytes().to_vec(),
+                        IndexRecord::new(10)
+                            .with_entity_ref(EntityRef::Vertex(VertexId::from(*id))),
+                    )
+                })
+                .collect::<Vec<_>>()
+                .into_iter();
+            let streams = vec![entries];
+            let mut heap = BinaryHeap::new();
+            if let Some((key, _)) = streams[0].as_slice().first() {
+                heap.push(Reverse((key.clone(), 0)));
+            }
+            ChainForwardIterator {
+                streams,
+                heap,
+                read_ts: 20,
+                seen: HashSet::new(),
+                tombstoned: HashSet::new(),
+            }
+        };
+        let plan = IndexScanPlan {
+            space: "space".into(),
+            index_id: 1,
+            predicate: IndexPredicate::All,
+            partition: PartitionSelector::All,
+            partition_id_range: None,
+            projection: None,
+            limit: Some(2),
+            offset: 0,
+            read_timestamp: 20,
+        };
+        let mut cursor = VertexIndexCursor::new(
+            vec![make_shard(&[1, 2]), make_shard(&[3, 4])],
+            &plan,
+            None,
+            vec![],
+        );
+        let mut rows = 0;
+        for _ in 0..4 {
+            rows += cursor.next_batch(1).expect("batch").len();
+        }
+        assert_eq!(rows, 2);
+        assert!(cursor.is_exhausted());
     }
 
     #[test]

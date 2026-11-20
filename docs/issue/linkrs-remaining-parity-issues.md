@@ -474,3 +474,94 @@ devs release 编译通过；local topk 4/4、typed group 5/5、并行分区 27/2
 两轮结果稳定，整数逐值相等，`spill_rows=0`。库体积保持约 33.7 MB，目录为 2 个 checkpoint、0 个快照、2 个 WAL 文件。微扫描算子与查询结果不变。
 
 日志、两轮 JSON、EXPLAIN 与资源表回填 `perf-data/parity/results/2026-11-18/next-stage-localtopk-final/`。分区/聚合进一步融合与微扫描下推仍按设计文档的精确性门槛执行，未在当前数据中开放。
+
+## 28. 模块设计审查后的收敛修改
+
+完整分析写入 `docs/plan/next-stage-module-design-review.md`。本轮按审查结论做了局部调整，未重写模块：
+
+- `LocalTopKDistinct` 改为首块决定模式：typed I64 键走 O(k) 堆路径；其他形状从首块起 pass-through，由全局 Distinct/TopN 负责去重排序。删除完整 `seen_values` 和基于 `Debug` 的本地排序。typed 模式支持 selection gather，rowless chunk 不再因 `visible_indices` 依赖 rows 长度而丢行。
+- `build_topn_spec` 对 limit 做 checked conversion，避免 `i64 -> u32` 回绕。
+- WAL 回收保留 checkpoint seq 与 safe LSN 两条判据：前者因 `set_checkpoint_seq` 会刷新活动文件头而安全；只使用 LSN 的实测会让 WAL 从 2 个增至 6 个、库体积超过 50 MB。仍保留一个 retired 段作为回退。
+- 拆分 checkpoint 与快照保留配置：新增 `snapshot_retention_count` 与 `DatabaseConfig::with_snapshot_retention`，快照策略不再被 checkpoint 恢复点数量隐式约束。
+- typed group count 复用 identity 列的非空证明，`count(h)` 不再仅因参数不是标量 typed 列而回退通用表。
+
+devs release 编译通过；local topk 3/3、typed group 5/5、并行分区 27/27、DQL 324/324、checkpoint 保留 2/2、WAL writer 24/24、embedded config 通过、storage lib 全量通过。两轮固定门 `actual=10`：`distinct_limit` 中位数 98.35 / 127.76 ms，`group_by_count` 110.06 / 131.36 ms；结果逐值一致，`spill_rows=0`。本轮数值波动比上一轮更大，后续应结合每分区偏斜指标判断，不据单轮下结论。
+
+库体积约 38 MB，目录为 2 个 checkpoint、0 个快照、3 个 WAL 文件。日志与指标回填 `perf-data/parity/results/2026-11-18/design-review-final/`。
+
+## 29. 剩余验证与修改方向
+
+补充验证已完成，方向文档写入 `docs/plan/next-stage-verification-and-directions.md`：
+
+- `LocalTopKDistinct` 新增重复键、并列、limit 大于局部行数、rowless typed、selection gather、NULL/字符串 pass-through、零 limit 回归测试；typed group count 新增 identity `COUNT` 参数测试。devs 上 6/6 与 6/6 通过。
+- 额外执行 4 轮固定门，加上此前 2 轮共 6 轮：`actual=10`、`actual_partitions=10`、`result` 逐值稳定、`spill_rows=0`；`distinct_limit` 中位数范围 81.88–127.76 ms，`group_by_count` 83.45–131.36 ms。波动不能由结果差异解释，先补偏斜和系统负载口径再判断性能。
+- 资源收敛约 42.1 MB、2 个 checkpoint、0 个快照、2 个 WAL 数据文件加 `checkpoint.meta`；gate 脚本的 checkpoint 计数已排除 `manifests`。
+- 明确修改顺序：计划期类型/nullable 证明与 EXPLAIN 原因 → 可观测性字段 → typed `SUM(_expand_count)` → CBO 分区成本 → 存储 exactness token 与微扫描下推 → 回收失败指标。未证明的下推保持关闭，全局 Distinct/TopN 保留为最终权威。
+
+原始指标：`perf-data/parity/results/2026-11-18/design-review-final/`、`perf-data/parity/results/2026-11-18/design-review-repeat/`。
+
+## 30. 分析项落地与最终回测
+
+按 `docs/plan/next-stage-verification-and-directions.md` 的修改方向完成以下实现：
+
+- 计划期类型守卫：已知非 `BigInt` 去重键不再下发 `LocalTopKDistinct`；EXPLAIN 输出 `local_topk:pushed:typed|runtime`，10 个分区均可读。
+- 分区 work time 进入 ProfileBoard/EXPLAIN，示例分区范围约 77.8–106.3 ms，偏斜比约 1.37，可解释跨轮波动。
+- `typed_group_count` 复用 identity validity proof，并支持 `SUM(_expand_count)` 定点累加，deopt 按模式生成 `Count` 或 `Sum`。
+- `desired_partition_count` 用固定成本与每分区成本按 `saving - overhead` 选择分区数；零成本配置保持原结果。
+- checkpoint 计数排除 `manifests` 目录。
+
+重新收集的固定门结果：`distinct_limit` 105.05 / 108.39 ms，`group_by_count` 95.71 / 103.66 ms；`actual=10`、`actual_partitions=10`、结果逐值一致、`spill_rows=0`。库体积约 38.4 MB，2 个 checkpoint、0 个快照、2 个 WAL 数据文件。指标目录：`perf-data/parity/results/2026-11-18/design-review-implemented/`。
+
+仍未开放：存储 exactness token、id-range/order-limit 下推、近似元数据计数、typed 命中与回收失败计数。这些项缺少消费者或精确性证明，不应在未证明前改变结果路径。
+
+## 31. 剩余路径证明与比较器统一
+
+证明设计写入 `docs/plan/remaining-paths-proof-design.md`。已完成并验证：
+
+- `ColumnStatsSnapshot` 增加 `bounds_are_exact` 与 exact-only 访问器；zone-map 生产者一律标记非精确，`absorb` 任一侧非精确即降级。新增反例测试确认 pruning bounds 永不作为结果边界。
+- 修复比较器分歧：存储范围谓词和 zone-map 统一到 `Value::cmp`；`ColumnEqual` 改用 `PartialEq`，避免 Float NaN 被当作相等。
+- 新增 `predicate_comparator_proof`：11 个代表值 × 5 个操作符 × 全部标量字面量与 `BinaryOperationEvaluator` 交叉对拍，并覆盖 NULL/missing property。
+- gate 增加 `PREDICATE_PROOF_EXIT`。
+
+全量验证：storage lib 1409 passed、predicate proof 2 passed、DQL 324 passed、parallel 27 passed；gate 两轮 `actual=10`、`actual_partitions=10`、结果逐值一致、`spill_rows=0`。固定门为 `distinct_limit` 107.70 / 101.88 ms，`group_by_count` 113.90 / 98.77 ms，库体积约 38.5 MB。指标目录：`perf-data/parity/results/2026-11-18/proof-validation/`。
+
+后续修改方向：id-range/order-limit 下推仍关闭，需先提供比较器之外的 snapshot/TTL/staged/索引顺序 token；元数据计数继续不是强一致结果；typed 命中与回收失败计数按证明文档指定的模块暴露。
+
+## 32. order-limit 下推验证
+
+新增 `crates/linkrs-query/tests/order_limit_pushdown_proof.rs`，直接对拍 `OrderedCodec` 字节序与执行器 `compare_values`；gate 增加 `ORDER_LIMIT_PROOF_EXIT`。验证结论：
+
+- 单类型有限样本（Bool、整数、有限浮点、字符串、常规时间日期、Decimal、Uuid）索引序与排序序一致。
+- NULL 使用 `encode()` 时排在标量之前，与排序的 NULL-last 不一致；`encode_null_last()` 才一致，但当前索引键未使用。
+- NaN、跨物理整数类型、跨年份 999/1000 的 Date 都不满足比较器一致性。
+- `key_builder` 新增测试确认同值索引键按 entity id 排序；执行器稳定排序按输入顺序处理并列，LIMIT 不能交给索引切分。
+- TTL/staged write 与 offset 语义仍无 token。
+
+因此 order-limit 仍保持关闭。后续必须先提供包含类型、nullable/编码、NaN、日期范围、tie-break、TTL/staged-write 的 `IndexOrderProof`，并在 EXPLAIN 记录 pushed/unpushed；全局 TopN 继续作为最终权威。
+
+验证：order proof 5 passed、key_builder 5 passed、predicate proof 2 passed、storage lib 1409 passed、DQL 324 passed、parallel 27 passed。固定门 `distinct_limit` 111.84 / 94.31 ms，`group_by_count` 105.83 / 100.98 ms，`actual=10`、结果逐值一致、`spill_rows=0`，库体积约 38.5 MB。指标目录：`perf-data/parity/results/2026-11-18/order-limit-proof/`。
+
+## 33. 最终设计收敛与证明 token 落地
+
+完整分析与最终设计写入 `docs/plan/remaining-paths-final-design.md`。本轮新增：
+
+- `IndexOrderProof`：唯一、单列、非空、无 partial index、codec 兼容标量类型才生成证明；TopN 规则要求单列排序键、方向一致、无 residual filter、正 limit；Limit 规则拒绝溢出、负 offset/count、residual filter 与已有 order_by；proof reason 进入 EXPLAIN。
+- 重要发现：物理转换从未把逻辑 IndexScan 的 limit/order_by 传入 `IndexScanPlan`，当前没有执行期 order-limit 下推；cursor 跨 shard 顺序串联也没有全局有序证明。因此本轮只收敛逻辑改写，不开放物理截断。
+- `ColumnarStats` 增加 typed group hit/fallback 计数并进入 columnar summary。
+- `PersistenceCoordinator` 增加 `reclaim_failures`，checkpoint retention 失败时自增，`PersistenceDiagnostics` 暴露。
+
+验证：query lib 2313 passed、storage lib 1409 passed、gate 全绿；固定门 `distinct_limit` 101.13 / 98.25 ms，`group_by_count` 100.49 / 92.46 ms，`actual=10`、结果逐值一致、`spill_rows=0`，库体积约 38.6 MB。指标目录：`perf-data/parity/results/2026-11-18/final-design/`。
+
+后续仅在完成 cursor 跨 shard 全局有序证明、物理 limit/offset 接线、pushed/unpushed 对拍后才开放 order-limit；bench JSON 接入 `reclaim_failures` 需要先补 embedded API accessor。
+
+## 34. 代码实现缺陷单独修复
+
+新增独立分析文档 `docs/plan/current-code-implementation-defects.md`，把实现缺陷与改进项立项判断分开。本轮修复：
+
+- 打通 IndexScan 的 limit/offset 物理链路：SourceSpec、SourceOperatorKind、IndexScanPlan 均消费 pushed 值；
+- 修正 Limit 规则：offset 与 emit count 分离，拒绝 UNBOUNDED、负数、零 count 与溢出；
+- `ChainForwardIterator` 改为跨 generation 的 k 路归并，保证全局 key 顺序，同时保留 newest 优先的 MVCC 语义；
+- TopN 规则在写入 limit 时清零 offset 并要求 IndexOrderProof；
+- 新增跨 generation 有序、newest 优先、cursor offset/limit 与规则守卫测试。
+
+实现缺陷修复不改变改进项立项结论。验证：query lib 2313 passed、storage lib 1412 passed、gate 全绿；固定门 `distinct_limit` 93.22 / 93.56 ms，`group_by_count` 99.41 / 98.79 ms，`actual=10`、结果逐值一致、`spill_rows=0`，库体积约 38.7 MB。指标目录：`perf-data/parity/results/2026-11-18/implementation-defects/`。
