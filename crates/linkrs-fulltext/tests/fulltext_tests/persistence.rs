@@ -12,14 +12,13 @@
 use std::sync::Arc;
 use tempfile::TempDir;
 
-use linkrs_fulltext::{Bm25Params, EngineType, FulltextConfig, FulltextIndexManager};
+use linkrs_fulltext::{Bm25Params, FulltextBackendKind, FulltextConfig, FulltextIndexManager};
 
 fn create_manager_with_path(path: &std::path::Path) -> Arc<FulltextIndexManager> {
     let config = FulltextConfig {
         enabled: true,
         backend: Default::default(),
         index_path: path.to_path_buf(),
-        default_engine: EngineType::Bm25,
         es: Default::default(),
         sync: linkrs_fulltext::SyncConfig::default(),
         tantivy: Default::default(),
@@ -39,7 +38,7 @@ async fn test_basic_index_persistence() {
         let manager = create_manager_with_path(temp_dir.path());
 
         manager
-            .create_index(1, "Article", "content", Some(EngineType::Bm25))
+            .create_index(1, "Article", "content")
             .await
             .expect("Failed to create index");
 
@@ -66,7 +65,7 @@ async fn test_document_persistence_after_restart() {
         let manager = create_manager_with_path(temp_dir.path());
 
         manager
-            .create_index(1, "Article", "content", Some(EngineType::Bm25))
+            .create_index(1, "Article", "content")
             .await
             .expect("Failed to create index");
 
@@ -102,7 +101,7 @@ async fn test_multiple_documents_persistence() {
         let manager = create_manager_with_path(temp_dir.path());
 
         manager
-            .create_index(1, "Article", "content", Some(EngineType::Bm25))
+            .create_index(1, "Article", "content")
             .await
             .expect("Failed to create index");
 
@@ -140,7 +139,7 @@ async fn test_metadata_persistence() {
         let manager = create_manager_with_path(temp_dir.path());
 
         manager
-            .create_index(1, "Article", "content", Some(EngineType::Bm25))
+            .create_index(1, "Article", "content")
             .await
             .expect("Failed to create index");
 
@@ -157,7 +156,7 @@ async fn test_metadata_persistence() {
     assert_eq!(metadata.space_id, 1);
     assert_eq!(metadata.tag_name, "Article");
     assert_eq!(metadata.field_name, "content");
-    assert_eq!(metadata.engine_type, EngineType::Bm25);
+    assert_eq!(metadata.backend, FulltextBackendKind::Local);
 }
 
 /// TC-FT-PERSIST-006: Multi-Space Persistence
@@ -169,12 +168,12 @@ async fn test_multi_space_persistence() {
         let manager = create_manager_with_path(temp_dir.path());
 
         manager
-            .create_index(1, "Article", "content", Some(EngineType::Bm25))
+            .create_index(1, "Article", "content")
             .await
             .expect("Failed to create index for space 1");
 
         manager
-            .create_index(2, "Article", "content", Some(EngineType::Bm25))
+            .create_index(2, "Article", "content")
             .await
             .expect("Failed to create index for space 2");
 
@@ -228,7 +227,7 @@ async fn test_stats_persistence() {
         let manager = create_manager_with_path(temp_dir.path());
 
         manager
-            .create_index(1, "Article", "content", Some(EngineType::Bm25))
+            .create_index(1, "Article", "content")
             .await
             .expect("Failed to create index");
 
@@ -262,7 +261,7 @@ async fn test_deleted_document_persistence() {
         let manager = create_manager_with_path(temp_dir.path());
 
         manager
-            .create_index(1, "Article", "content", Some(EngineType::Bm25))
+            .create_index(1, "Article", "content")
             .await
             .expect("Failed to create index");
 
@@ -306,7 +305,7 @@ async fn test_dropped_index_persistence() {
         let manager = create_manager_with_path(temp_dir.path());
 
         manager
-            .create_index(1, "Article", "content", Some(EngineType::Bm25))
+            .create_index(1, "Article", "content")
             .await
             .expect("Failed to create index");
 
@@ -341,7 +340,6 @@ async fn test_custom_bm25_params_persistence() {
         enabled: true,
         backend: Default::default(),
         index_path: temp_dir.path().to_path_buf(),
-        default_engine: EngineType::Bm25,
         es: Default::default(),
         sync: linkrs_fulltext::SyncConfig::default(),
         tantivy: linkrs_fulltext::TantivyConfig {
@@ -357,12 +355,14 @@ async fn test_custom_bm25_params_persistence() {
         let manager =
             Arc::new(FulltextIndexManager::new(config).expect("Failed to create manager"));
         manager
-            .create_index(1, "Article", "content", Some(EngineType::Bm25))
+            .create_index(1, "Article", "content")
             .await
             .expect("Failed to create index");
     }
 
-    let meta_path = temp_dir.path().join("space_ft_1_Article_content/meta.json");
+    let meta_path = temp_dir
+        .path()
+        .join("space_ft_1_7_Article_7_content/meta.json");
     assert!(meta_path.exists(), "Index meta.json should exist");
     let meta: serde_json::Value = serde_json::from_str(
         &std::fs::read_to_string(&meta_path).expect("Failed to read meta.json"),

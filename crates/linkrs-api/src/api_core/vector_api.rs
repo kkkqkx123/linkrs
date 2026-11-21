@@ -228,7 +228,7 @@ impl VectorApi {
                 index_name: w.index_name,
                 status: "Active".to_string(),
                 doc_count: 0,
-                engine: "vector".to_string(),
+                engine: self.coordinator.backend().engine_name().to_string(),
                 last_updated: None,
             })
             .collect()

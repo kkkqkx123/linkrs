@@ -116,7 +116,7 @@ async fn purge_field_granularity_recreates_collection() {
     assert_eq!(
         coordinator
             .backend()
-            .count("space_vec_1_user_embedding")
+            .count("space_vec_1_4_user_9_embedding")
             .await
             .expect("count"),
         1
@@ -135,7 +135,7 @@ async fn purge_field_granularity_recreates_collection() {
     assert_eq!(
         coordinator
             .backend()
-            .count("space_vec_1_user_embedding")
+            .count("space_vec_1_4_user_9_embedding")
             .await
             .expect("count"),
         0,
@@ -369,14 +369,14 @@ async fn temp_naming_isolates_granularities() {
     let field_temp = coordinator
         .index_manager()
         .temp_name_for(1, "user", "embedding", 7);
-    assert_eq!(field_temp, "space_vec_1_user_embedding.rebuild-7");
+    assert_eq!(field_temp, "space_vec_1_4_user_9_embedding.rebuild-7");
     coordinator
         .index_manager()
         .set_granularity(CollectionGranularity::Space);
     let space_temp = coordinator
         .index_manager()
         .temp_name_for(1, "user", "embedding", 7);
-    assert_eq!(space_temp, "space_vec_1.rebuild-7__user_embedding");
+    assert_eq!(space_temp, "space_vec_1.rebuild-7__4_user_9_embedding");
     for temp in [&field_temp, &space_temp] {
         assert!(VectorBackend::is_temp_collection(temp));
         let (live, generation) =
@@ -435,7 +435,7 @@ async fn temp_collections_are_invisible_to_search() {
     assert_eq!(
         coordinator
             .backend()
-            .count("space_vec_1_user_embedding")
+            .count("space_vec_1_4_user_9_embedding")
             .await
             .expect("live count"),
         0,
@@ -519,7 +519,7 @@ async fn rebuild_failure_before_publish_leaves_live_untouched() {
     assert_eq!(
         coordinator
             .backend()
-            .count("space_vec_1_user_embedding")
+            .count("space_vec_1_4_user_9_embedding")
             .await
             .expect("count"),
         1,
@@ -527,7 +527,7 @@ async fn rebuild_failure_before_publish_leaves_live_untouched() {
     );
     let kept = coordinator
         .backend()
-        .get_vector("space_vec_1_user_embedding", "live-point")
+        .get_vector("space_vec_1_4_user_9_embedding", "live-point")
         .await
         .expect("get")
         .expect("live point must survive");
@@ -594,7 +594,7 @@ async fn field_publish_swaps_collection_and_restore_reverses_it() {
     assert_eq!(
         coordinator
             .backend()
-            .count("space_vec_1_user_embedding")
+            .count("space_vec_1_4_user_9_embedding")
             .await
             .expect("count"),
         1,
@@ -603,7 +603,7 @@ async fn field_publish_swaps_collection_and_restore_reverses_it() {
     let (live_points, _) = coordinator
         .backend()
         .scroll(
-            "space_vec_1_user_embedding",
+            "space_vec_1_4_user_9_embedding",
             100,
             None,
             Some(false),
@@ -619,7 +619,7 @@ async fn field_publish_swaps_collection_and_restore_reverses_it() {
         .await
         .expect("collection scan")
         .into_iter()
-        .filter(|name| name.starts_with("space_vec_1_user_embedding.old-"))
+        .filter(|name| name.starts_with("space_vec_1_4_user_9_embedding.old-"))
         .collect();
     assert_eq!(backups.len(), 1, "field publish must retain one backup");
     assert_eq!(
@@ -646,7 +646,7 @@ async fn field_publish_swaps_collection_and_restore_reverses_it() {
     let (live_points, _) = coordinator
         .backend()
         .scroll(
-            "space_vec_1_user_embedding",
+            "space_vec_1_4_user_9_embedding",
             100,
             None,
             Some(false),

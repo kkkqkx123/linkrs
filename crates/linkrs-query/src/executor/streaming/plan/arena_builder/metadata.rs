@@ -16,6 +16,8 @@ use super::super::types::{
 };
 use crate::executor::base::ExecutionContext;
 use crate::executor::build_error::PlanBuildError;
+use crate::executor::streaming::operators::index_manage::{layout_of, IndexKind, ManageShape};
+use crate::executor::streaming::operators::spec::{FulltextManageCommand, VectorManageCommand};
 
 pub(super) fn output_contract(
     spec: &OperatorKindSpec,
@@ -832,12 +834,26 @@ pub(super) fn infer_output_layout(spec: &OperatorKindSpec, inputs: &[SlotLayout]
             col_names, ..
         }) => SlotLayout::from_names(col_names),
         OperatorKindSpec::Graph(GraphSpec::BiExpand { .. } | GraphSpec::BiTraverse { .. }) => input,
-        OperatorKindSpec::Fulltext(FulltextSpec::FulltextManage { .. })
-        | OperatorKindSpec::Vector(VectorSpec::VectorManage { .. }) => SlotLayout::from_names(&[
-            "action".to_string(),
-            "name".to_string(),
-            "status".to_string(),
-        ]),
+        OperatorKindSpec::Fulltext(FulltextSpec::FulltextManage { command, .. }) => layout_of(
+            IndexKind::Fulltext,
+            match command {
+                FulltextManageCommand::Show { .. } => ManageShape::Show,
+                FulltextManageCommand::Describe { .. } => ManageShape::Describe,
+                FulltextManageCommand::Create { .. }
+                | FulltextManageCommand::Drop { .. }
+                | FulltextManageCommand::Alter { .. } => ManageShape::Status,
+            },
+        ),
+        OperatorKindSpec::Vector(VectorSpec::VectorManage { command, .. }) => layout_of(
+            IndexKind::Vector,
+            match command {
+                VectorManageCommand::Show { .. } => ManageShape::Show,
+                VectorManageCommand::Describe { .. } => ManageShape::Describe,
+                VectorManageCommand::Create { .. } | VectorManageCommand::Drop { .. } => {
+                    ManageShape::Status
+                }
+            },
+        ),
         OperatorKindSpec::Fulltext(
             FulltextSpec::FulltextSearch { .. }
             | FulltextSpec::FulltextLookup { .. }

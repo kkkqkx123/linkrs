@@ -323,7 +323,7 @@ mod fulltext {
         ).expect("Failed to setup test space");
 
         let result = db.execute_query(
-            "CREATE FULLTEXT INDEX IF NOT EXISTS idx_article_content ON article(content) ENGINE BM25 OPTIONS (analyzer='standard')"
+            "CREATE FULLTEXT INDEX IF NOT EXISTS idx_article_content ON article(content)",
         );
         assert_query_ok(result, "CREATE FULLTEXT INDEX should succeed");
     }
@@ -342,8 +342,9 @@ mod fulltext {
         .expect("Failed to setup test space");
 
         db.execute_query(
-            "CREATE FULLTEXT INDEX IF NOT EXISTS idx_article_content ON article(content) ENGINE BM25 OPTIONS (analyzer='standard')"
-        ).expect("CREATE FULLTEXT INDEX should succeed");
+            "CREATE FULLTEXT INDEX IF NOT EXISTS idx_article_content ON article(content)",
+        )
+        .expect("CREATE FULLTEXT INDEX should succeed");
 
         // Insert articles
         db.execute_query(
@@ -374,8 +375,9 @@ mod fulltext {
         .expect("Failed to setup test space");
 
         db.execute_query(
-            "CREATE FULLTEXT INDEX IF NOT EXISTS idx_article_content ON article(content) ENGINE BM25 OPTIONS (analyzer='standard')"
-        ).expect("CREATE FULLTEXT INDEX should succeed");
+            "CREATE FULLTEXT INDEX IF NOT EXISTS idx_article_content ON article(content)",
+        )
+        .expect("CREATE FULLTEXT INDEX should succeed");
 
         // Insert articles
         db.execute_query(
@@ -406,8 +408,9 @@ mod fulltext {
         .expect("Failed to setup test space");
 
         db.execute_query(
-            "CREATE FULLTEXT INDEX IF NOT EXISTS idx_article_content ON article(content) ENGINE BM25 OPTIONS (analyzer='standard')"
-        ).expect("CREATE FULLTEXT INDEX should succeed");
+            "CREATE FULLTEXT INDEX IF NOT EXISTS idx_article_content ON article(content)",
+        )
+        .expect("CREATE FULLTEXT INDEX should succeed");
 
         // Insert articles
         db.execute_query(

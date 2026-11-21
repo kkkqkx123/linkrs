@@ -1,7 +1,7 @@
 use linkrs_core::Value;
 use linkrs_fulltext::{
-    EngineType, FulltextConfig, FulltextIndexManager, IndexMetadata, IndexStats, SearchError,
-    SearchResult,
+    FulltextBackendKind, FulltextConfig, FulltextIndexManager, IndexMetadata, IndexStats,
+    SearchError, SearchResult,
 };
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -19,7 +19,6 @@ impl FulltextTestContext {
             enabled: true,
             backend: Default::default(),
             index_path: temp_dir.path().to_path_buf(),
-            default_engine: EngineType::Bm25,
             es: Default::default(),
             sync: linkrs_fulltext::SyncConfig::default(),
             tantivy: Default::default(),
@@ -37,10 +36,9 @@ impl FulltextTestContext {
         space_id: u64,
         tag_name: &str,
         field_name: &str,
-        engine_type: Option<EngineType>,
     ) -> Result<String, SearchError> {
         self.manager
-            .create_index(space_id, tag_name, field_name, engine_type)
+            .create_index(space_id, tag_name, field_name)
             .await
     }
 
@@ -141,14 +139,14 @@ impl FulltextTestContext {
     }
 
     #[allow(dead_code)]
-    pub fn get_engine_type(
+    pub fn get_backend(
         &self,
         space_id: u64,
         tag_name: &str,
         field_name: &str,
-    ) -> Option<EngineType> {
+    ) -> Option<FulltextBackendKind> {
         self.get_metadata(space_id, tag_name, field_name)
-            .map(|m| m.engine_type)
+            .map(|m| m.backend)
     }
 }
 

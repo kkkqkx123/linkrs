@@ -13,9 +13,10 @@ Linkrs 的索引同步采用 **图 WAL 单真源 + SQLite Outbox 持久队列 + 
 ## 架构设计原则
 
 1. **单真源**：`Graph WAL` 唯一决定提交；`SQLite outbox` 与向量存储均为 WAL 的派生，可重放重建。
-2. **最终一致，可观测**：`frontier_lag / degraded / dead_letter / disabled_skips` 可度量，向量滞后可经 `wait_for_minimum_lsn` 显式等待。
-3. **内核统一，策略分支**：`stage → WAL → materialize → claim/ack/frontier` 主链路对 `Local/Qdrant` 统一；`batch / retry / disabled / 一致性超时 / 物理回收` 按后端策略化。
-4. **失败分类再重试**：`Retryable / NonRetryable / Auth / Disabled` 显式分类，避免 `DimensionMismatch` 无限重试，`Disabled` 保留不进 `dead_letter`。
+2. **最终一致，可观测**：`frontier_lag / degraded / dead_letter` 可度量，向量滞后可经 `wait_for_minimum_lsn` 显式等待。
+3. **内核统一，策略分支**：`stage → WAL → materialize → claim/ack/frontier` 主链路对 `Local/Qdrant` 统一；`batch / retry / 一致性超时 / 物理回收` 按后端策略化。
+4. **失败分类再重试**：`Retryable / NonRetryable / Auth` 显式分类，避免 `DimensionMismatch` 无限重试。
+5. **可用性由装配决定**：向量子系统不可用时根本不构造 `VectorBackend`，不存在"存在但每次调用都失败"的引擎对象，因此投递路径不需要任何 `disabled` 状态位判定。
 5. **最小化复杂度**：子 crate 维持严格 DAG `metrics → core → config → search → sync → transaction → storage → query → api → server`；`VectorBackend` 零成本 `enum` 分发，无 `dyn`。
 
 ## 架构分层
@@ -91,7 +92,7 @@ Linkrs 的索引同步采用 **图 WAL 单真源 + SQLite Outbox 持久队列 + 
 - `pending_intents: DashMap<TransactionId, Vec<OutboxIntent>>` 内存暂存；`sqlite_outbox / vector_coordinator / vector_receiver / outbox_consumer{batch=128,lease=30s,max_retries=16}`。
 - `stage_intent` 按负载内容与 `index_exists` 预过滤 `target`，避免 `vector+fulltext` 各克隆一份的写放大（`ChangeType::Delete` 空属性时扇出全量逻辑索引判断）。
 - `materialize_committed_transaction` → `SqliteOutbox::materialize_commit` 事务性插入 `generation_state/commit_targets/events/idempotency` 并推进 `materialized_lsn`。
-- `retry_outbox_sync` 每目标独立 `batch_size` 预算，`claim_next` → `apply_index_mutation` → `acknowledge / retry(with backoff 100ms*2^n capped 300s) / dead_letter / retry(Disabled固定5s不计dead_letter阈值)`。成功后更新 `StatsManager::record_outbox_state + record_target_frontier_lag + record_vector_disabled_skips`。
+- `retry_outbox_sync` 每目标独立 `batch_size` 预算，`claim_next` → `apply_index_mutation` → `acknowledge / retry(with backoff 100ms*2^n capped 300s) / dead_letter`。成功后更新 `StatsManager::record_outbox_state + record_target_frontier_lag`。
 - `claim_next` `BEGIN IMMEDIATE` 串行化 + `lease_epoch` fencing，`ordering_key` 同实体栅栏（每事件唯一旧逻辑已修复），`generation_state='active'` 围栏。
 - 后台常驻：`start()` 每 `5s` 轮询，`stop()` 终止；`configure_outbox` 时校验活库、必要时从 `latest_manifest_outbox_snapshot` 或目录全扫描恢复，并打开 `VectorReceiver`。
 - 一致性：`wait_for_minimum_lsn(target,index_id,generation, commit_lsn, timeout)` 阻塞至 `frontier >= session_commit_lsn`，遇 `degraded` 抛错。
@@ -109,8 +110,8 @@ Linkrs 的索引同步采用 **图 WAL 单真源 + SQLite Outbox 持久队列 + 
 
 **位置**：`vector_sync.rs:206 / backend.rs:30 / receiver.rs:204`
 
-- `VectorBackend` `enum { Local(Arc<LocalVectorEngine>), Qdrant(Arc<VectorManager>) }` 零成本分发；`is_disabled()` 仅 Qdrant 可能 `engine.name()=="disabled"`。
-- `VectorSyncCoordinator::on_vector_change_batch` 按 `collection_name="space_{space_id}"` 聚合 `upsert/delete`，注入 `group_id="{tag}_{field}"` payload 隔离；`Disabled` 时 Qdrant 分支返回 `EngineDisabled` 使 outbox 保留重试（`disabled_skips` 计数），`Local` 永不 disabled 直接抛错。
+- `VectorBackend` 是 `Arc<dyn VectorEngineHandle>` 的薄封装，构造期选定 `Local` 或 `Qdrant`；`is_in_process()` 是唯一的能力查询，可用性不是运行期状态位。
+- `VectorSyncCoordinator::on_vector_change_batch` 按 `collection_name="space_vec_{space_id}"` 聚合 `upsert/delete`，注入长度前缀编码的 `group_id`（如 `3_a_b_1_c` 表示 `tag="a_b", field="c"`）做 payload 隔离；引擎不可用由断路器与 `EngineUnavailable`（可重试）表达，没有独立的 disabled 分支。
 - 逻辑索引 `logical_indexes: DashMap<VectorIndexLocation,IndexMetadata>` 追踪，`index_exists / list_indexes / set_index_name` 支持 `CREATE VECTOR INDEX` 名称解析与代价估算。
 - `VectorReceiver` 文件闸 `applied_lsn + receipts(HashMap<idempotency_key,commit_lsn>)`，`LSN水位+LRU窗口（8192条，retention 100k LSN）` 有界，超限按水位与最老 LSN 淘汰，早于水位的重复由 SQLite `idempotency` 去重；`record_application` 先落向量后持久 receipt（`write(tmp)+fsync+rename+dirfsync`）。
 - `point_id` 规范化：`"{vid}#{tag}#{field}"`，`vid` 以 `%23/%25` 转义 `#/%`，跨后端稳定（旧 `_` 格式的数据需重建）。
@@ -159,19 +160,19 @@ Linkrs 的索引同步采用 **图 WAL 单真源 + SQLite Outbox 持久队列 + 
 | 顺序 | `commit_lsn,intent_sequence` 全局有序 `claim ORDER BY`；同代 `generation_state='active'` 围栏；`ordering_key="{target}:{space}:{index}:{entity}"` 同实体串行栅栏 | `sqlite_outbox.rs:828,803` `manager.rs:1325` |
 | 幂等重放 | postcard 负载 + `VectorReceiver` 文件 `HashMap` LRU + SQLite `idempotency` | `receiver.rs:311` `engine.rs:560 apply_txn` |
 | 崩溃恢复 | WAL 重放 + SQLite `VACUUM INTO` 快照 + `vector_receiver_state.bin` | `startup.rs:256` `sqlite_outbox.rs:110` `receiver.rs:256` |
-| 故障降级 | `Local` 永不 disabled 抛错；`Qdrant disabled` 时保留事件固定 5s 重试，不进 `dead_letter`，`disabled_skip_count` 可观测 | `vector_sync.rs:468` `manager.rs:398` |
-| 可观测 | `SyncDiagnostics{materialized_lsn, vector_disabled_skips, targets[], indexes[]}` `OutboxStats` `frontier_lag/degraded/pending + per-target lag + disabled_skips` | `sqlite_outbox.rs:38,1339` `manager.rs:443` |
+| 故障降级 | 引擎不可用统一走断路器与 `EngineUnavailable`（可重试，按退避重试，不进 `dead_letter`）；配置未启用时不构造 `VectorBackend` | `backend.rs` `circuit_breaker.rs` |
+| 可观测 | `SyncDiagnostics{materialized_lsn, targets[], indexes[]}` `OutboxStats` `frontier_lag/degraded/pending + per-target lag` | `sqlite_outbox.rs:38,1339` `manager.rs:443` |
 
 ## 配置与差异化策略
 
-`VectorConfig.engine = Local | Qdrant`，`startup::attach_vector_coordinator` 注入 `BackendDeliveryPolicy { batch_size, lease_ms, max_retries, disabled_behavior }`。
+`VectorConfig.engine = Local | Qdrant`，`startup::attach_vector_coordinator` 注入 `BackendDeliveryPolicy { batch_size, lease_ms, max_retries, max_concurrency }`。
 
 | 策略项 | Local | Qdrant |
 |--------|-------|--------|
 | `batch_size / lease_ms` | `128 / 30s` 保持 | `512 / 60s`，`max_retries=32`（待 Phase2 策略化） |
 | 并发 | 单并发 claim + 单集合串行 apply | 规划 `claim 4 并发 + collection 并发`（Phase2） |
 | 重试分类 | `DiskFull/DimensionMismatch` 直 dead_letter | `Timeout/Unavailable` 重试，`Auth/InvalidArgument` 直 dead_letter（Phase2 `VectorErrorKind`） |
-| `Disabled` | 永不 disabled，失败抛错 | disabled 时 retry 挂起，不 ack |
+| 可用性 | 本地引擎在构造期打开目录，失败即启动错误 | `vector.qdrant.enabled = false` 时构造期返回配置错误，不产生后端 |
 | 物理回收 | `delete_collection` 删目录（`is_local && siblings==0`） | `delete_by_filter(group_id)` 逻辑删 |
 | 一致性超时 | `ryw timeout 500ms` 典型 | `ryw timeout 2000ms` 典型 |
 | 派生索引 | `maintenance_loop` `drift/rebuild/compaction` | 无，由服务端自治 |
@@ -183,7 +184,7 @@ Linkrs 的索引同步采用 **图 WAL 单真源 + SQLite Outbox 持久队列 + 
 - **回滚**：任一 Phase 回滚仅影响投递策略，不丢 WAL 真源；`SqliteOutbox` 为派生，重放 WAL 可重建。
 - **迁移**：`OUTBOX_SCHEMA_VERSION` 递增时 `SqliteOutbox::migrate` 幂等新增列/索引；`ordering_key` 语义修正对旧 `pending` 行可离线 `UPDATE` 回填；`vector_receiver_state.bin` 旧 `HashSet` 格式自动迁为 `HashMap`；`point_id` 旧 `_` 格式需重建或双删兼容。
 - **保留与截断**：`projection_state.retention_lsn + events` 归档/截断（`prune_applied_events`），与 `checkpoints/manifests` 保留联动；`VectorReceiver` `applied_lsn` 前 `K` 个 `idempotency_key` 保留。
-- **监控新增**：`sync_outbox_pending`、`sync_outbox_frontier_lag{target,index}`、`sync_vector_disabled_skips`、`sync_dead_letter_count`、`vector_local_pending_len` 告警阈值。
+- **监控新增**：`sync_outbox_pending`、`sync_outbox_frontier_lag{target,index}`、`sync_dead_letter_count`、`vector_local_pending_len` 告警阈值。
 
 ## 未来改进
 

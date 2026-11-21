@@ -347,7 +347,6 @@ fn test_stmt_category_exhaustive() {
                 "idx".to_string(),
                 "s".to_string(),
                 vec![],
-                linkrs_core::types::FulltextEngineType::Bm25,
             )),
             Ddl,
         ),

@@ -375,8 +375,9 @@ fn test_failure_policy_configuration() {
 
     let fulltext_config = linkrs::search::FulltextConfig {
         enabled: true,
+        backend: Default::default(),
+        es: Default::default(),
         index_path,
-        default_engine: linkrs::search::EngineType::Bm25,
         sync: linkrs::search::SyncConfig::default(),
         cache_size: 100,
         max_result_cache: 1000,

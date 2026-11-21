@@ -169,6 +169,7 @@ impl VectorCoordinatorBuilder {
             #[cfg(feature = "vector-qdrant")]
             if let Some(manager) = self.vector_manager {
                 crate::backend::VectorBackend::qdrant(manager)
+                    .map_err(|error| crate::SyncError::Internal(error.to_string()))?
             } else {
                 return Err(crate::SyncError::Internal(
                     "VectorBackend or VectorManager is required".to_string(),

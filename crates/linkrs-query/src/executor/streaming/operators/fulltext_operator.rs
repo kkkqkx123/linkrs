@@ -6,6 +6,7 @@ use crate::executor::streaming::chunk::DataChunk;
 use crate::executor::streaming::executor::StreamingExecutor;
 #[cfg(feature = "fulltext")]
 use crate::executor::streaming::operators::ddl_operator::make_single_row;
+use crate::executor::streaming::operators::index_manage::{manage_result, matches_show_filter};
 use crate::executor::streaming::operators::source_operator::OperatorConfig;
 use crate::executor::streaming::operators::spec::FulltextManageCommand;
 use crate::executor::streaming::runtime::ExecutionRuntime;
@@ -32,34 +33,6 @@ fn fulltext_command_info(cmd: &FulltextManageCommand) -> (&'static str, Option<&
         Alter { index_name, .. } => ("alter_fulltext_index", Some(index_name.as_str())),
         Show { pattern, .. } => ("show_fulltext_index", pattern.as_deref()),
         Describe { index_name, .. } => ("describe_fulltext_index", Some(index_name.as_str())),
-    }
-}
-
-#[cfg(feature = "fulltext")]
-fn make_manage_result(
-    output_layout: Arc<SlotLayout>,
-    action: &str,
-    name: Option<&str>,
-    status: &str,
-) -> DataChunk {
-    let name_val = name
-        .map(Value::string)
-        .unwrap_or(Value::Null(linkrs_core::NullType::Null));
-    DataChunk::new_with_layout(
-        vec![vec![Value::string(action), name_val, Value::string(status)]],
-        output_layout,
-    )
-}
-
-/// Map the planner-level engine type to the fulltext manager's engine type.
-///
-/// Both enums currently carry only BM25; the match stays exhaustive so a
-/// future engine variant fails to compile here instead of silently falling
-/// back to a default.
-#[cfg(feature = "fulltext")]
-fn map_engine_type(engine: linkrs_core::types::FulltextEngineType) -> linkrs_fulltext::EngineType {
-    match engine {
-        linkrs_core::types::FulltextEngineType::Bm25 => linkrs_fulltext::EngineType::Bm25,
     }
 }
 
@@ -289,6 +262,7 @@ impl FulltextOperator {
         spec: &super::spec::FulltextSpec,
         storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         #[cfg(feature = "fulltext")] fulltext_coordinator: Option<Arc<FulltextSyncCoordinator>>,
+        #[cfg(feature = "fulltext")] fulltext_manager: Option<Arc<FulltextIndexManager>>,
         output_layout: Arc<SlotLayout>,
     ) -> Self {
         let kind = match spec {
@@ -299,10 +273,17 @@ impl FulltextOperator {
                 storage: storage.clone(),
                 space_name: space_name.clone(),
                 command: command.clone(),
+                // Management statements read and write the index catalog, so
+                // they need the manager, not the sync coordinator. Prefer the
+                // manager the caller configured and fall back to the one the
+                // coordinator hosts, so a query pipeline wired without a sync
+                // manager can still manage indexes.
                 #[cfg(feature = "fulltext")]
-                fulltext_manager: fulltext_coordinator
-                    .as_ref()
-                    .map(|coordinator| coordinator.fulltext_manager().clone()),
+                fulltext_manager: fulltext_manager.or_else(|| {
+                    fulltext_coordinator
+                        .as_ref()
+                        .map(|coordinator| coordinator.fulltext_manager().clone())
+                }),
             },
             super::spec::FulltextSpec::FulltextSearch {
                 space_name,
@@ -427,14 +408,12 @@ impl FulltextOperator {
                             index_name,
                             schema_name,
                             fields,
-                            engine_type,
                             options,
                             if_not_exists,
                             space_id,
                         } => {
                             if let Some(manager) = fulltext_manager {
                                 let engine_config = fulltext_engine_config(options);
-                                let engine = map_engine_type(*engine_type);
                                 for field in fields {
                                     if manager.has_index(
                                         *space_id,
@@ -456,12 +435,11 @@ impl FulltextOperator {
                                             schema_name,
                                             field.field_name.as_str(),
                                             index_name.as_str(),
-                                            Some(engine),
                                             engine_config.clone(),
                                         ),
                                     )?;
                                 }
-                                Some(make_manage_result(
+                                Some(manage_result(
                                     Arc::clone(&self.output_layout),
                                     "create_fulltext_index",
                                     Some(index_name.as_str()),
@@ -499,7 +477,7 @@ impl FulltextOperator {
                                         ),
                                     )?;
                                 }
-                                Some(make_manage_result(
+                                Some(manage_result(
                                     Arc::clone(&self.output_layout),
                                     "drop_fulltext_index",
                                     Some(index_name.as_str()),
@@ -546,11 +524,16 @@ impl FulltextOperator {
                                         ],
                                     ))
                                 } else {
-                                    Some(make_manage_result(
+                                    // Same card shape as the found case, so the
+                                    // layout the plan advertises always holds.
+                                    Some(DataChunk::new_with_layout(
+                                        vec![vec![
+                                            Value::string(index_name),
+                                            Value::Null(linkrs_core::NullType::Null),
+                                            Value::Null(linkrs_core::NullType::Null),
+                                            Value::string("not-found"),
+                                        ]],
                                         Arc::clone(&self.output_layout),
-                                        "describe_fulltext_index",
-                                        Some(index_name.as_str()),
-                                        "not-found",
                                     ))
                                 }
                             } else {
@@ -562,17 +545,20 @@ impl FulltextOperator {
                         Show {
                             pattern,
                             from_schema,
+                            space_id,
                         } => {
                             if let Some(manager) = fulltext_manager {
                                 let indexes: Vec<_> = manager
                                     .list_indexes()
                                     .into_iter()
                                     .filter(|metadata| {
-                                        pattern.as_ref().is_none_or(|pattern| {
-                                            metadata.index_name.contains(pattern)
-                                        }) && from_schema
-                                            .as_ref()
-                                            .is_none_or(|schema| &metadata.tag_name == schema)
+                                        metadata.space_id == *space_id
+                                            && matches_show_filter(
+                                                pattern.as_deref(),
+                                                from_schema.as_deref(),
+                                                Some(metadata.index_name.as_str()),
+                                                &metadata.tag_name,
+                                            )
                                     })
                                     .collect();
                                 let schema = Arc::new(Schema::new(vec![
@@ -661,7 +647,7 @@ impl FulltextOperator {
                                         }
                                     }
                                 }
-                                Some(make_manage_result(
+                                Some(manage_result(
                                     Arc::clone(&self.output_layout),
                                     "alter_fulltext_index",
                                     Some(index_name.as_str()),
@@ -919,13 +905,5 @@ mod tests {
         assert_eq!(config["b"], serde_json::json!(0.8f32));
         assert_eq!(config["store_original"], serde_json::json!(true));
         assert_eq!(config["custom"], serde_json::json!("x"));
-    }
-
-    #[test]
-    fn engine_type_maps_bm25() {
-        assert_eq!(
-            map_engine_type(linkrs_core::types::FulltextEngineType::Bm25),
-            linkrs_fulltext::EngineType::Bm25
-        );
     }
 }

@@ -17,10 +17,6 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 anyhow.workspace = true
-async-trait.workspace = true
-futures.workspace = true
-
-linkrs-core = { version = "0.1.0", path = "../linkrs-core" }
 linkrs-wire = { version = "0.1.0", path = "../linkrs-wire" }
 
 tonic = { workspace = true, features = ["tls", "tls-native-roots"], optional = true }
@@ -32,3 +28,4 @@ grpc = ["dep:tonic", "dep:prost", "dep:tonic-build", "dep:rustls"]
 
 [dev-dependencies]
 tempfile = "3.0"
+linkrs-core = { version = "0.1.0", path = "../linkrs-core" }

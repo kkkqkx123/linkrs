@@ -10,14 +10,13 @@
 //! Test cases: TC-FT-ADV-001 ~ TC-FT-ADV-010
 
 use super::common::{assert_search_result_contains, FulltextTestContext};
-use linkrs_fulltext::EngineType;
 
 /// TC-FT-ADV-001: Boolean OR Query (Default Behavior)
 #[tokio::test]
 async fn test_boolean_or_query() {
     let ctx = FulltextTestContext::new();
 
-    ctx.create_test_index(1, "Article", "content", Some(EngineType::Bm25))
+    ctx.create_test_index(1, "Article", "content")
         .await
         .expect("Failed to create index");
 
@@ -51,7 +50,7 @@ async fn test_boolean_or_query() {
 async fn test_multi_term_search_scoring() {
     let ctx = FulltextTestContext::new();
 
-    ctx.create_test_index(1, "Article", "content", Some(EngineType::Bm25))
+    ctx.create_test_index(1, "Article", "content")
         .await
         .expect("Failed to create index");
 
@@ -97,7 +96,7 @@ async fn test_multi_term_search_scoring() {
 async fn test_phrase_like_search() {
     let ctx = FulltextTestContext::new();
 
-    ctx.create_test_index(1, "Article", "content", Some(EngineType::Bm25))
+    ctx.create_test_index(1, "Article", "content")
         .await
         .expect("Failed to create index");
 
@@ -132,7 +131,7 @@ async fn test_phrase_like_search() {
 async fn test_prefix_search_behavior() {
     let ctx = FulltextTestContext::new();
 
-    ctx.create_test_index(1, "Article", "content", Some(EngineType::Bm25))
+    ctx.create_test_index(1, "Article", "content")
         .await
         .expect("Failed to create index");
 
@@ -164,7 +163,7 @@ async fn test_prefix_search_behavior() {
 async fn test_case_insensitive_search() {
     let ctx = FulltextTestContext::new();
 
-    ctx.create_test_index(1, "Article", "content", Some(EngineType::Bm25))
+    ctx.create_test_index(1, "Article", "content")
         .await
         .expect("Failed to create index");
 
@@ -212,7 +211,7 @@ async fn test_case_insensitive_search() {
 async fn test_stop_words_handling() {
     let ctx = FulltextTestContext::new();
 
-    ctx.create_test_index(1, "Article", "content", Some(EngineType::Bm25))
+    ctx.create_test_index(1, "Article", "content")
         .await
         .expect("Failed to create index");
 
@@ -243,7 +242,7 @@ async fn test_stop_words_handling() {
 async fn test_numeric_content_search() {
     let ctx = FulltextTestContext::new();
 
-    ctx.create_test_index(1, "Article", "content", Some(EngineType::Bm25))
+    ctx.create_test_index(1, "Article", "content")
         .await
         .expect("Failed to create index");
 
@@ -272,7 +271,7 @@ async fn test_numeric_content_search() {
 async fn test_special_characters_in_content() {
     let ctx = FulltextTestContext::new();
 
-    ctx.create_test_index(1, "Article", "content", Some(EngineType::Bm25))
+    ctx.create_test_index(1, "Article", "content")
         .await
         .expect("Failed to create index");
 
@@ -304,7 +303,7 @@ async fn test_special_characters_in_content() {
 async fn test_long_query_terms() {
     let ctx = FulltextTestContext::new();
 
-    ctx.create_test_index(1, "Article", "content", Some(EngineType::Bm25))
+    ctx.create_test_index(1, "Article", "content")
         .await
         .expect("Failed to create index");
 
@@ -335,7 +334,7 @@ async fn test_long_query_terms() {
 async fn test_empty_query_handling() {
     let ctx = FulltextTestContext::new();
 
-    ctx.create_test_index(1, "Article", "content", Some(EngineType::Bm25))
+    ctx.create_test_index(1, "Article", "content")
         .await
         .expect("Failed to create index");
 
@@ -365,7 +364,7 @@ async fn test_empty_query_handling() {
 async fn test_repeated_terms_in_query() {
     let ctx = FulltextTestContext::new();
 
-    ctx.create_test_index(1, "Article", "content", Some(EngineType::Bm25))
+    ctx.create_test_index(1, "Article", "content")
         .await
         .expect("Failed to create index");
 
@@ -401,7 +400,7 @@ async fn test_repeated_terms_in_query() {
 async fn test_mixed_language_query() {
     let ctx = FulltextTestContext::new();
 
-    ctx.create_test_index(1, "Article", "content", Some(EngineType::Bm25))
+    ctx.create_test_index(1, "Article", "content")
         .await
         .expect("Failed to create index");
 
@@ -433,7 +432,7 @@ async fn test_mixed_language_query() {
 async fn test_query_result_ranking() {
     let ctx = FulltextTestContext::new();
 
-    ctx.create_test_index(1, "Article", "content", Some(EngineType::Bm25))
+    ctx.create_test_index(1, "Article", "content")
         .await
         .expect("Failed to create index");
 
@@ -468,7 +467,7 @@ async fn test_query_result_ranking() {
 async fn test_query_whitespace_variations() {
     let ctx = FulltextTestContext::new();
 
-    ctx.create_test_index(1, "Article", "content", Some(EngineType::Bm25))
+    ctx.create_test_index(1, "Article", "content")
         .await
         .expect("Failed to create index");
 
@@ -504,7 +503,7 @@ async fn test_query_whitespace_variations() {
 async fn test_query_limit_edge_cases() {
     let ctx = FulltextTestContext::new();
 
-    ctx.create_test_index(1, "Article", "content", Some(EngineType::Bm25))
+    ctx.create_test_index(1, "Article", "content")
         .await
         .expect("Failed to create index");
 

@@ -27,7 +27,6 @@ use crate::planning::plan::core::nodes::search::fulltext::{
 };
 use crate::planning::plan::SubPlan;
 use crate::planning::planner::{Planner, PlannerError};
-use linkrs_core::types::FulltextEngineType;
 
 /// Full-text search planner
 #[derive(Debug, Clone, Default)]
@@ -84,7 +83,6 @@ impl Planner for FulltextSearchPlanner {
                         &create.index_name,
                         &create.schema_name,
                         &create.fields,
-                        create.engine_type,
                         &create.options,
                         create.if_not_exists,
                         &space_name,
@@ -132,7 +130,7 @@ impl FulltextSearchPlanner {
             }
             Stmt::DropFulltextIndex(drop) => self.transform_drop(drop),
             Stmt::AlterFulltextIndex(alter) => self.transform_alter(alter),
-            Stmt::ShowFulltextIndex(show) => self.transform_show(show, space_name),
+            Stmt::ShowFulltextIndex(show) => self.transform_show(show, space_id),
             Stmt::DescribeFulltextIndex(describe) => self.transform_describe(describe),
             Stmt::Search(search) => self.transform_search(search, metadata),
             Stmt::LookupFulltext(lookup) => self.transform_lookup(lookup, metadata),
@@ -158,7 +156,6 @@ impl FulltextSearchPlanner {
             &create.index_name,
             &create.schema_name,
             &create.fields,
-            create.engine_type,
             &create.options,
             create.if_not_exists,
             space_name,
@@ -173,7 +170,6 @@ impl FulltextSearchPlanner {
         index_name: &str,
         schema_name: &str,
         fields: &[IndexFieldDef],
-        engine_type: FulltextEngineType,
         options: &IndexOptions,
         if_not_exists: bool,
         space_name: &str,
@@ -211,7 +207,6 @@ impl FulltextSearchPlanner {
             index_name.to_string(),
             schema_name,
             fields.to_vec(),
-            engine_type,
             options.clone(),
             if_not_exists,
             space_id,
@@ -245,14 +240,13 @@ impl FulltextSearchPlanner {
     fn transform_show(
         &self,
         show: &ShowFulltextIndex,
-        space_name: &str,
+        space_id: u64,
     ) -> Result<SubPlan, PlannerError> {
-        let from_schema = if show.from_schema.is_none() {
-            Some(space_name.to_string())
-        } else {
-            show.from_schema.clone()
-        };
-        let node = ShowFulltextIndexNode::new(show.pattern.clone(), from_schema);
+        // `FROM <schema>` filters by tag name; scoping the listing to the
+        // current space is a separate dimension, carried by `space_id`.
+        // Conflating the two made the default `SHOW FULLTEXT INDEX` filter on
+        // a tag that never exists and return nothing.
+        let node = ShowFulltextIndexNode::new(show.pattern.clone(), show.from_schema.clone(), space_id);
         Ok(SubPlan::new(Some(node.into_enum()), None))
     }
 
@@ -576,7 +570,6 @@ mod tests {
                 "idx2",
                 schema,
                 &test_fields(),
-                FulltextEngineType::Bm25,
                 &test_options(),
                 false,
                 "default",

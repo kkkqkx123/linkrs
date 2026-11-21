@@ -139,11 +139,6 @@ impl SyncManager {
                 "Vector index not found: {space_id}.{tag_name}.{field_name}"
             )));
         }
-        if coordinator.is_disabled_engine() {
-            return Err(SyncError::PersistenceError(
-                "vector rebuild requires an active vector engine".to_string(),
-            ));
-        }
         // Admission: at most one rebuild per index (same rationale as the
         // fulltext driver).
         let rebuild_lock = self.rebuild_lock_for("vector", space_id, tag_name, field_name);

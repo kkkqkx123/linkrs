@@ -4,7 +4,7 @@ use crate::parser::ast::fulltext::{
     AlterIndexAction, FulltextQueryExpr, IndexFieldDef, IndexOptions,
 };
 use linkrs_core::types::expr::Expression;
-use linkrs_core::types::{FulltextEngineType, ReadYourWritesConfig};
+use linkrs_core::types::ReadYourWritesConfig;
 
 /// Fulltext index DDL command payload.
 #[derive(Debug, Clone)]
@@ -13,7 +13,6 @@ pub enum FulltextManageCommand {
         index_name: String,
         schema_name: String,
         fields: Vec<IndexFieldDef>,
-        engine_type: FulltextEngineType,
         options: IndexOptions,
         if_not_exists: bool,
         space_id: u64,
@@ -29,6 +28,7 @@ pub enum FulltextManageCommand {
     Show {
         pattern: Option<String>,
         from_schema: Option<String>,
+        space_id: u64,
     },
     Describe {
         index_name: String,

@@ -320,11 +320,15 @@ impl PhysicalPlanMaterializer {
                     let storage = runtime.storage.clone();
                     #[cfg(feature = "fulltext")]
                     let ft_coord = runtime.search.fulltext_coordinator.clone();
+                    #[cfg(feature = "fulltext")]
+                    let ft_manager = runtime.search.fulltext_manager.clone();
                     let op = FulltextOperator::from_spec(
                         ft_spec,
                         storage,
                         #[cfg(feature = "fulltext")]
                         ft_coord,
+                        #[cfg(feature = "fulltext")]
+                        ft_manager,
                         output_layout.clone(),
                     );
                     StreamingExecutor::Fulltext(base, Box::new(child), op)

@@ -57,8 +57,8 @@ pub use circuit_breaker::{
 };
 #[cfg(feature = "fulltext")]
 pub use fulltext_rebuild::{
-    fulltext_edge_doc_basis, fulltext_field_index_id, fulltext_tag_index_id,
-    fulltext_vertex_doc_id, FulltextRebuildOptions, RebuildDoc, RebuildDocSource, RebuildEntity,
+    fulltext_field_index_id, fulltext_tag_index_id, FulltextRebuildOptions, RebuildDoc,
+    RebuildDocSource, RebuildEntity,
 };
 #[cfg(feature = "fulltext")]
 pub use fulltext_sync::{FulltextCoordinatorError, FulltextSyncCoordinator, RecoveryResult};
@@ -93,7 +93,7 @@ pub use vector_rebuild::{
 };
 #[cfg(feature = "vector")]
 pub use vector_sync::{
-    VectorChangeContext, VectorChangeType, VectorEngineState, VectorIndexLocation, VectorPointData,
+    VectorChangeContext, VectorChangeType, VectorIndexLocation, VectorPointData,
     VectorSyncCoordinator,
 };
 

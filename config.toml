@@ -141,8 +141,8 @@ max_edge_scan = 10000000
 [fulltext]
 # Enable the local BM25 fulltext index (default false)
 enabled = false
-# Engine that produced the indexes
-default_engine = "Bm25"
+# Physical storage backend: "local" (embedded Tantivy) or "es" (Elasticsearch)
+backend = "local"
 # Fulltext index directory (defaults to <storage_path>/fulltext)
 index_path = "data/fulltext"
 # Index-manager cache entries (default 100)

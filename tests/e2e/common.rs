@@ -65,11 +65,8 @@ fn create_sync_manager() -> Arc<SyncManager> {
         // TempDir is intentionally leaked so the directory lives for the process lifetime
         // (Tantivy lock files must remain accessible for the duration of all tests)
         std::mem::forget(fulltext_temp_dir);
-        let sync_config = SyncConfig::default();
-        let batch_config = linkrs::sync::batch::BatchConfig::from(sync_config.clone());
         let sync_coordinator = Arc::new(linkrs::sync::fulltext_sync::FulltextSyncCoordinator::new(
             manager,
-            batch_config,
         ));
 
         SyncManager::new(sync_coordinator)
@@ -90,13 +87,17 @@ fn create_sync_manager() -> Arc<SyncManager> {
                         HealthStatus::unhealthy("unknown", "unknown", "health check failed")
                     });
                 if health.is_healthy {
-                    let vector_coordinator = Arc::new(
-                        linkrs::sync::vector_sync::VectorSyncCoordinator::new_without_embedding(
-                            linkrs::sync::VectorBackend::qdrant(Arc::new(vector_manager)),
-                            rt.handle().clone(),
-                        ),
-                    );
-                    sync_manager = sync_manager.with_vector_coordinator(vector_coordinator);
+                    if let Ok(backend) =
+                        linkrs::sync::VectorBackend::qdrant(Arc::new(vector_manager))
+                    {
+                        let vector_coordinator = Arc::new(
+                            linkrs::sync::vector_sync::VectorSyncCoordinator::new_without_embedding(
+                                backend,
+                                rt.handle().clone(),
+                            ),
+                        );
+                        sync_manager = sync_manager.with_vector_coordinator(vector_coordinator);
+                    }
                 } else {
                     eprintln!(
                         "WARNING: Qdrant connected but not healthy. Vector tests will be skipped."

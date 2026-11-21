@@ -7,9 +7,9 @@
 //! - Cross-space isolation verification
 
 use linkrs::core::types::{IsolationLevel, SpaceInfo};
+use linkrs::search::FulltextConfig;
 #[cfg(feature = "fulltext")]
 use linkrs::search::FulltextIndexManager;
-use linkrs::search::{EngineType, FulltextConfig};
 use std::path::PathBuf;
 use tempfile::TempDir;
 
@@ -162,7 +162,6 @@ async fn test_shared_isolation_storage_path() {
     let config = FulltextConfig {
         enabled: true,
         index_path: base_path.clone(),
-        default_engine: EngineType::Bm25,
         ..Default::default()
     };
 
@@ -170,7 +169,7 @@ async fn test_shared_isolation_storage_path() {
 
     // Create index without schema manager (backward compatibility mode)
     let index_id = manager
-        .create_index(1, "Article", "content", None)
+        .create_index(1, "Article", "content")
         .await
         .expect("Failed to create index");
 
@@ -196,7 +195,6 @@ async fn test_directory_isolation_storage_path() {
     let config = FulltextConfig {
         enabled: true,
         index_path: base_path.clone(),
-        default_engine: EngineType::Bm25,
         ..Default::default()
     };
 
@@ -204,11 +202,11 @@ async fn test_directory_isolation_storage_path() {
 
     // Create multiple indexes for different spaces
     manager
-        .create_index(1, "Article", "content", None)
+        .create_index(1, "Article", "content")
         .await
         .expect("Failed to create index 1");
     manager
-        .create_index(2, "Product", "description", None)
+        .create_index(2, "Product", "description")
         .await
         .expect("Failed to create index 2");
 
@@ -239,7 +237,6 @@ async fn test_cross_space_index_isolation() {
     let config = FulltextConfig {
         enabled: true,
         index_path: temp_dir.path().to_path_buf(),
-        default_engine: EngineType::Bm25,
         ..Default::default()
     };
 
@@ -247,11 +244,11 @@ async fn test_cross_space_index_isolation() {
 
     // Create indexes with same tag/field names but different space IDs
     let _index1 = manager
-        .create_index(1, "Document", "content", None)
+        .create_index(1, "Document", "content")
         .await
         .expect("Failed to create space 1 index");
     let _index2 = manager
-        .create_index(2, "Document", "content", None)
+        .create_index(2, "Document", "content")
         .await
         .expect("Failed to create space 2 index");
 
@@ -272,7 +269,6 @@ async fn test_drop_space_isolation() {
     let config = FulltextConfig {
         enabled: true,
         index_path: temp_dir.path().to_path_buf(),
-        default_engine: EngineType::Bm25,
         ..Default::default()
     };
 
@@ -281,7 +277,7 @@ async fn test_drop_space_isolation() {
     // Create indexes for multiple spaces
     for space_id in 1..=3 {
         manager
-            .create_index(space_id, "Entity", "data", None)
+            .create_index(space_id, "Entity", "data")
             .await
             .unwrap_or_else(|_| panic!("Failed to create index for space {}", space_id));
     }
@@ -376,7 +372,6 @@ async fn test_custom_path_auto_creation() {
     let config = FulltextConfig {
         enabled: true,
         index_path: base_path,
-        default_engine: EngineType::Bm25,
         ..Default::default()
     };
 
@@ -395,7 +390,6 @@ async fn test_index_metadata_space_info() {
     let config = FulltextConfig {
         enabled: true,
         index_path: temp_dir.path().to_path_buf(),
-        default_engine: EngineType::Bm25,
         ..Default::default()
     };
 
@@ -406,7 +400,7 @@ async fn test_index_metadata_space_info() {
     let field_name = "content";
 
     manager
-        .create_index(space_id, tag_name, field_name, None)
+        .create_index(space_id, tag_name, field_name)
         .await
         .expect("Failed to create index");
 
@@ -428,31 +422,18 @@ async fn test_list_space_indexes() {
     let config = FulltextConfig {
         enabled: true,
         index_path: temp_dir.path().to_path_buf(),
-        default_engine: EngineType::Bm25,
         ..Default::default()
     };
 
     let manager = FulltextIndexManager::new(config).expect("Failed to create manager");
 
     // Create multiple indexes for space 1
-    manager
-        .create_index(1, "Article", "title", None)
-        .await
-        .unwrap();
-    manager
-        .create_index(1, "Article", "content", None)
-        .await
-        .unwrap();
-    manager
-        .create_index(1, "Product", "name", None)
-        .await
-        .unwrap();
+    manager.create_index(1, "Article", "title").await.unwrap();
+    manager.create_index(1, "Article", "content").await.unwrap();
+    manager.create_index(1, "Product", "name").await.unwrap();
 
     // Create index for space 2
-    manager
-        .create_index(2, "User", "profile", None)
-        .await
-        .unwrap();
+    manager.create_index(2, "User", "profile").await.unwrap();
 
     // List indexes for space 1
     let space1_indexes = manager.get_space_indexes(1);

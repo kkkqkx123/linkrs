@@ -15,7 +15,7 @@ const LEAK: &str = "No planner for bound statement";
 
 const FULLTEXT_SQLS: &[(&str, &str)] = &[
     (
-        "CREATE FULLTEXT INDEX idx_article_content ON article(content) ENGINE BM25",
+        "CREATE FULLTEXT INDEX idx_article_content ON article(content)",
         "CREATE FULLTEXT INDEX",
     ),
     (
@@ -88,12 +88,13 @@ fn test_fulltext_create_search_lookup_roundtrip() {
     use linkrs_core::Value;
     TestScenario::new()
         .expect("scenario")
+        .with_fulltext_indexes()
         .setup_space("fulltext_on")
         .exec_ddl("CREATE TAG article(title STRING, content STRING)")
         .assert_success()
-        .exec_ddl("CREATE FULLTEXT INDEX idx_article_content ON article(content) ENGINE BM25")
+        .exec_ddl("CREATE FULLTEXT INDEX idx_article_content ON article(content)")
         .assert_success()
-        .exec_dml("INSERT VERTEX article(title, content) VALUES 1:('a', 'database index engine'), 2:('b', 'unrelated words here')")
+        .exec_dml("INSERT VERTEX article(title, content) VALUES 1:('1', 'database index engine'), 2:('2', 'unrelated words here')")
         .assert_success()
         .query("SEARCH INDEX idx_article_content MATCH 'database'")
         .assert_success()
@@ -112,10 +113,11 @@ fn test_fulltext_create_search_lookup_roundtrip() {
 fn test_fulltext_rebuild_points_to_rebuild_api() {
     TestScenario::new()
         .expect("scenario")
+        .with_fulltext_indexes()
         .setup_space("fulltext_rebuild")
         .exec_ddl("CREATE TAG article(title STRING, content STRING)")
         .assert_success()
-        .exec_ddl("CREATE FULLTEXT INDEX idx_article_content ON article(content) ENGINE BM25")
+        .exec_ddl("CREATE FULLTEXT INDEX idx_article_content ON article(content)")
         .assert_success()
         .query("ALTER FULLTEXT INDEX idx_article_content REBUILD")
         .assert_error()

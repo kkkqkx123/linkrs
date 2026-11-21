@@ -132,6 +132,13 @@ impl super::SyncManager {
             self.vector_receiver = Some(Arc::new(crate::VectorReceiver::open(
                 work_dir.join("vector_receiver"),
             )));
+            // The logical index registry lives next to the outbox so a restart
+            // restores the same index list the delivery path serves.
+            if let Some(coordinator) = self.vector_coordinator.as_ref() {
+                coordinator
+                    .index_manager()
+                    .attach_registry_directory(work_dir.join("vector_indexes"));
+            }
         }
         Ok(())
     }
@@ -217,10 +224,6 @@ impl super::SyncManager {
                 .await
                 .map_err(SyncError::PersistenceError)
         })?;
-        #[cfg(feature = "vector")]
-        if let Some(coord) = self.vector_coordinator.as_ref() {
-            diagnostics.vector_disabled_skips = coord.disabled_skip_count();
-        }
         Ok(diagnostics)
     }
 

@@ -104,7 +104,6 @@ impl Binder {
                 index_name: stmt.index_name.clone(),
                 schema_name: stmt.schema_name.clone(),
                 fields: stmt.fields.clone(),
-                engine_type: stmt.engine_type,
                 options: stmt.options.clone(),
                 if_not_exists: stmt.if_not_exists,
             },

@@ -28,7 +28,6 @@ use linkrs_core::types::{
     CommitLsn, IdempotencyKey, IndexGeneration, OrderingKey, TargetId, VertexId,
 };
 use linkrs_core::wal::{EntityRef, IndexMutation, IndexOperation, WAL_SYNC_WIRE_VERSION};
-use linkrs_core::Value;
 use linkrs_fulltext::engine::FulltextSearchEngine;
 
 use crate::manager::{stable_hash, SyncError, SyncManager};
@@ -103,23 +102,6 @@ impl FulltextRebuildOptions {
             self.allow_empty_source,
         )
     }
-}
-
-/// Tantivy doc ID for a vertex text value. Shared with the live delivery path
-/// so backfill and live writes address the same document.
-pub fn fulltext_vertex_doc_id(vertex_id: &Value) -> String {
-    format!("{vertex_id}")
-}
-
-/// Tantivy doc ID basis for edge text (idempotency keys). Live upserts land
-/// under the receiver-formatted `{src}->{dst}` ID; the ranking suffix is kept
-/// in keys only to distinguish parallel edge versions of one pair.
-///
-/// Note: live edge deletes use the unsuffixed ID while upserts carry ranking
-/// in the operation entity, so stale edge versions can orphan exactly as they
-/// do on the live path. Rebuild stays faithful to live behavior here.
-pub fn fulltext_edge_doc_basis(src: &Value, dst: &Value, ranking: i64) -> String {
-    format!("{src}->{dst}#{ranking}")
 }
 
 /// Tag-level outbox index ID for fulltext intents of one space/tag.
@@ -623,28 +605,23 @@ fn backfill_mutation(
     field_index_id: u64,
     generation: u64,
 ) -> Result<IndexMutation, String> {
-    let (entity_ref, doc_basis) = match entity {
-        // `Value::from(*id)` is exactly how the live write path formats the
-        // vertex ID (`SyncWrapper` stages `Value::from(*vertex_id)`).
-        RebuildEntity::Vertex { id } => (
-            EntityRef::Vertex(*id),
-            fulltext_vertex_doc_id(&Value::from(*id)),
-        ),
+    let entity_ref = match entity {
+        RebuildEntity::Vertex { id } => EntityRef::Vertex(*id),
         RebuildEntity::Edge {
             src,
             dst,
             edge_type,
             ranking,
-        } => (
-            EntityRef::Edge {
-                src: *src,
-                dst: *dst,
-                ranking: *ranking,
-                edge_type: stable_hash(edge_type.as_bytes()) as u32,
-            },
-            fulltext_edge_doc_basis(&Value::from(*src), &Value::from(*dst), *ranking),
-        ),
+        } => EntityRef::Edge {
+            src: *src,
+            dst: *dst,
+            ranking: *ranking,
+            edge_type: stable_hash(edge_type.as_bytes()) as u32,
+        },
     };
+    // One id derivation for live writes, deletes and backfill; the id also
+    // separates parallel edge versions of the same endpoint pair.
+    let doc_id = entity_ref.doc_id();
     Ok(IndexMutation {
         wire_version: WAL_SYNC_WIRE_VERSION,
         target: TargetId::new(FULLTEXT_TARGET)?,
@@ -653,7 +630,7 @@ fn backfill_mutation(
         entity_ref,
         operation: IndexOperation::Upsert,
         document_or_vector: text.as_bytes().to_vec(),
-        idempotency_key: IdempotencyKey::new(format!("rebuild:g{generation}:{doc_basis}"))?,
-        ordering_key: OrderingKey::new(format!("rebuild:g{generation}:{doc_basis}"))?,
+        idempotency_key: IdempotencyKey::new(format!("rebuild:g{generation}:{doc_id}"))?,
+        ordering_key: OrderingKey::new(format!("rebuild:g{generation}:{doc_id}"))?,
     })
 }

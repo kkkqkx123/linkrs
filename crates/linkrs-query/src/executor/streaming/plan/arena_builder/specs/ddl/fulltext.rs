@@ -14,7 +14,6 @@ pub(crate) fn fulltext_manage_to_command(
             index_name: n.index_name.clone(),
             schema_name: n.schema_name.clone(),
             fields: n.fields.clone(),
-            engine_type: n.engine_type,
             options: n.options.clone(),
             if_not_exists: n.if_not_exists,
             space_id: n.space_id,
@@ -30,6 +29,7 @@ pub(crate) fn fulltext_manage_to_command(
         Show(n) => FulltextManageCommand::Show {
             pattern: n.pattern.clone(),
             from_schema: n.from_schema.clone(),
+            space_id: n.space_id,
         },
         Describe(n) => FulltextManageCommand::Describe {
             index_name: n.index_name.clone(),
@@ -54,7 +54,10 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_fulltext_search
     validate_fulltext_query_fields(&node.query, &node.field_name)?;
     Ok(FulltextSpec::FulltextSearch {
         space_name: exec_ctx.space_name.clone().unwrap_or_default(),
-        space_id: exec_ctx.current_space_id().unwrap_or(0),
+        // The planner resolves the index location from schema metadata and
+        // stores it on the node; the execution context's space may be absent
+        // (statement planned without a bound space), so the node wins.
+        space_id: node.space_id,
         index_name: node.index_name.clone(),
         structured_query: node.query.clone(),
         tag_name: node.tag_name.clone(),
@@ -70,7 +73,7 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_fulltext_lookup
 ) -> Result<FulltextSpec, PlanBuildError> {
     Ok(FulltextSpec::FulltextLookup {
         space_name: exec_ctx.space_name.clone().unwrap_or_default(),
-        space_id: exec_ctx.current_space_id().unwrap_or(0),
+        space_id: node.space_id,
         index_name: node.index_name.clone(),
         structured_query: crate::parser::ast::fulltext::FulltextQueryExpr::Simple(
             node.query.clone(),

@@ -17,8 +17,15 @@ pub mod grpc;
 #[cfg(feature = "qdrant-grpc")]
 pub use grpc::QdrantGrpcEngine;
 
+/// No-op engine held by a [`crate::VectorManager`] built from a disabled
+/// configuration. Every call fails with `EngineNotAvailable`.
+///
+/// Deliberately crate-private: an unavailable engine is a local fallback, not
+/// a state the surrounding layers should detect and branch on. Callers that
+/// need a usable backend check [`crate::VectorManager::is_engine_available`]
+/// instead of inspecting the engine.
 #[derive(Debug)]
-pub struct DisabledEngine;
+pub(crate) struct DisabledEngine;
 
 #[async_trait]
 impl RemoteVectorEngine for DisabledEngine {

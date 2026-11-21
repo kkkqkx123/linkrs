@@ -188,6 +188,20 @@ pub async fn rebuild_fulltext<
     use linkrs_api::api_core::rebuild_source::StorageRebuildSource;
 
     let sync_manager = sync_manager_or_error(&state, "fulltext")?;
+    // Reject up front when the configured engine cannot publish a rebuilt
+    // index online, instead of accepting a task that can only fail later.
+    let fulltext_manager = sync_manager.fulltext_manager_opt().ok_or_else(|| {
+        HttpError::InternalError(
+            "fulltext rebuild requires a configured fulltext index".to_string(),
+        )
+    })?;
+    if !fulltext_manager.supports_online_rebuild() {
+        return Err(HttpError::BadRequest(
+            "online fulltext rebuild is not supported by the configured backend; the durable \
+             outbox keeps the index consistent"
+                .to_string(),
+        ));
+    }
     let storage = state.server.get_storage().read().clone();
     let space_name = resolve_space_name(&storage, request.space_id)?;
     let rebuild_id = uuid::Uuid::new_v4().to_string();

@@ -8,7 +8,7 @@ use crate::api_core::error::{CoreError, CoreResult};
 use linkrs_core::SearchIndexMetadata;
 use linkrs_fulltext::manager::FulltextIndexManager;
 use linkrs_fulltext::query::FulltextQuery;
-use linkrs_fulltext::{EngineType, IndexMetadata, SearchResult};
+use linkrs_fulltext::{IndexMetadata, SearchResult};
 use linkrs_sync::fulltext_sync::FulltextSyncCoordinator;
 use linkrs_sync::{FulltextRebuildOptions, RebuildDocSource, SyncManager};
 use std::sync::Arc;
@@ -50,10 +50,9 @@ impl FulltextApi {
         space_id: u64,
         tag_name: &str,
         field_name: &str,
-        engine_type: Option<EngineType>,
     ) -> CoreResult<String> {
         self.manager
-            .create_index(space_id, tag_name, field_name, engine_type)
+            .create_index(space_id, tag_name, field_name)
             .await
             .map_err(|e| CoreError::FulltextError(e.to_string()))
     }
@@ -65,7 +64,6 @@ impl FulltextApi {
         tag_name: &str,
         field_name: &str,
         user_index_name: &str,
-        engine_type: Option<EngineType>,
         engine_config: Option<serde_json::Value>,
     ) -> CoreResult<String> {
         self.manager
@@ -74,7 +72,6 @@ impl FulltextApi {
                 tag_name,
                 field_name,
                 user_index_name,
-                engine_type,
                 engine_config,
             )
             .await
@@ -125,7 +122,7 @@ impl FulltextApi {
                 index_name: Some(m.index_name),
                 status: m.status.to_string(),
                 doc_count: m.doc_count,
-                engine: m.engine_type.to_string(),
+                engine: m.backend.to_string(),
                 last_updated: Some(m.last_updated),
             })
             .collect()

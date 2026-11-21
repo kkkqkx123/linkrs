@@ -3,6 +3,7 @@ mod create_parser;
 mod describe_parser;
 mod drop_parser;
 mod helpers;
+pub(crate) mod index_head;
 
 use crate::parser::core::error::ParseError;
 use crate::parser::parsing::parse_context::ParseContext;

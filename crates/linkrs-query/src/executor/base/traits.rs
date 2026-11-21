@@ -134,7 +134,7 @@ impl SearchProvider for FulltextProvider {
                 index_name: Some(m.index_name.clone()),
                 status: format!("{:?}", m.status),
                 doc_count: m.doc_count,
-                engine: m.engine_type.to_string(),
+                engine: m.backend.to_string(),
                 last_updated: Some(m.last_updated),
             })
             .collect()

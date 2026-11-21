@@ -69,7 +69,7 @@ mod tests {
     use super::*;
     #[cfg(feature = "fulltext")]
     use crate::manager::FulltextIndexManager;
-    use linkrs_config::fulltext::{FulltextConfig, FulltextEngineType as EngineType};
+    use linkrs_config::fulltext::FulltextConfig;
     use tempfile::TempDir;
 
     async fn setup_test_manager() -> (Arc<FulltextIndexManager>, TempDir) {
@@ -78,7 +78,6 @@ mod tests {
             enabled: true,
             backend: Default::default(),
             index_path: temp_dir.path().to_path_buf(),
-            default_engine: EngineType::Bm25,
             es: Default::default(),
             sync: Default::default(),
             tantivy: Default::default(),
@@ -97,7 +96,7 @@ mod tests {
 
         // Create index
         manager
-            .create_index(1, "Article", "title", Some(EngineType::Bm25))
+            .create_index(1, "Article", "title")
             .await
             .expect("Failed to create index");
 
@@ -119,11 +118,11 @@ mod tests {
 
         // Create multiple indexes
         manager
-            .create_index(1, "Article", "title", Some(EngineType::Bm25))
+            .create_index(1, "Article", "title")
             .await
             .expect("Failed to create index");
         manager
-            .create_index(1, "Article", "content", Some(EngineType::Bm25))
+            .create_index(1, "Article", "content")
             .await
             .expect("Failed to create index");
 
@@ -151,7 +150,7 @@ mod tests {
 
         // Create index
         manager
-            .create_index(1, "Article", "title", Some(EngineType::Bm25))
+            .create_index(1, "Article", "title")
             .await
             .expect("Failed to create index");
 

@@ -11,7 +11,6 @@
 //! Test cases: TC-FT-EDGE-001 ~ TC-FT-EDGE-015
 
 use super::common::{assert_search_result_count, FulltextTestContext};
-use linkrs_fulltext::EngineType;
 
 /// TC-FT-EDGE-001: Search on Non-Existent Index
 #[tokio::test]
@@ -35,7 +34,7 @@ async fn test_search_non_existent_index() {
 async fn test_index_empty_content_bm25() {
     let ctx = FulltextTestContext::new();
 
-    ctx.create_test_index(1, "Article", "content", Some(EngineType::Bm25))
+    ctx.create_test_index(1, "Article", "content")
         .await
         .expect("Failed to create index");
 
@@ -59,7 +58,7 @@ async fn test_index_empty_content_bm25() {
 async fn test_index_very_long_content() {
     let ctx = FulltextTestContext::new();
 
-    ctx.create_test_index(1, "Article", "content", Some(EngineType::Bm25))
+    ctx.create_test_index(1, "Article", "content")
         .await
         .expect("Failed to create index");
 
@@ -93,7 +92,7 @@ async fn test_index_very_long_content() {
 async fn test_index_unicode_content() {
     let ctx = FulltextTestContext::new();
 
-    ctx.create_test_index(1, "Article", "content", Some(EngineType::Bm25))
+    ctx.create_test_index(1, "Article", "content")
         .await
         .expect("Failed to create index");
 
@@ -117,7 +116,7 @@ async fn test_index_unicode_content() {
 async fn test_special_query_characters() {
     let ctx = FulltextTestContext::new();
 
-    ctx.create_test_index(1, "Article", "content", Some(EngineType::Bm25))
+    ctx.create_test_index(1, "Article", "content")
         .await
         .expect("Failed to create index");
 
@@ -148,7 +147,7 @@ async fn test_special_query_characters() {
 async fn test_drop_recreate_index() {
     let ctx = FulltextTestContext::new();
 
-    ctx.create_test_index(1, "Article", "content", Some(EngineType::Bm25))
+    ctx.create_test_index(1, "Article", "content")
         .await
         .expect("Failed to create index");
 
@@ -168,7 +167,7 @@ async fn test_drop_recreate_index() {
         .await
         .expect("Failed to drop index");
 
-    ctx.create_test_index(1, "Article", "content", Some(EngineType::Bm25))
+    ctx.create_test_index(1, "Article", "content")
         .await
         .expect("Failed to recreate index");
 
@@ -197,10 +196,10 @@ async fn test_drop_recreate_index() {
 async fn test_multi_space_isolation() {
     let ctx = FulltextTestContext::new();
 
-    ctx.create_test_index(1, "Article", "content", Some(EngineType::Bm25))
+    ctx.create_test_index(1, "Article", "content")
         .await
         .expect("Failed to create index for space 1");
-    ctx.create_test_index(2, "Article", "content", Some(EngineType::Bm25))
+    ctx.create_test_index(2, "Article", "content")
         .await
         .expect("Failed to create index for space 2");
 
@@ -256,7 +255,7 @@ async fn test_multi_space_isolation() {
 async fn test_whitespace_only_content() {
     let ctx = FulltextTestContext::new();
 
-    ctx.create_test_index(1, "Article", "content", Some(EngineType::Bm25))
+    ctx.create_test_index(1, "Article", "content")
         .await
         .expect("Failed to create index");
 
@@ -284,7 +283,7 @@ async fn test_whitespace_only_content() {
 async fn test_duplicate_document_ids() {
     let ctx = FulltextTestContext::new();
 
-    ctx.create_test_index(1, "Article", "content", Some(EngineType::Bm25))
+    ctx.create_test_index(1, "Article", "content")
         .await
         .expect("Failed to create index");
 
@@ -322,7 +321,7 @@ async fn test_duplicate_document_ids() {
 async fn test_very_short_content() {
     let ctx = FulltextTestContext::new();
 
-    ctx.create_test_index(1, "Article", "content", Some(EngineType::Bm25))
+    ctx.create_test_index(1, "Article", "content")
         .await
         .expect("Failed to create index");
 
@@ -363,7 +362,7 @@ async fn test_very_short_content() {
 async fn test_numeric_content() {
     let ctx = FulltextTestContext::new();
 
-    ctx.create_test_index(1, "Article", "content", Some(EngineType::Bm25))
+    ctx.create_test_index(1, "Article", "content")
         .await
         .expect("Failed to create index");
 
@@ -392,11 +391,11 @@ async fn test_numeric_content() {
 async fn test_mixed_engine_space_isolation() {
     let ctx = FulltextTestContext::new();
 
-    ctx.create_test_index(1, "Article", "content", Some(EngineType::Bm25))
+    ctx.create_test_index(1, "Article", "content")
         .await
         .expect("Failed to create BM25 index");
 
-    ctx.create_test_index(2, "Article", "content", Some(EngineType::Bm25))
+    ctx.create_test_index(2, "Article", "content")
         .await
         .expect("Failed to create index");
 
@@ -453,7 +452,7 @@ async fn test_rapid_index_create_drop() {
 
     for i in 0..5 {
         // Create index
-        ctx.create_test_index(1, "Article", &format!("field{}", i), Some(EngineType::Bm25))
+        ctx.create_test_index(1, "Article", &format!("field{}", i))
             .await
             .expect("Failed to create index");
 

@@ -21,6 +21,11 @@ pub struct TestScenario {
     last_result: Option<ExecutionResult>,
     last_error: Option<String>,
     current_space: Option<linkrs_core::types::SpaceInfo>,
+    /// Keeps the temporary fulltext index directory alive for the lifetime of
+    /// the scenario. Present only when [`TestScenario::with_fulltext_indexes`]
+    /// attached a manager.
+    #[cfg(feature = "fulltext")]
+    fulltext_dir: Option<tempfile::TempDir>,
 }
 
 impl TestScenario {
@@ -51,7 +56,36 @@ impl TestScenario {
             last_result: None,
             last_error: None,
             current_space: None,
+            #[cfg(feature = "fulltext")]
+            fulltext_dir: None,
         })
+    }
+
+    /// Attach a real (Tantivy-backed) fulltext index manager.
+    ///
+    /// Statements that create, describe, list, search or drop a fulltext index
+    /// need an engine; without one they fail with "no fulltext manager is
+    /// configured", which says nothing about the statement contract under
+    /// test. The index directory is a temporary directory owned by the
+    /// scenario, so each scenario starts with an empty index catalog.
+    #[cfg(feature = "fulltext")]
+    pub fn with_fulltext_indexes(mut self) -> Self {
+        let dir = tempfile::tempdir().expect("fulltext temp dir");
+        let config = linkrs_fulltext::FulltextConfig {
+            enabled: true,
+            index_path: dir.path().join("fulltext"),
+            ..linkrs_fulltext::FulltextConfig::default()
+        };
+        let manager =
+            linkrs_fulltext::FulltextIndexManager::new(config).expect("fulltext manager");
+        let coordinator =
+            linkrs_sync::FulltextSyncCoordinator::new(Arc::new(manager));
+        self.pipeline = self
+            .pipeline
+            .with_fulltext_manager(coordinator.fulltext_manager().clone())
+            .with_fulltext_coordinator(Arc::new(coordinator));
+        self.fulltext_dir = Some(dir);
+        self
     }
 
     // ==================== Execution Methods ====================

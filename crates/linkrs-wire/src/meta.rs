@@ -646,7 +646,6 @@ pub struct VectorSearchSection {
     pub upsert_errors: u64,
     pub total_deletes: u64,
     pub delete_errors: u64,
-    pub disabled_skips: u64,
 }
 
 /// Text-to-vector embedding call counters.

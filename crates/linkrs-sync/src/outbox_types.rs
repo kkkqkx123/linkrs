@@ -31,7 +31,6 @@ pub struct SyncDiagnostics {
     pub materialized_lsn: CommitLsn,
     pub targets: Vec<TargetSyncDiagnostics>,
     pub indexes: Vec<IndexSyncDiagnostics>,
-    pub vector_disabled_skips: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

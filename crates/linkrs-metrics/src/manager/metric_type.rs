@@ -153,7 +153,6 @@ pub enum MetricType {
     VectorRerankErrors,
     /// Cumulative rerank call latency in milliseconds.
     VectorRerankLatencyMs,
-    VectorDisabledSkips,
     // MVCC Tombstone metrics
     TombstoneCount,
     TombstoneMemoryBytes,
@@ -339,7 +338,6 @@ impl MetricType {
             Self::VectorRerankOps => "linkrs_vector_rerank_ops_total",
             Self::VectorRerankErrors => "linkrs_vector_rerank_errors_total",
             Self::VectorRerankLatencyMs => "linkrs_vector_rerank_latency_ms_total",
-            Self::VectorDisabledSkips => "linkrs_vector_disabled_skips_total",
             Self::TombstoneCount => "linkrs_tombstone_count",
             Self::TombstoneMemoryBytes => "linkrs_tombstone_memory_bytes",
             Self::TombstoneOldestTsMin => "linkrs_tombstone_oldest_ts_min",

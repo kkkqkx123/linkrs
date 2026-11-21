@@ -54,14 +54,14 @@
 
 #### 1.7 Vector Client Engine (向量客户端引擎)
 
-- **文件**: `crates/vector-client/src/api/client/client_impl.rs`, `crates/vector-client/src/engine/mod.rs`
-- **代码**: `pub engine: Arc<dyn VectorEngine>`
-- **分析**: VectorClient 需要在运行时支持多个引擎实现（DisabledEngine、QdrantGrpcEngine、QdrantEngine）。虽然当前仅支持 Qdrant 引擎（通过不同的协议：gRPC 或 HTTP），但这些实现通过 Cargo 特性标志有条件地编译。使用 `dyn VectorEngine` 的好处：
-  1. **运行时引擎选择**：根据特性标志和配置在运行时选择引擎，无需多个不同的 VectorClient 类型
-  2. **禁用状态支持**：当向量功能禁用时，使用 DisabledEngine 返回错误，提供一致的接口
-  3. **未来扩展性**：如果后续支持其他向量数据库（Milvus、Weaviate 等），无需修改 VectorClient 代码
-  4. **性能影响最小**：向量操作主要是网络 I/O（gRPC/HTTP 调用），虚函数调用的开销相对可忽略（< 1%）
-  5. **设计简洁**：避免编译时特性组合导致的代码复杂度爆炸
+- **文件**: `crates/vector-client/src/api/client/client_impl.rs`, `crates/vector-client/src/engine.rs`
+- **代码**: `pub engine: Arc<dyn RemoteVectorEngine>`
+- **分析**: VectorClient 需要在运行时支持多个引擎实现（`QdrantGrpcEngine`、`QdrantEngine`，以及配置禁用时的内部 `DisabledEngine`）。这些实现通过 Cargo 特性标志有条件地编译。使用 `dyn RemoteVectorEngine` 的好处：
+  1. **运行时引擎选择**：根据特性标志和传输配置（gRPC / HTTP）在运行时选择引擎，无需多个不同的 VectorClient 类型
+  2. **未来扩展性**：如果后续支持其他向量数据库（Milvus、Weaviate 等），无需修改 VectorClient 代码
+  3. **性能影响最小**：向量操作主要是网络 I/O（gRPC/HTTP 调用），虚函数调用的开销相对可忽略（< 1%）
+  4. **设计简洁**：避免编译时特性组合导致的代码复杂度爆炸
+- **边界**: `DisabledEngine` 由 `pub` 降为 `pub(crate)`，它只是 `VectorManager` 在 `enabled = false` 时的内部降级实现，不再作为可被上层识别的状态对象。上层需要可用后端时检查 `VectorManager::is_engine_available()`，而不是嗅探引擎身份。
 - **维持理由**: ✅ 保留 - 运行时多态的需求大于性能开销
 
 #### 1.8 事务生命周期回调

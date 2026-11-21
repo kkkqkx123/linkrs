@@ -16,7 +16,6 @@ use crate::parser::parsing::expr_parser::parse_expression_with_context;
 use crate::parser::parsing::parse_context::ParseContext;
 use crate::parser::TokenKind;
 use linkrs_core::types::expr::{create_contextual_expression, Expression};
-use linkrs_core::types::FulltextEngineType;
 use std::collections::HashMap;
 
 /// Parse full-text search statements from ParseContext
@@ -75,20 +74,7 @@ pub fn parse_create_fulltext_index_after_create(
     ctx: &mut ParseContext,
 ) -> Result<Stmt, crate::parser::ParseError> {
     ctx.consume_keyword("FULLTEXT")?;
-    ctx.consume_keyword("INDEX")?;
-
-    let if_not_exists = if ctx.check_keyword("IF") {
-        ctx.consume_keyword("IF")?;
-        ctx.consume_keyword("NOT")?;
-        ctx.consume_keyword("EXISTS")?;
-        true
-    } else {
-        false
-    };
-
-    let index_name = ctx.consume_identifier()?;
-    ctx.consume_keyword("ON")?;
-    let schema_name = ctx.consume_identifier()?;
+    let head = crate::parser::parsing::ddl_parser::index_head::parse_create_index_head(ctx)?;
 
     ctx.expect_token(TokenKind::LParen)?;
     let mut fields = Vec::new();
@@ -125,20 +111,17 @@ pub fn parse_create_fulltext_index_after_create(
 
     ctx.expect_token(TokenKind::RParen)?;
 
-    ctx.consume_keyword("ENGINE")?;
-    if ctx.current_token().kind == TokenKind::Assign {
-        ctx.next_token();
-    }
-    if ctx.check_keyword("BM25") {
-        ctx.consume_keyword("BM25")?;
-    } else {
+    // The serving engine is a server-configuration choice, not a per-index
+    // one: accepting an `ENGINE` clause here would promise a selection the
+    // statement cannot honour.
+    if ctx.check_keyword("ENGINE") {
         return Err(crate::parser::ParseError::new(
             crate::parser::core::error::ParseErrorKind::SyntaxError,
-            "Expected BM25 engine type".to_string(),
+            "the ENGINE clause is not accepted; the fulltext backend is selected by server configuration"
+                .to_string(),
             ctx.current_position(),
         ));
     }
-    let engine_type = FulltextEngineType::Bm25;
 
     if ctx.check_keyword("OPTIONS") {
         return Err(crate::parser::ParseError::new(
@@ -154,14 +137,8 @@ pub fn parse_create_fulltext_index_after_create(
         common_options: HashMap::new(),
     };
 
-    let mut create = CreateFulltextIndex::new(
-        ctx.current_span(),
-        index_name,
-        schema_name,
-        fields,
-        engine_type,
-    );
-    create.if_not_exists = if_not_exists;
+    let mut create = CreateFulltextIndex::new(head.span, head.index_name, head.schema_name, fields);
+    create.if_not_exists = head.if_not_exists;
     create.options = options;
 
     Ok(Stmt::CreateFulltextIndex(create))
@@ -548,8 +525,7 @@ mod tests {
     #[test]
     fn test_parse_create_fulltext_index() {
         let sql = r#"CREATE FULLTEXT INDEX idx_article_content
-                     ON article(title, content)
-                     ENGINE BM25"#;
+                     ON article(title, content)"#;
 
         let mut parser = Parser::new(sql);
         let result = parser.parse();
@@ -557,21 +533,38 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_create_fulltext_index_with_equals_engine() {
-        let sql = r#"CREATE FULLTEXT INDEX idx_article_content
-                     ON article(content)
-                     ENGINE = BM25"#;
+    fn test_parse_create_fulltext_index_if_not_exists() {
+        let sql = r#"CREATE FULLTEXT INDEX IF NOT EXISTS idx_article_content
+                     ON article(content)"#;
 
         let mut parser = Parser::new(sql);
         let result = parser.parse();
         assert!(result.is_ok());
+    }
+
+    /// The serving engine is a server-configuration choice; a statement that
+    /// names one would promise a selection it cannot honour.
+    #[test]
+    fn test_create_fulltext_engine_clause_is_rejected() {
+        for sql in [
+            r#"CREATE FULLTEXT INDEX idx ON article(content) ENGINE = BM25"#,
+            r#"CREATE FULLTEXT INDEX idx ON article(content) ENGINE BM25"#,
+        ] {
+            let mut parser = Parser::new(sql);
+            let result = parser.parse();
+            assert!(result.is_err(), "ENGINE clause must be rejected: {sql}");
+            let collected = format!("{:?}", parser.take_errors());
+            assert!(
+                collected.contains("ENGINE"),
+                "rejection must name ENGINE: {collected}"
+            );
+        }
     }
 
     #[test]
     fn test_parse_create_fulltext_index_with_analyzer_rejected() {
         let sql = r#"CREATE FULLTEXT INDEX idx_article_content
-                     ON article(content ANALYZER 'standard')
-                     ENGINE = BM25"#;
+                     ON article(content ANALYZER 'standard')"#;
 
         let mut parser = Parser::new(sql);
         let result = parser.parse();
@@ -587,8 +580,7 @@ mod tests {
     #[test]
     fn test_parse_create_fulltext_index_with_boost_rejected() {
         let sql = r#"CREATE FULLTEXT INDEX idx_article_content
-                     ON article(content BOOST 2.0)
-                     ENGINE = BM25"#;
+                     ON article(content BOOST 2.0)"#;
 
         let mut parser = Parser::new(sql);
         let result = parser.parse();
@@ -605,7 +597,7 @@ mod tests {
     fn test_parse_create_fulltext_index_with_options_rejected() {
         let sql = r#"CREATE FULLTEXT INDEX idx_article_content
                      ON article(content)
-                     ENGINE = BM25 OPTIONS (k1=1.2, b=0.8)"#;
+                     OPTIONS (k1=1.2, b=0.8)"#;
 
         let mut parser = Parser::new(sql);
         let result = parser.parse();

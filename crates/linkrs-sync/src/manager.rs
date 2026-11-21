@@ -54,6 +54,12 @@ pub struct SyncManager {
     sqlite_outbox: Option<Arc<SqliteOutbox>>,
     #[cfg(feature = "vector")]
     vector_receiver: Option<Arc<crate::VectorReceiver>>,
+    /// Long-lived fulltext receivers keyed by field index id. Constructing one
+    /// reads the engine commit payload (Tantivy re-reads its index metas from
+    /// disk), so building one per applied field would re-read the same state
+    /// once per batch element.
+    #[cfg(feature = "fulltext")]
+    fulltext_receivers: Arc<DashMap<u64, delivery::FulltextReceiverSlot>>,
     outbox_consumer: Arc<OutboxConsumerConfig>,
     backpressure: Arc<OutboxBackpressureConfig>,
     /// When an `Auth` error is seen, delivery is paused until this timestamp
@@ -83,6 +89,8 @@ impl Clone for SyncManager {
             sqlite_outbox: self.sqlite_outbox.clone(),
             #[cfg(feature = "vector")]
             vector_receiver: self.vector_receiver.clone(),
+            #[cfg(feature = "fulltext")]
+            fulltext_receivers: self.fulltext_receivers.clone(),
             outbox_consumer: self.outbox_consumer.clone(),
             backpressure: self.backpressure.clone(),
             auth_paused_until_ms: self.auth_paused_until_ms.clone(),
@@ -251,7 +259,7 @@ mod tests {
                 .expect("fulltext manager should be created"),
         );
         fulltext_manager
-            .create_index(1, "Node", "text", None)
+            .create_index(1, "Node", "text")
             .await
             .expect("fulltext index should be created");
         let coordinator = Arc::new(crate::FulltextSyncCoordinator::new(fulltext_manager));
@@ -294,7 +302,7 @@ mod tests {
                 .expect("fulltext manager should be created"),
         );
         fulltext_manager
-            .create_index(1, "Node", "text", None)
+            .create_index(1, "Node", "text")
             .await
             .expect("receiver index should be created");
         let coordinator = Arc::new(crate::FulltextSyncCoordinator::new(

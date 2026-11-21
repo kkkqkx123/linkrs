@@ -58,10 +58,7 @@ async fn test_local_index_create_and_search() {
     assert_eq!(collection, "space_vec_1");
     assert!(engine.collection_exists("space_vec_1"));
     assert!(coordinator.index_exists(1, "user", "embedding"));
-    assert_eq!(
-        coordinator.engine_state(),
-        linkrs_sync::VectorEngineState::Active
-    );
+    assert_eq!(coordinator.backend().engine_name(), "local");
 
     // Duplicate index creation is tolerated (config conflict check passes).
     coordinator
@@ -201,7 +198,7 @@ async fn test_batch_delivery_injects_group_id_payload() {
             .as_ref()
             .and_then(|p| p.get("group_id"))
             .and_then(|v| v.as_str()),
-        Some("item_vec")
+        Some("4_item_3_vec")
     );
 
     // A delivered insert is searchable through the group-scoped query path.

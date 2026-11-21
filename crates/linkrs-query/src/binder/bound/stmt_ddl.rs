@@ -6,7 +6,6 @@ use crate::parser::ast::{
 
 use linkrs_core::permission::RoleType;
 use linkrs_core::types::semantic::{ColumnDef, ValueType};
-use linkrs_core::types::FulltextEngineType;
 
 use super::stmt::BoundStatement;
 
@@ -114,7 +113,6 @@ pub struct BoundCreateFulltextIndex {
     pub index_name: String,
     pub schema_name: String,
     pub fields: Vec<IndexFieldDef>,
-    pub engine_type: FulltextEngineType,
     pub options: IndexOptions,
     pub if_not_exists: bool,
 }

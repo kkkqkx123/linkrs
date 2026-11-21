@@ -176,13 +176,18 @@ pub async fn start_service_with_config_path(
                 })?;
                 info!("VectorManager initialized");
                 (
-                    Some(VectorBackend::qdrant_with_defaults(
-                        Arc::new(manager),
-                        linkrs_sync::vector_defaults::CollectionDefaults::from_qdrant(
-                            &config.vector_config().qdrant.collection,
-                            config.vector_config().limits.default_max_points,
-                        ),
-                    )),
+                    Some(
+                        VectorBackend::qdrant_with_defaults(
+                            Arc::new(manager),
+                            linkrs_sync::vector_defaults::CollectionDefaults::from_qdrant(
+                                &config.vector_config().qdrant.collection,
+                                config.vector_config().limits.default_max_points,
+                            ),
+                        )
+                        .map_err(|error| {
+                            linkrs_core::DBError::validation(format!("Vector subsystem: {error}"))
+                        })?,
+                    ),
                     None,
                 )
             }

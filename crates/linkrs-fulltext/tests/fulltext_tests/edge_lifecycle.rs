@@ -10,7 +10,7 @@ const FIELD: &str = "note";
 async fn test_edge_fulltext_lifecycle() {
     let ctx = FulltextTestContext::new();
 
-    ctx.create_test_index(SPACE_ID, EDGE_TYPE, FIELD, None)
+    ctx.create_test_index(SPACE_ID, EDGE_TYPE, FIELD)
         .await
         .expect("edge type index creation should succeed");
     assert!(

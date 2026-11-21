@@ -26,7 +26,6 @@ mod tests {
         AlterSequenceNode, CreateSequenceNode, DropSequenceNode, SequenceManageInfo,
     };
     use crate::planning::plan::core::nodes::search::fulltext::management::CreateFulltextIndexNode;
-    use linkrs_core::types::FulltextEngineType;
     use std::collections::HashMap;
 
     fn exec_ctx() -> ExecutionContext {
@@ -127,7 +126,6 @@ mod tests {
             "idx_a".to_string(),
             "Article".to_string(),
             fields,
-            FulltextEngineType::Bm25,
             options,
             true,
             7,
@@ -138,7 +136,6 @@ mod tests {
                 index_name,
                 schema_name,
                 fields,
-                engine_type,
                 options,
                 if_not_exists,
                 space_id,
@@ -147,7 +144,6 @@ mod tests {
                 assert_eq!(schema_name, "Article");
                 assert_eq!(fields.len(), 1);
                 assert_eq!(fields[0].field_name, "content");
-                assert_eq!(engine_type, FulltextEngineType::Bm25);
                 let bm25 = options.bm25_config.expect("bm25 options carried");
                 assert_eq!(bm25.k1, Some(1.2));
                 assert_eq!(bm25.b, Some(0.8));

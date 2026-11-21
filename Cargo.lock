@@ -2266,8 +2266,6 @@ name = "linkrs-client"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "async-trait",
- "futures",
  "linkrs-core",
  "linkrs-wire",
  "prost",
@@ -2326,8 +2324,6 @@ dependencies = [
  "serde_json",
  "thiserror",
  "utoipa",
- "uuid",
- "zstd 0.14.2",
 ]
 
 [[package]]
@@ -4190,7 +4186,6 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tokio",
- "tokio-stream",
  "tracing",
  "utoipa",
  "wasm-bindgen",
@@ -5271,7 +5266,6 @@ checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
 name = "vector-client"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "async-trait",
  "chrono",
  "criterion",

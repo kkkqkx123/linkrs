@@ -66,10 +66,8 @@ fn test_create_edge_as_query_generic_path_rejected() {
 fn test_create_fulltext_unsupported_analyzer_is_parse_error() {
     use linkrs_query::parser::Parser;
 
-    let result = Parser::new(
-        "CREATE FULLTEXT INDEX idx ON Article(content ANALYZER 'standard') ENGINE = BM25",
-    )
-    .parse();
+    let result =
+        Parser::new("CREATE FULLTEXT INDEX idx ON Article(content ANALYZER 'standard')").parse();
 
     let err = result.expect_err("ANALYZER clause must be rejected");
     assert!(
@@ -78,25 +76,34 @@ fn test_create_fulltext_unsupported_analyzer_is_parse_error() {
     );
 }
 
+/// The engine is selected by server configuration, so a statement that names
+/// one must be rejected instead of silently ignored.
 #[cfg(feature = "fulltext")]
 #[test]
-fn test_create_fulltext_missing_engine_is_rejected() {
+fn test_create_fulltext_engine_clause_is_rejected() {
     let scenario = TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
         .exec_ddl("CREATE TAG Article(title: STRING)")
         .assert_success()
-        .exec_ddl("CREATE FULLTEXT INDEX idx ON Article(title)");
+        .exec_ddl("CREATE FULLTEXT INDEX idx ON Article(title) ENGINE = BM25");
 
+    let err = scenario
+        .error()
+        .expect("CREATE FULLTEXT INDEX with an ENGINE clause must fail");
     assert!(
-        scenario.error().is_some(),
-        "CREATE FULLTEXT INDEX without ENGINE = BM25 must fail"
+        err.contains("ENGINE"),
+        "error must name the rejected ENGINE clause, got: {err}"
     );
 }
 
 #[cfg(feature = "vector")]
 #[test]
 fn test_create_vector_invalid_hnsw_rejected() {
+    // The HNSW invariant is `ef_construct >= max(2*m, 4)`: the beam must be
+    // at least as wide as one node's neighborhood. `m` alone has no upper or
+    // lower bound check, so an invalid combination has to break that
+    // relation to be rejected.
     let scenario = TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
@@ -104,7 +111,7 @@ fn test_create_vector_invalid_hnsw_rejected() {
         .assert_success()
         .exec_ddl(
             "CREATE VECTOR INDEX idx ON Doc(embedding) \
-             WITH (vector_size=4, hnsw_m=1)",
+             WITH (vector_size=4, hnsw_m=16, hnsw_ef_construct=4)",
         );
 
     let err = scenario

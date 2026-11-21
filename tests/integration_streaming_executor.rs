@@ -140,6 +140,8 @@ fn test_project_in_chain() {
             UnaryOperatorKind::Project {
                 output_expressions: vec![Expression::Literal(Value::Int(0))],
                 output_col_names: vec![],
+                emit_rowless: false,
+                identity_as_unit: false,
                 state: unary_state(),
             },
             empty_layout(),
@@ -245,6 +247,8 @@ fn test_pipeline_scan_project() {
                     Expression::Literal(Value::string("const")),
                 ],
                 output_col_names: vec![],
+                emit_rowless: false,
+                identity_as_unit: false,
                 state: unary_state(),
             },
             empty_layout(),
@@ -305,6 +309,8 @@ fn test_pipeline_scan_filter_project() {
             UnaryOperatorKind::Project {
                 output_expressions: vec![Expression::Literal(Value::Int(42))],
                 output_col_names: vec![],
+                emit_rowless: false,
+                identity_as_unit: false,
                 state: unary_state(),
             },
             empty_layout(),
@@ -404,6 +410,7 @@ fn test_aggregate_in_chain() {
                     AggregateFunction::Count,
                     vec![Expression::Literal(Value::Int(1))],
                 )],
+                aggregate_filters: vec![None],
                 output_col_names: vec![],
                 memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
                 state: None,
@@ -575,6 +582,8 @@ fn test_complex_pipeline_4step() {
             UnaryOperatorKind::Project {
                 output_expressions: vec![Expression::Literal(Value::string("col"))],
                 output_col_names: vec![],
+                emit_rowless: false,
+                identity_as_unit: false,
                 state: unary_state(),
             },
             empty_layout(),

@@ -67,10 +67,6 @@ impl VectorEngineHandle for MetricsEngineHandle {
         self.inner.is_in_process()
     }
 
-    fn is_disabled(&self) -> bool {
-        self.inner.is_disabled()
-    }
-
     async fn health_check(&self) -> VectorCoordinatorResult<HealthStatus> {
         self.inner.health_check().await
     }

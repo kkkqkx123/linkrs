@@ -124,8 +124,13 @@ impl VectorIndexLocation {
         match granularity {
             CollectionGranularity::Space => format!("{}_{}", VECTOR_INDEX_PREFIX, self.space_id),
             CollectionGranularity::Field => format!(
-                "{}_{}_{}_{}",
-                VECTOR_INDEX_PREFIX, self.space_id, self.tag_name, self.field_name
+                "{}_{}_{}_{}_{}_{}",
+                VECTOR_INDEX_PREFIX,
+                self.space_id,
+                self.tag_name.len(),
+                self.tag_name,
+                self.field_name.len(),
+                self.field_name
             ),
         }
     }
@@ -135,9 +140,20 @@ impl VectorIndexLocation {
             .unwrap_or_default()
     }
 
+    /// Payload discriminator for space-granularity collections.
+    ///
+    /// Length-prefixed for the same reason as the physical name: without it
+    /// `("a_b", "c")` and `("a", "b_c")` would share one group and searches
+    /// would silently return each other's points.
     pub fn group_id_with(&self, granularity: CollectionGranularity) -> Option<String> {
         match granularity {
-            CollectionGranularity::Space => Some(format!("{}_{}", self.tag_name, self.field_name)),
+            CollectionGranularity::Space => Some(format!(
+                "{}_{}_{}_{}",
+                self.tag_name.len(),
+                self.tag_name,
+                self.field_name.len(),
+                self.field_name
+            )),
             CollectionGranularity::Field => None,
         }
     }
@@ -151,18 +167,6 @@ pub struct IndexMetadataWrapper {
     pub tag_name: String,
     pub field_name: String,
     pub index_name: Option<String>,
-}
-
-/// Runtime state of the vector engine.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum VectorEngineState {
-    /// Engine is disabled: user-facing vector operations fail with
-    /// [`VectorCoordinatorError::EngineDisabled`]; delivery-plane batches are
-    /// skipped and counted. Logical index metadata is still tracked for
-    /// schema correctness.
-    Disabled,
-    /// Engine is active; mutations and searches execute against the backend.
-    Active,
 }
 
 /// Vector change context
@@ -194,9 +198,6 @@ impl VectorChangeContext {
 /// Vector synchronization coordinator
 pub struct VectorSyncCoordinator {
     index_manager: Arc<VectorIndexManager>,
-    /// Vector change items skipped because the engine is disabled (delivery
-    /// plane). Observable accounting for silent degradation.
-    disabled_skips: std::sync::atomic::AtomicU64,
     /// Tokio runtime handle for blocking async operations from sync context.
     runtime: tokio::runtime::Handle,
     /// Live rebuild progress by index; present only while a rebuild runs.
@@ -212,31 +213,10 @@ impl std::fmt::Debug for VectorSyncCoordinator {
 }
 
 impl VectorSyncCoordinator {
-    pub fn is_disabled_engine(&self) -> bool {
-        self.index_manager.is_disabled_engine()
-    }
-
-    /// Returns the runtime state of the underlying vector engine.
-    pub fn engine_state(&self) -> crate::VectorEngineState {
-        if self.is_disabled_engine() {
-            crate::VectorEngineState::Disabled
-        } else {
-            crate::VectorEngineState::Active
-        }
-    }
-
-    /// Total number of vector change items skipped because the engine was
-    /// disabled.
-    pub fn disabled_skip_count(&self) -> u64 {
-        self.disabled_skips
-            .load(std::sync::atomic::Ordering::Relaxed)
-    }
-
     /// Create a new vector sync coordinator with an explicit runtime handle.
     pub fn new(backend: VectorBackend, runtime: tokio::runtime::Handle) -> Self {
         Self {
             index_manager: Arc::new(VectorIndexManager::new(backend)),
-            disabled_skips: std::sync::atomic::AtomicU64::new(0),
             runtime,
             rebuild_progress: DashMap::new(),
         }
@@ -250,6 +230,21 @@ impl VectorSyncCoordinator {
     /// Get a reference to the underlying index manager.
     pub fn index_manager(&self) -> &Arc<VectorIndexManager> {
         &self.index_manager
+    }
+
+    /// Search by location, delegating to the index manager so the coordinator
+    /// facade covers the same read paths as the manager it wraps.
+    pub async fn search_by_location(
+        &self,
+        space_id: u64,
+        tag_name: &str,
+        field_name: &str,
+        query_vector: Vec<f32>,
+        limit: usize,
+    ) -> VectorCoordinatorResult<Vec<SearchResult>> {
+        self.index_manager
+            .search_by_location(space_id, tag_name, field_name, query_vector, limit)
+            .await
     }
 
     /// Get the runtime handle for blocking async operations.
@@ -450,21 +445,6 @@ impl VectorSyncCoordinator {
         collection_override: Option<&str>,
         contexts: Vec<crate::VectorChangeContext>,
     ) -> VectorCoordinatorResult<()> {
-        if self.is_disabled_engine() {
-            self.disabled_skips
-                .fetch_add(contexts.len() as u64, std::sync::atomic::Ordering::Relaxed);
-            tracing::warn!(
-                count = contexts.len(),
-                total_skipped = self
-                    .disabled_skips
-                    .load(std::sync::atomic::Ordering::Relaxed),
-                "vector engine disabled: retaining {} vector changes for retry; \
-                 vector data diverges until engine recovers",
-                contexts.len()
-            );
-            return Err(VectorCoordinatorError::EngineDisabled);
-        }
-
         let (upsert_by_collection, delete_by_collection) = self
             .index_manager
             .prepare_change_batch_for_collection(collection_override, contexts);

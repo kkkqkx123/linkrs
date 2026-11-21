@@ -1,10 +1,9 @@
 //! Vector sync integration tests at the root crate boundary.
 //!
-//! These tests exercise the public coordinator surface against the remote
-//! backend shell (a disabled Qdrant manager) and therefore require
-//! `vector-qdrant`. Disabled-engine contract: user-facing operations fail
-//! with `EngineDisabled`, delivery-plane batches are skipped and accounted,
-//! logical index metadata keeps working.
+//! These tests exercise the public coordinator surface and the remote backend
+//! shell, so they require `vector-qdrant`. Availability contract: a vector
+//! subsystem that is not enabled never becomes a `VectorBackend`; there is no
+//! "present but always failing" engine state to detect at runtime.
 #![cfg(feature = "vector-qdrant")]
 
 use std::collections::HashMap;
@@ -12,100 +11,23 @@ use std::sync::Arc;
 
 use linkrs::core::Value;
 use linkrs::sync::{
-    VectorBackend, VectorChangeContext, VectorChangeType, VectorClientConfig, VectorIndexLocation,
-    VectorManager, VectorPointData, VectorSyncCoordinator,
+    VectorBackend, VectorClientConfig, VectorIndexLocation, VectorManager, VectorPointData,
 };
 
-async fn disabled_coordinator() -> Arc<VectorSyncCoordinator> {
-    let backend = VectorBackend::qdrant(Arc::new(
+/// A vector client built from a disabled configuration must be rejected at
+/// backend construction rather than producing a coordinator whose every call
+/// fails.
+#[tokio::test]
+async fn disabled_client_cannot_become_a_backend() {
+    let manager = Arc::new(
         VectorManager::new(VectorClientConfig::disabled())
             .await
-            .unwrap(),
-    ));
-    Arc::new(VectorSyncCoordinator::new_without_embedding(
-        backend,
-        tokio::runtime::Handle::current(),
-    ))
-}
-
-#[tokio::test]
-async fn disabled_engine_reports_disabled_state() {
-    let coordinator = disabled_coordinator().await;
-    assert_eq!(
-        coordinator.engine_state(),
-        linkrs::sync::VectorEngineState::Disabled
+            .expect("a disabled manager builds without I/O"),
     );
-}
-
-#[tokio::test]
-async fn disabled_engine_skips_delivery_and_fails_searches() {
-    let coordinator = disabled_coordinator().await;
-    assert_eq!(coordinator.disabled_skip_count(), 0);
-
-    // Register logical indexes so delivery has real targets to skip.
-    coordinator
-        .create_vector_index(
-            1,
-            "docs",
-            "embedding",
-            3,
-            linkrs::sync::vector_sync::DistanceMetric::Cosine,
-        )
-        .await
-        .unwrap();
-    assert!(coordinator.index_exists(1, "docs", "embedding"));
-
-    let contexts = vec![
-        VectorChangeContext::new(
-            1,
-            "docs",
-            "embedding",
-            VectorChangeType::Insert,
-            VectorPointData {
-                id: "doc_1".to_string(),
-                vector: vec![1.0, 2.0, 3.0],
-                payload: HashMap::new(),
-            },
-        ),
-        VectorChangeContext::new(
-            1,
-            "docs",
-            "embedding",
-            VectorChangeType::Delete,
-            VectorPointData {
-                id: "doc_2".to_string(),
-                vector: Vec::new(),
-                payload: HashMap::new(),
-            },
-        ),
-    ];
-    // Delivery plane: skipped, but accounted and reported as Ok so the sync
-    // pipeline keeps recording its LSN.
-    coordinator
-        .on_vector_change_batch(contexts)
-        .await
-        .expect("delivery to a disabled engine is a skip-and-account no-op");
-    assert_eq!(
-        coordinator.disabled_skip_count(),
-        2,
-        "every skipped item must be counted"
-    );
-
-    // Query plane: loud typed error instead of an empty set that would be
-    // indistinguishable from "no matching data".
-    let error = coordinator
-        .search_with_options(linkrs::sync::vector_sync::SearchOptions::new(
-            1,
-            "docs",
-            "embedding",
-            vec![1.0, 2.0, 3.0],
-            10,
-        ))
-        .await
-        .expect_err("searches against a disabled engine must fail loudly");
+    assert!(!manager.is_engine_available());
     assert!(
-        error.to_string().contains("disabled"),
-        "error should identify the disabled engine: {error}"
+        VectorBackend::qdrant(manager).is_err(),
+        "a disabled client must not be wrapped into a backend"
     );
 }
 
@@ -117,9 +39,10 @@ async fn index_location_naming_and_logical_isolation() {
     assert_eq!(location.field_name, "image_embedding");
 
     // All indexes of a space share one physical collection; the group id is
-    // the logical isolation key inside it.
+    // the logical isolation key inside it, length-prefixed so that a tag or
+    // field containing `_` cannot be confused with a different pair.
     assert_eq!(location.to_collection_name(), "space_vec_5");
-    assert_eq!(location.group_id(), "Products_image_embedding");
+    assert_eq!(location.group_id(), "8_Products_15_image_embedding");
 }
 
 #[tokio::test]
@@ -141,42 +64,4 @@ async fn point_data_carries_user_payload() {
         &Value::string("electronics")
     );
     assert_eq!(point.payload.get("price").unwrap(), &Value::string("99.99"));
-}
-
-#[tokio::test]
-async fn multiple_locations_deliver_in_one_batch() {
-    let coordinator = disabled_coordinator().await;
-
-    let locations: Vec<(u64, &str, &str)> = vec![
-        (1, "users", "face_embedding"),
-        (1, "products", "image_embedding"),
-        (2, "articles", "text_embedding"),
-    ];
-    let contexts = locations
-        .iter()
-        .enumerate()
-        .map(|(i, (space, tag, field))| {
-            VectorChangeContext::new(
-                *space,
-                *tag,
-                *field,
-                VectorChangeType::Insert,
-                VectorPointData {
-                    id: format!("item_{}", i),
-                    vector: vec![i as f32; 4],
-                    payload: HashMap::new(),
-                },
-            )
-        })
-        .collect();
-
-    coordinator
-        .on_vector_change_batch(contexts)
-        .await
-        .expect("multi-location delivery is a skip-and-account no-op on a disabled engine");
-    assert_eq!(
-        coordinator.disabled_skip_count(),
-        locations.len() as u64,
-        "skips from every location must be counted"
-    );
 }

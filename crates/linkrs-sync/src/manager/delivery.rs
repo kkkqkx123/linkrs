@@ -22,32 +22,58 @@ pub(crate) struct FulltextFieldApply<'a> {
     commit_lsn: CommitLsn,
     space_id: u64,
     index_name: &'a str,
-    entity_id: String,
     properties: Vec<(Arc<str>, Value)>,
     deleted: bool,
     /// Rebuild catch-up replay targets the scratch engine instead of the
     /// live map lookup. `None` = resolve via the manager (live delivery).
     engine_override: Option<Arc<dyn FulltextSearchEngine>>,
+    /// Cache of long-lived receivers shared by every apply on this manager.
+    receivers: &'a dashmap::DashMap<u64, FulltextReceiverSlot>,
 }
+
+/// One cached apply receiver plus the engine it was built for. Holding the
+/// engine keeps its allocation alive, so a replaced engine can never be
+/// mistaken for the cached one by pointer identity.
 #[cfg(feature = "fulltext")]
-pub(crate) fn edge_entity_id(
-    src: impl std::fmt::Display,
-    dst: impl std::fmt::Display,
-    ranking: i64,
-) -> String {
-    format!("{}->{}#{}", src, dst, ranking)
+pub(crate) struct FulltextReceiverSlot {
+    engine: Arc<dyn FulltextSearchEngine>,
+    receiver: Arc<crate::receiver::FulltextReceiver>,
+}
+
+/// Return the receiver for one field index, rebuilding it when the live engine
+/// changed (publish, clear, re-create). A receiver owns the applied-LSN
+/// watermark and the idempotency receipts, so it must outlive a single batch to
+/// avoid re-reading the engine commit payload on every apply.
+#[cfg(feature = "fulltext")]
+pub(crate) fn cached_fulltext_receiver(
+    cache: &dashmap::DashMap<u64, FulltextReceiverSlot>,
+    index_id: u64,
+    engine: Arc<dyn FulltextSearchEngine>,
+) -> Arc<crate::receiver::FulltextReceiver> {
+    if let Some(slot) = cache.get(&index_id) {
+        if Arc::ptr_eq(&slot.engine, &engine) {
+            return Arc::clone(&slot.receiver);
+        }
+    }
+    let receiver = Arc::new(crate::receiver::FulltextReceiver::new(Arc::clone(&engine)));
+    cache.insert(
+        index_id,
+        FulltextReceiverSlot {
+            engine,
+            receiver: Arc::clone(&receiver),
+        },
+    );
+    receiver
 }
 
 /// Typed delivery failure carried through the claim-apply-ack loop.
 ///
 /// The readable message is persisted to the outbox (retry/dead-letter),
-/// while the kind drives the retry policy. The disabled flag covers the
-/// engine-off state without string matching.
+/// while the kind drives the retry policy.
 #[derive(Debug, Clone)]
 pub(crate) struct ApplyFailure {
     message: String,
     kind: crate::vector_error::VectorErrorKind,
-    disabled: bool,
 }
 
 impl ApplyFailure {
@@ -55,7 +81,6 @@ impl ApplyFailure {
         Self {
             message,
             kind: crate::vector_error::VectorErrorKind::Retryable,
-            disabled: false,
         }
     }
 
@@ -63,21 +88,15 @@ impl ApplyFailure {
         Self {
             message,
             kind: crate::vector_error::VectorErrorKind::NonRetryable,
-            disabled: false,
         }
     }
 
     #[cfg(feature = "vector")]
     fn from_vector(error: crate::vector_error::VectorCoordinatorError) -> Self {
-        let disabled = matches!(
-            error,
-            crate::vector_error::VectorCoordinatorError::EngineDisabled
-        );
         let kind = error.kind();
         Self {
             message: error.to_string(),
             kind,
-            disabled,
         }
     }
 
@@ -99,7 +118,6 @@ impl ApplyFailure {
         Self {
             message: error.to_string(),
             kind,
-            disabled: false,
         }
     }
 
@@ -140,13 +158,6 @@ async fn handle_delivery_error(
 ) -> Result<bool, crate::manager::SyncError> {
     use crate::vector_error::VectorErrorKind;
     let error = failure.message();
-    if failure.disabled {
-        outbox
-            .retry(event, now.saturating_add(5_000), error)
-            .await
-            .map_err(crate::manager::SyncError::PersistenceError)?;
-        return Ok(false);
-    }
     match failure.kind {
         VectorErrorKind::Auth => {
             let pause_until = now.saturating_add(60_000);
@@ -421,10 +432,6 @@ impl super::SyncManager {
                     let label = format!("{}:{}", index.target, index.index_id);
                     stats.record_target_frontier_lag(&label, index.frontier_lag);
                 }
-                #[cfg(feature = "vector")]
-                if let Some(coord) = self.vector_coordinator.as_ref() {
-                    stats.record_vector_disabled_skips(coord.disabled_skip_count());
-                }
             }
             Ok(processed)
         })
@@ -490,7 +497,7 @@ impl super::SyncManager {
             OutboxPayload::Vertex {
                 space_id,
                 tag_name,
-                vertex_id,
+                vertex_id: _,
                 properties,
                 change_type,
             } => {
@@ -511,10 +518,10 @@ impl super::SyncManager {
                     commit_lsn,
                     space_id: *space_id,
                     index_name: tag_name,
-                    entity_id: crate::fulltext_rebuild::fulltext_vertex_doc_id(vertex_id),
                     properties,
                     deleted: matches!(change_type, ChangeType::Delete),
                     engine_override: engine_override.clone(),
+                    receivers: &self.fulltext_receivers,
                 })
                 .await
             }
@@ -530,19 +537,17 @@ impl super::SyncManager {
                     commit_lsn,
                     space_id: *space_id,
                     index_name: &edge.edge_type,
-                    entity_id: edge_entity_id(edge.src, edge.dst, edge.ranking),
                     properties,
                     deleted: false,
                     engine_override: engine_override.clone(),
+                    receivers: &self.fulltext_receivers,
                 })
                 .await
             }
             OutboxPayload::EdgeDelete {
                 space_id,
-                src,
-                dst,
                 edge_type,
-                ranking,
+                ..
             } => {
                 let properties = manager
                     .get_space_indexes(*space_id)
@@ -556,10 +561,10 @@ impl super::SyncManager {
                     commit_lsn,
                     space_id: *space_id,
                     index_name: edge_type,
-                    entity_id: edge_entity_id(src, dst, *ranking),
                     properties,
                     deleted: true,
                     engine_override: engine_override.clone(),
+                    receivers: &self.fulltext_receivers,
                 })
                 .await
             }
@@ -575,7 +580,7 @@ impl super::SyncManager {
                         continue;
                     }
                     if let Err(error) = manager
-                        .create_index(*space_id, schema_name, field_name, None)
+                        .create_index(*space_id, schema_name, field_name)
                         .await
                     {
                         use linkrs_fulltext::error::SearchError as FulltextError;
@@ -606,6 +611,10 @@ impl super::SyncManager {
                         .await
                         .map_err(ApplyFailure::from_fulltext)?;
                 }
+                // Dropped indexes leave engine-backed receiver state behind;
+                // clearing is cheap (one entry per field index) and a later
+                // apply rebuilds its receiver from the live engine payload.
+                self.fulltext_receivers.clear();
                 Ok(())
             }
             OutboxPayload::DropSpace { space_id } => {
@@ -613,6 +622,7 @@ impl super::SyncManager {
                     .drop_space_indexes(*space_id)
                     .await
                     .map_err(ApplyFailure::from_fulltext)?;
+                self.fulltext_receivers.clear();
                 Ok(())
             }
             OutboxPayload::DropTag { space_id, tag_name } => {
@@ -628,6 +638,7 @@ impl super::SyncManager {
                         .await
                         .map_err(ApplyFailure::from_fulltext)?;
                 }
+                self.fulltext_receivers.clear();
                 Ok(())
             }
         }
@@ -647,6 +658,7 @@ impl super::SyncManager {
                 &field_name,
             );
             let _fence = fence.read().await;
+            let is_override = request.engine_override.is_some();
             let engine = match request.engine_override.clone() {
                 Some(engine) => Some(engine),
                 None => {
@@ -676,7 +688,14 @@ impl super::SyncManager {
                 field_name
             ))
             .map_err(ApplyFailure::non_retryable)?;
-            let receiver = crate::receiver::FulltextReceiver::new(engine);
+            // Rebuild catch-up replays into a scratch engine that alternates
+            // with the live one, so caching by index id would thrash; the live
+            // path is the one that applies the same index batch after batch.
+            let receiver = if is_override {
+                Arc::new(crate::receiver::FulltextReceiver::new(engine))
+            } else {
+                cached_fulltext_receiver(request.receivers, field_mutation.index_id, engine)
+            };
             let late_arrival = receiver
                 .check_late_arrival(request.commit_lsn, field_mutation.idempotency_key.as_str())
                 .await;
@@ -689,7 +708,7 @@ impl super::SyncManager {
                 .map_err(ApplyFailure::from_fulltext)?;
             log::debug!(
                 "Applied fulltext mutation for {} at {}",
-                request.entity_id.as_str(),
+                field_mutation.entity_ref.doc_id(),
                 request.commit_lsn
             );
         }
@@ -920,7 +939,7 @@ impl super::SyncManager {
         }
         #[cfg(feature = "vector")]
         if let Some(coordinator) = self.vector_coordinator.as_ref() {
-            if coordinator.is_disabled_engine() || !coordinator.backend().is_local() {
+            if !coordinator.backend().is_local() {
                 return false;
             }
         }
@@ -941,7 +960,7 @@ impl super::SyncManager {
         }
         #[cfg(feature = "vector")]
         if let Some(coordinator) = self.vector_coordinator.as_ref() {
-            if coordinator.is_disabled_engine() || !coordinator.backend().is_local() {
+            if !coordinator.backend().is_local() {
                 return false;
             }
         }

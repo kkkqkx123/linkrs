@@ -58,7 +58,7 @@ const EDGE_KNOWS: &str = "CREATE EDGE KNOWS(since STRING) FROM Person TO Person"
 const PEOPLE: &str = "INSERT VERTEX Person(id, name) VALUES 1:(1, 'Alice'), 2:(2, 'Bob')";
 const KNOWS12: &str = "INSERT EDGE KNOWS(since) VALUES 1->2:('2020')";
 const TAG_ARTICLE: &str = "CREATE TAG article(title STRING, content STRING)";
-const FT_INDEX: &str = "CREATE FULLTEXT INDEX idx_article_content ON article(content) ENGINE BM25";
+const FT_INDEX: &str = "CREATE FULLTEXT INDEX idx_article_content ON article(content)";
 const TAG_DOC: &str = "CREATE TAG doc(name STRING)";
 const VI_INDEX: &str =
     "CREATE VECTOR INDEX idx_doc_embedding ON doc(embedding) WITH (vector_size=4)";
@@ -631,7 +631,7 @@ pub const INVENTORY: &[InventoryEntry] = &[
     },
     InventoryEntry {
         variant: "CreateFulltextIndex",
-        sql: "CREATE FULLTEXT INDEX idx_article_content ON article(content) ENGINE BM25",
+        sql: "CREATE FULLTEXT INDEX idx_article_content ON article(content)",
         ddl_setup: &[TAG_ARTICLE],
         dml_setup: &[],
         kind: "CREATE FULLTEXT INDEX",

@@ -1,24 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-/// Local fulltext engine selector.
-///
-/// Only the local Tantivy BM25 engine is supported. The enum is kept so
-/// stored configuration stays explicit about which engine produced an index.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
-pub enum FulltextEngineType {
-    #[default]
-    Bm25,
-}
-
-impl std::fmt::Display for FulltextEngineType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            FulltextEngineType::Bm25 => write!(f, "bm25"),
-        }
-    }
-}
-
 /// Where fulltext indexes are physically stored.
 ///
 /// `Local` keeps the embedded Tantivy engine (the historical default).
@@ -244,9 +226,6 @@ pub struct FulltextConfig {
     /// Physical storage backend for fulltext indexes.
     #[serde(default)]
     pub backend: FulltextBackendKind,
-    /// Engine that produced the indexes. Only the local BM25 engine exists;
-    /// the field documents index provenance and must stay `Bm25`.
-    pub default_engine: FulltextEngineType,
     /// Remote backend settings; only consulted when `backend` is `Es`.
     #[serde(default)]
     pub es: EsConfig,
@@ -263,7 +242,6 @@ impl Default for FulltextConfig {
         Self {
             enabled: false,
             backend: FulltextBackendKind::default(),
-            default_engine: FulltextEngineType::default(),
             es: EsConfig::default(),
             index_path: PathBuf::from("data/fulltext"),
             sync: SyncConfig::default(),

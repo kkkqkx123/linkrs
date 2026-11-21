@@ -23,6 +23,24 @@ pub enum IndexOperation {
     Delete,
 }
 
+impl EntityRef {
+    /// Stable secondary-index document id for the referenced entity.
+    ///
+    /// Vertices use their display form; edges append the ranking so parallel
+    /// edge versions of one endpoint pair address distinct documents. Live
+    /// delivery and rebuild backfill, and the upsert and delete paths, all
+    /// derive the id here so a delete always removes exactly the documents the
+    /// writes created.
+    pub fn doc_id(&self) -> String {
+        match self {
+            Self::Vertex(vertex_id) => vertex_id.to_string(),
+            Self::Edge {
+                src, dst, ranking, ..
+            } => format!("{src}->{dst}#{ranking}"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LifecycleMutation {
     Create,
@@ -152,5 +170,29 @@ mod tests {
         let mut mutation = mutation();
         mutation.wire_version = WAL_SYNC_WIRE_VERSION + 1;
         assert!(mutation.validate().is_err());
+    }
+
+    #[test]
+    fn doc_id_distinguishes_parallel_edges() {
+        let src = VertexId::try_from_int64(1).expect("src vertex id");
+        let dst = VertexId::try_from_int64(2).expect("dst vertex id");
+        let first = EntityRef::Edge {
+            src,
+            dst,
+            edge_type: 3,
+            ranking: 0,
+        }
+        .doc_id();
+        let second = EntityRef::Edge {
+            src,
+            dst,
+            edge_type: 3,
+            ranking: 1,
+        }
+        .doc_id();
+        assert_eq!(first, "1->2#0");
+        assert_eq!(second, "1->2#1");
+        assert_ne!(first, second);
+        assert_eq!(EntityRef::Vertex(src).doc_id(), "1");
     }
 }

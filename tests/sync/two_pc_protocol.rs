@@ -15,7 +15,7 @@ fn create_harness_with_paths(
     index_path: &Path,
 ) -> Result<SyncTestHarness, Box<dyn std::error::Error>> {
     use linkrs::search::{
-        EngineType, FulltextConfig, FulltextIndexManager, SyncConfig, TantivyConfig, TokenizerKind,
+        FulltextConfig, FulltextIndexManager, SyncConfig, TantivyConfig, TokenizerKind,
     };
     use linkrs::storage::GraphStorage;
     use linkrs::sync::fulltext_sync::FulltextSyncCoordinator;
@@ -27,8 +27,9 @@ fn create_harness_with_paths(
     // Create fulltext index manager
     let config = FulltextConfig {
         enabled: true,
+        backend: Default::default(),
+        es: Default::default(),
         index_path: index_path.to_path_buf(),
-        default_engine: EngineType::Bm25,
         sync: SyncConfig::default(),
         cache_size: 100,
         max_result_cache: 1000,

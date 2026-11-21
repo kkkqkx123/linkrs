@@ -142,5 +142,7 @@ fn test_vector_index_location_tc229() {
 
     let loc = VectorIndexLocation::new(1, "tag", "field");
     assert_eq!(loc.to_collection_name(), format!("space_vec_{}", 1));
-    assert_eq!(loc.group_id(), format!("{}_{}", "tag", "field"));
+    // `group_id` length-prefixes both components so `(a_b, c)` and `(a, b_c)`
+    // cannot collide: `3_tag_5_field`.
+    assert_eq!(loc.group_id(), format!("{}_{}_{}_{}", 3, "tag", 5, "field"));
 }

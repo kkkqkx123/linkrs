@@ -17,6 +17,8 @@ impl super::SyncManager {
             sqlite_outbox: None,
             #[cfg(feature = "vector")]
             vector_receiver: None,
+            #[cfg(feature = "fulltext")]
+            fulltext_receivers: Arc::new(DashMap::new()),
             outbox_consumer: Arc::new(OutboxConsumerConfig::default()),
             backpressure: Arc::new(OutboxBackpressureConfig::default()),
             auth_paused_until_ms: Arc::new(std::sync::atomic::AtomicU64::new(0)),

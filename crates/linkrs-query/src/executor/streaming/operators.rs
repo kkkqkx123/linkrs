@@ -14,6 +14,7 @@ pub mod flatten;
 pub mod fulltext_operator;
 pub mod gather_operator;
 pub mod graph_operator;
+pub mod index_manage;
 pub mod intersect;
 pub mod intersect_build;
 pub mod join_operator;

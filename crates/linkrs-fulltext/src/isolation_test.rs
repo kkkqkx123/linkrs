@@ -10,7 +10,7 @@
 #[cfg(test)]
 mod tests {
     use crate::metadata::IndexKey;
-    use crate::{EngineType, FulltextConfig, FulltextIndexManager, SearchError};
+    use crate::{FulltextConfig, FulltextIndexManager, SearchError};
     use linkrs_core::metadata::SchemaManager;
     use linkrs_core::types::{IsolationLevel, SpaceInfo, TagInfo};
     use std::path::PathBuf;
@@ -21,23 +21,24 @@ mod tests {
 
     // ==================== Index Naming Tests ====================
 
-    /// Test fulltext index ID format: space_ft_{space_id}_{tag}_{field}
+    /// Test fulltext index ID format: length-prefixed `tag` and `field`
     #[test]
     fn test_fulltext_index_naming_format() {
         let key = IndexKey::new(1, "Article", "content");
         let index_id = key.to_index_id();
 
-        assert_eq!(index_id, "space_ft_1_Article_content");
+        assert_eq!(index_id, "space_ft_1_7_Article_7_content");
         assert!(index_id.starts_with(FULLTEXT_INDEX_PREFIX));
     }
 
-    /// Test index naming with special characters in tag/field names
+    /// Underscores inside names must not shift the tag/field boundary
     #[test]
     fn test_index_naming_with_special_chars() {
         let key = IndexKey::new(1, "User_Profile", "email_address");
         let index_id = key.to_index_id();
 
-        assert_eq!(index_id, "space_ft_1_User_Profile_email_address");
+        assert_eq!(index_id, "space_ft_1_12_User_Profile_13_email_address");
+        assert_eq!(IndexKey::from_index_id(&index_id), Some(key));
     }
 
     // ==================== SpaceInfo Isolation Level Tests ====================
@@ -98,7 +99,6 @@ mod tests {
         let config = FulltextConfig {
             enabled: true,
             index_path: temp_dir.path().to_path_buf(),
-            default_engine: EngineType::Bm25,
             ..Default::default()
         };
 
@@ -110,7 +110,7 @@ mod tests {
             .expect("Failed to create manager")
             .with_schema_manager(schema_manager);
 
-        let result = manager.create_index(999, "Article", "content", None).await;
+        let result = manager.create_index(999, "Article", "content").await;
 
         assert!(result.is_err());
         assert!(matches!(
@@ -126,7 +126,6 @@ mod tests {
         let config = FulltextConfig {
             enabled: true,
             index_path: temp_dir.path().to_path_buf(),
-            default_engine: EngineType::Bm25,
             ..Default::default()
         };
 
@@ -139,7 +138,7 @@ mod tests {
             .expect("Failed to create manager")
             .with_schema_manager(schema_manager);
 
-        let result = manager.create_index(1, "Article", "content", None).await;
+        let result = manager.create_index(1, "Article", "content").await;
 
         assert!(result.is_ok());
     }
@@ -151,7 +150,6 @@ mod tests {
         let config = FulltextConfig {
             enabled: true,
             index_path: temp_dir.path().to_path_buf(),
-            default_engine: EngineType::Bm25,
             ..Default::default()
         };
 
@@ -163,9 +161,7 @@ mod tests {
             .expect("Failed to create manager")
             .with_schema_manager(schema_manager);
 
-        let result = manager
-            .create_index(1, "NonExistentTag", "content", None)
-            .await;
+        let result = manager.create_index(1, "NonExistentTag", "content").await;
 
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), SearchError::TagNotFound(_)));
@@ -182,7 +178,6 @@ mod tests {
         let config = FulltextConfig {
             enabled: true,
             index_path: base_path.clone(),
-            default_engine: EngineType::Bm25,
             ..Default::default()
         };
 
@@ -197,7 +192,7 @@ mod tests {
             .with_schema_manager(schema_manager);
 
         let _index_id = manager
-            .create_index(1, "Article", "content", None)
+            .create_index(1, "Article", "content")
             .await
             .expect("Failed to create index");
 
@@ -219,7 +214,6 @@ mod tests {
         let config = FulltextConfig {
             enabled: true,
             index_path: base_path.clone(),
-            default_engine: EngineType::Bm25,
             ..Default::default()
         };
 
@@ -234,7 +228,7 @@ mod tests {
             .with_schema_manager(schema_manager);
 
         let _index_id = manager
-            .create_index(1, "Article", "content", None)
+            .create_index(1, "Article", "content")
             .await
             .expect("Failed to create index");
 
@@ -255,7 +249,6 @@ mod tests {
         let config = FulltextConfig {
             enabled: true,
             index_path: base_path,
-            default_engine: EngineType::Bm25,
             ..Default::default()
         };
 
@@ -271,7 +264,7 @@ mod tests {
             .with_schema_manager(schema_manager);
 
         let _index_id = manager
-            .create_index(1, "Article", "content", None)
+            .create_index(1, "Article", "content")
             .await
             .expect("Failed to create index");
 
@@ -293,7 +286,6 @@ mod tests {
         let config = FulltextConfig {
             enabled: true,
             index_path: temp_dir.path().to_path_buf(),
-            default_engine: EngineType::Bm25,
             ..Default::default()
         };
 
@@ -308,15 +300,15 @@ mod tests {
             .with_schema_manager(schema_manager);
 
         manager
-            .create_index(1, "Article", "title", None)
+            .create_index(1, "Article", "title")
             .await
             .expect("Failed to create index 1");
         manager
-            .create_index(1, "Article", "content", None)
+            .create_index(1, "Article", "content")
             .await
             .expect("Failed to create index 2");
         manager
-            .create_index(1, "Product", "description", None)
+            .create_index(1, "Product", "description")
             .await
             .expect("Failed to create index 3");
 
@@ -340,7 +332,6 @@ mod tests {
         let config = FulltextConfig {
             enabled: true,
             index_path: temp_dir.path().to_path_buf(),
-            default_engine: EngineType::Bm25,
             ..Default::default()
         };
 
@@ -362,11 +353,11 @@ mod tests {
             .with_schema_manager(schema_manager);
 
         manager
-            .create_index(1, "Article", "content", None)
+            .create_index(1, "Article", "content")
             .await
             .expect("Failed to create space 1 index");
         manager
-            .create_index(2, "Product", "description", None)
+            .create_index(2, "Product", "description")
             .await
             .expect("Failed to create space 2 index");
 
@@ -388,7 +379,7 @@ mod tests {
         let key = IndexKey::new(0, "Tag", "field");
         let index_id = key.to_index_id();
 
-        assert_eq!(index_id, "space_ft_0_Tag_field");
+        assert_eq!(index_id, "space_ft_0_3_Tag_5_field");
     }
 
     /// Test without schema manager (backward compatibility)
@@ -398,13 +389,12 @@ mod tests {
         let config = FulltextConfig {
             enabled: true,
             index_path: temp_dir.path().to_path_buf(),
-            default_engine: EngineType::Bm25,
             ..Default::default()
         };
 
         let manager = FulltextIndexManager::new(config).expect("Failed to create manager");
 
-        let result = manager.create_index(1, "Article", "content", None).await;
+        let result = manager.create_index(1, "Article", "content").await;
         assert!(result.is_ok());
     }
 
@@ -415,7 +405,6 @@ mod tests {
         let config = FulltextConfig {
             enabled: true,
             index_path: temp_dir.path().to_path_buf(),
-            default_engine: EngineType::Bm25,
             ..Default::default()
         };
 
@@ -436,10 +425,10 @@ mod tests {
         let mut handles = vec![];
         for i in 0..5 {
             let mgr = manager.clone();
-            let handle = tokio::spawn(async move {
-                mgr.create_index(1, &format!("Tag{}", i), "field", None)
-                    .await
-            });
+            let handle =
+                tokio::spawn(
+                    async move { mgr.create_index(1, &format!("Tag{}", i), "field").await },
+                );
             handles.push(handle);
         }
 

@@ -5,7 +5,7 @@
 #![cfg(feature = "fulltext")]
 
 use crate::core::Value;
-use crate::search::{EngineType, FulltextConfig, FulltextIndexManager, SearchError, SearchResult};
+use crate::search::{FulltextConfig, FulltextIndexManager, SearchError, SearchResult};
 use std::sync::Arc;
 use tempfile::TempDir;
 
@@ -23,8 +23,9 @@ impl FulltextTestContext {
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let config = FulltextConfig {
             enabled: true,
+            backend: Default::default(),
+            es: Default::default(),
             index_path: temp_dir.path().to_path_buf(),
-            default_engine: EngineType::Bm25,
             sync: crate::search::SyncConfig::default(),
             tantivy: Default::default(),
             cache_size: 100,
@@ -42,10 +43,9 @@ impl FulltextTestContext {
         space_id: u64,
         tag_name: &str,
         field_name: &str,
-        engine_type: Option<EngineType>,
     ) -> Result<String, SearchError> {
         self.manager
-            .create_index(space_id, tag_name, field_name, engine_type)
+            .create_index(space_id, tag_name, field_name)
             .await
     }
 

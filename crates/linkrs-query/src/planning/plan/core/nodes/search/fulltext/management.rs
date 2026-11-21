@@ -6,7 +6,6 @@ use crate::parser::ast::fulltext::{AlterIndexAction, IndexFieldDef, IndexOptions
 use crate::planning::plan::core::nodes::base::memory_estimation::MemoryEstimatable;
 use crate::planning::plan::core::nodes::base::plan_node_category::PlanNodeCategory;
 use crate::planning::plan::core::nodes::base::plan_node_traits::{PlanNode, ZeroInputNode};
-use linkrs_core::types::FulltextEngineType;
 use serde::{Deserialize, Serialize};
 
 /// CREATE FULLTEXT INDEX plan node
@@ -15,7 +14,6 @@ pub struct CreateFulltextIndexNode {
     pub index_name: String,
     pub schema_name: String,
     pub fields: Vec<IndexFieldDef>,
-    pub engine_type: FulltextEngineType,
     pub options: IndexOptions,
     pub if_not_exists: bool,
     pub space_id: u64,
@@ -26,7 +24,6 @@ impl CreateFulltextIndexNode {
         index_name: String,
         schema_name: String,
         fields: Vec<IndexFieldDef>,
-        engine_type: FulltextEngineType,
         options: IndexOptions,
         if_not_exists: bool,
         space_id: u64,
@@ -35,7 +32,6 @@ impl CreateFulltextIndexNode {
             index_name,
             schema_name,
             fields,
-            engine_type,
             options,
             if_not_exists,
             space_id,
@@ -185,13 +181,17 @@ impl ZeroInputNode for AlterFulltextIndexNode {}
 pub struct ShowFulltextIndexNode {
     pub pattern: Option<String>,
     pub from_schema: Option<String>,
+    /// Space the statement runs in: the listing is space-scoped, while
+    /// `from_schema` filters by tag name.
+    pub space_id: u64,
 }
 
 impl ShowFulltextIndexNode {
-    pub fn new(pattern: Option<String>, from_schema: Option<String>) -> Self {
+    pub fn new(pattern: Option<String>, from_schema: Option<String>, space_id: u64) -> Self {
         Self {
             pattern,
             from_schema,
+            space_id,
         }
     }
 }

@@ -52,21 +52,8 @@ pub fn parse_create_vector_index(
 pub fn parse_create_vector_index_after_create(
     ctx: &mut ParseContext,
 ) -> Result<Stmt, crate::parser::ParseError> {
-    let if_not_exists = if ctx.check_keyword("IF") {
-        ctx.consume_keyword("IF")?;
-        ctx.consume_keyword("NOT")?;
-        ctx.consume_keyword("EXISTS")?;
-        true
-    } else {
-        false
-    };
-
     ctx.consume_keyword("VECTOR")?;
-    ctx.consume_keyword("INDEX")?;
-
-    let index_name = ctx.consume_identifier()?;
-    ctx.consume_keyword("ON")?;
-    let schema_name = ctx.consume_identifier()?;
+    let head = crate::parser::parsing::ddl_parser::index_head::parse_create_index_head(ctx)?;
 
     ctx.expect_token(TokenKind::LParen)?;
     let field_name = ctx.consume_identifier()?;
@@ -76,13 +63,13 @@ pub fn parse_create_vector_index_after_create(
     let config = parse_vector_index_config(ctx)?;
 
     let mut create = CreateVectorIndex::new(
-        ctx.current_span(),
-        index_name,
-        schema_name,
+        head.span,
+        head.index_name,
+        head.schema_name,
         field_name,
         config,
     );
-    create.if_not_exists = if_not_exists;
+    create.if_not_exists = head.if_not_exists;
 
     Ok(Stmt::CreateVectorIndex(create))
 }

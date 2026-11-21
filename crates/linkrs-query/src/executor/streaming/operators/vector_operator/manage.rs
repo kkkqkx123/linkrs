@@ -7,30 +7,15 @@ use crate::executor::streaming::chunk::{ColumnInfo, Schema};
 use crate::executor::streaming::executor::StreamingExecutor;
 #[cfg(feature = "vector")]
 use crate::executor::streaming::operators::ddl_operator::make_single_row;
+use crate::executor::streaming::operators::index_manage::{
+    manage_result, matches_show_filter, unresolved_drop, IndexKind,
+};
 use crate::executor::streaming::operators::spec::VectorManageCommand;
-#[cfg(feature = "vector")]
-use crate::executor::streaming::slot::SlotLayout;
 use linkrs_core::error::QueryError;
 #[cfg(feature = "vector")]
 use linkrs_core::Value;
 
 use super::{VectorOperator, VectorOperatorKind};
-
-#[cfg(feature = "vector")]
-fn make_manage_result(
-    output_layout: Arc<SlotLayout>,
-    action: &str,
-    name: Option<&str>,
-    status: &str,
-) -> DataChunk {
-    let name_val = name
-        .map(Value::string)
-        .unwrap_or(Value::Null(linkrs_core::NullType::Null));
-    DataChunk::new_with_layout(
-        vec![vec![Value::string(action), name_val, Value::string(status)]],
-        output_layout,
-    )
-}
 
 /// Candidate count for MATCH VECTOR searches.
 ///
@@ -67,6 +52,35 @@ pub(crate) fn handle(
                 } => {
                     #[cfg(feature = "vector")]
                     {
+                        // Validate the statement-level index shape before
+                        // checking for an engine: whether a statement is well
+                        // formed does not depend on runtime wiring, so an
+                        // invalid HNSW or quantization combination must be
+                        // reported even when no coordinator is configured.
+                        // Shared DDL semantics: HNSW + quantization mapping
+                        // and validation live in vector_ddl so the HTTP/gRPC
+                        // index endpoints cannot drift from the statement
+                        // pipeline. The statement grammar carries only
+                        // index-shape options; storage layout stays a
+                        // transport-level concern, so everything else keeps
+                        // its default.
+                        let distance = crate::vector_ddl::distance_metric(*distance);
+                        let options = crate::vector_ddl::CollectionOptions {
+                            hnsw_m: *hnsw_m,
+                            hnsw_ef_construct: *hnsw_ef_construct,
+                            quantization: *quantization,
+                            quantile: *quantile,
+                            compression: *compression,
+                            always_ram: *always_ram,
+                            ..crate::vector_ddl::CollectionOptions::default()
+                        };
+                        let config = crate::vector_ddl::build_collection_config(
+                            *vector_size,
+                            distance,
+                            &options,
+                        )
+                        .map_err(QueryError::execution)?;
+
                         if let Some(coordinator) = vector_coordinator {
                             // Vector indexes are vertex-only: point IDs,
                             // payloads, and rebuild sources are all modeled
@@ -90,29 +104,6 @@ pub(crate) fn handle(
                                     }
                                 }
                             }
-                            let distance = crate::vector_ddl::distance_metric(*distance);
-                            // Shared DDL semantics: HNSW + quantization
-                            // mapping and validation live in vector_ddl so
-                            // the HTTP/gRPC index endpoints cannot drift
-                            // from the statement pipeline.
-                            // The statement grammar carries only index-shape
-                            // options; storage layout stays a transport-level
-                            // concern, so everything else keeps its default.
-                            let options = crate::vector_ddl::CollectionOptions {
-                                hnsw_m: *hnsw_m,
-                                hnsw_ef_construct: *hnsw_ef_construct,
-                                quantization: *quantization,
-                                quantile: *quantile,
-                                compression: *compression,
-                                always_ram: *always_ram,
-                                ..crate::vector_ddl::CollectionOptions::default()
-                            };
-                            let config = crate::vector_ddl::build_collection_config(
-                                *vector_size,
-                                distance,
-                                &options,
-                            )
-                            .map_err(QueryError::execution)?;
                             let res = if config.quantization_config.is_some()
                                 || config.index != simvec::IndexConfig::default()
                             {
@@ -142,7 +133,7 @@ pub(crate) fn handle(
                                     coordinator.set_index_name(
                                         *space_id, tag_name, field_name, index_name,
                                     );
-                                    Ok(Some(make_manage_result(
+                                    Ok(Some(manage_result(
                                         Arc::clone(&op.output_layout),
                                         "create_vector_index",
                                         Some(index_name.as_str()),
@@ -196,17 +187,16 @@ pub(crate) fn handle(
                         // degrades to a no-op status row, otherwise it is
                         // a clear error.
                         if tag_name.is_empty() || field_name.is_empty() {
-                            if *if_exists {
-                                return Ok(Some(make_manage_result(
-                                    Arc::clone(&op.output_layout),
-                                    "drop_vector_index",
-                                    Some(index_name.as_str()),
-                                    "not_exists",
-                                )));
+                            if let Some(error) =
+                                unresolved_drop(IndexKind::Vector, index_name, *if_exists)
+                            {
+                                return Err(error);
                             }
-                            return Err(QueryError::execution(format!(
-                                "Vector index '{}' cannot be dropped: index location (tag/field) is not resolved",
-                                index_name
+                            return Ok(Some(manage_result(
+                                Arc::clone(&op.output_layout),
+                                "drop_vector_index",
+                                Some(index_name.as_str()),
+                                "not_exists",
                             )));
                         }
                         match vector_coordinator {
@@ -216,7 +206,7 @@ pub(crate) fn handle(
                                     coordinator
                                         .drop_vector_index(*space_id, tag_name, field_name),
                                 )?;
-                                Ok(Some(make_manage_result(
+                                Ok(Some(manage_result(
                                     Arc::clone(&op.output_layout),
                                     "drop_vector_index",
                                     Some(index_name.as_str()),
@@ -248,13 +238,12 @@ pub(crate) fn handle(
                                 .list_indexes()
                                 .into_iter()
                                 .filter(|m| {
-                                    pattern.as_ref().is_none_or(|pattern| {
-                                        m.index_name
-                                            .as_deref()
-                                            .is_some_and(|name| name.contains(pattern))
-                                    }) && from_schema
-                                        .as_ref()
-                                        .is_none_or(|schema| &m.tag_name == schema)
+                                    matches_show_filter(
+                                        pattern.as_deref(),
+                                        from_schema.as_deref(),
+                                        m.index_name.as_deref(),
+                                        &m.tag_name,
+                                    )
                                 })
                                 .collect();
                             let schema = Arc::new(Schema::new(vec![
@@ -348,11 +337,17 @@ pub(crate) fn handle(
                                         ],
                                     )))
                                 }
-                                None => Ok(Some(make_manage_result(
+                                None => Ok(Some(DataChunk::new_with_layout(
+                                    // Same card shape as the found case: the
+                                    // card has no status column, so an absent
+                                    // index shows as a null row for that name.
+                                    vec![vec![
+                                        Value::string(index_name),
+                                        Value::Null(linkrs_core::NullType::Null),
+                                        Value::Null(linkrs_core::NullType::Null),
+                                        Value::Null(linkrs_core::NullType::Null),
+                                    ]],
                                     Arc::clone(&op.output_layout),
-                                    "describe_vector_index",
-                                    Some(index_name.as_str()),
-                                    "not-found",
                                 ))),
                             }
                         } else {

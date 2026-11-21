@@ -5,7 +5,6 @@
 
 use linkrs_core::types::expr::contextual::ContextualExpression;
 use linkrs_core::types::span::Span;
-use linkrs_core::types::FulltextEngineType;
 use linkrs_core::Value;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -24,7 +23,6 @@ pub struct CreateFulltextIndex {
     pub index_name: String,
     pub schema_name: String,
     pub fields: Vec<IndexFieldDef>,
-    pub engine_type: FulltextEngineType,
     pub options: IndexOptions,
     pub if_not_exists: bool,
 }
@@ -200,14 +198,12 @@ impl CreateFulltextIndex {
         index_name: String,
         schema_name: String,
         fields: Vec<IndexFieldDef>,
-        engine_type: FulltextEngineType,
     ) -> Self {
         Self {
             span,
             index_name,
             schema_name,
             fields,
-            engine_type,
             options: IndexOptions {
                 bm25_config: None,
                 common_options: HashMap::new(),
@@ -296,12 +292,11 @@ mod tests {
             "idx_article_content".to_string(),
             "article".to_string(),
             fields,
-            FulltextEngineType::Bm25,
         );
 
         assert_eq!(create.index_name, "idx_article_content");
         assert_eq!(create.schema_name, "article");
-        assert_eq!(create.engine_type, FulltextEngineType::Bm25);
+        assert_eq!(create.fields.len(), 1);
     }
 
     #[test]

@@ -127,21 +127,10 @@ impl FulltextReceiver {
 
             match mutation.operation {
                 linkrs_core::wal::IndexOperation::Delete => {
-                    let entity_id = match &mutation.entity_ref {
-                        linkrs_core::wal::EntityRef::Vertex(vid) => vid.to_string(),
-                        linkrs_core::wal::EntityRef::Edge { src, dst, .. } => {
-                            format!("{}->{}", src, dst)
-                        }
-                    };
-                    deletes.push(entity_id);
+                    deletes.push(mutation.entity_ref.doc_id());
                 }
                 linkrs_core::wal::IndexOperation::Upsert => {
-                    let entity_id = match &mutation.entity_ref {
-                        linkrs_core::wal::EntityRef::Vertex(vid) => vid.to_string(),
-                        linkrs_core::wal::EntityRef::Edge { src, dst, .. } => {
-                            format!("{}->{}", src, dst)
-                        }
-                    };
+                    let entity_id = mutation.entity_ref.doc_id();
                     let document =
                         String::from_utf8(mutation.document_or_vector.clone()).map_err(|e| {
                             linkrs_fulltext::error::SearchError::InvalidDocId(format!(

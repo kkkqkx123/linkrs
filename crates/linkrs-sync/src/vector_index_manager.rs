@@ -53,6 +53,27 @@ pub struct VectorIndexManager {
     /// compatibility; Field-level gives physical isolation per (tag,field).
     granularity: parking_lot::RwLock<CollectionGranularity>,
     index_callbacks: EventSubscriptions<IndexEvent>,
+    /// Durable registry file for `logical_indexes`. The delivery path derives
+    /// collection names deterministically, so an in-memory-only registry looks
+    /// healthy until management or rebuild recovery asks it for the index list;
+    /// persisting keeps both views identical across restarts.
+    registry_file: parking_lot::RwLock<Option<std::path::PathBuf>>,
+}
+
+/// Registry file name inside the attached work directory.
+const REGISTRY_FILE_NAME: &str = "vector_metadata.json";
+
+/// On-disk form of one logical index. The physical collection name is not
+/// stored: it is derived from the location and the active granularity, so a
+/// granularity change never leaves a stale name behind.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct PersistedLogicalIndex {
+    space_id: u64,
+    tag_name: String,
+    field_name: String,
+    config: CollectionConfig,
+    created_at: chrono::DateTime<chrono::Utc>,
+    index_name: Option<String>,
 }
 
 /// Scratch rebuild collection invisible to the query path.
@@ -105,6 +126,110 @@ impl VectorIndexManager {
             publish_fences: DashMap::new(),
             granularity: parking_lot::RwLock::new(CollectionGranularity::default()),
             index_callbacks: EventSubscriptions::new(),
+            registry_file: parking_lot::RwLock::new(None),
+        }
+    }
+
+    /// Attach the durable registry location and adopt any indexes recorded
+    /// there. Called once the sync manager knows its work directory; before
+    /// that the registry is memory-only, which is only correct for tests and
+    /// ephemeral embedded databases.
+    pub fn attach_registry_directory(&self, directory: impl Into<std::path::PathBuf>) {
+        let directory: std::path::PathBuf = directory.into();
+        if let Err(error) = std::fs::create_dir_all(&directory) {
+            tracing::warn!(
+                "Failed to create vector registry directory '{}': {}",
+                directory.display(),
+                error
+            );
+            return;
+        }
+        *self.registry_file.write() = Some(directory.join(REGISTRY_FILE_NAME));
+        self.load_logical_indexes();
+    }
+
+    /// Persist the logical index registry. Best effort: a write failure is
+    /// logged and the in-memory registry keeps serving, matching how the
+    /// fulltext metadata cache degrades.
+    fn save_logical_indexes(&self) {
+        let guard = self.registry_file.read();
+        let Some(path) = guard.as_ref() else {
+            return;
+        };
+        let entries: Vec<PersistedLogicalIndex> = self
+            .logical_indexes
+            .iter()
+            .map(|entry| PersistedLogicalIndex {
+                space_id: entry.key().space_id,
+                tag_name: entry.key().tag_name.clone(),
+                field_name: entry.key().field_name.clone(),
+                config: entry.value().config.clone(),
+                created_at: entry.value().created_at,
+                index_name: entry.value().index_name.clone(),
+            })
+            .collect();
+        let content = match serde_json::to_string_pretty(&entries) {
+            Ok(content) => content,
+            Err(error) => {
+                tracing::warn!("Failed to serialize vector index registry: {}", error);
+                return;
+            }
+        };
+        // Atomic replace so a crash mid-write keeps the previous registry.
+        let temporary = path.with_extension("json.tmp");
+        if let Err(error) =
+            std::fs::write(&temporary, content).and_then(|_| std::fs::rename(&temporary, path))
+        {
+            tracing::warn!(
+                "Failed to persist vector index registry '{}': {}",
+                path.display(),
+                error
+            );
+        }
+    }
+
+    fn load_logical_indexes(&self) {
+        let guard = self.registry_file.read();
+        let Some(path) = guard.as_ref() else {
+            return;
+        };
+        let content = match std::fs::read_to_string(path) {
+            Ok(content) => content,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+            Err(error) => {
+                tracing::warn!(
+                    "Failed to read vector index registry '{}': {}",
+                    path.display(),
+                    error
+                );
+                return;
+            }
+        };
+        let entries: Vec<PersistedLogicalIndex> = match serde_json::from_str(&content) {
+            Ok(entries) => entries,
+            Err(error) => {
+                tracing::warn!(
+                    "Failed to parse vector index registry '{}': {}",
+                    path.display(),
+                    error
+                );
+                return;
+            }
+        };
+        for entry in entries {
+            let location =
+                VectorIndexLocation::new(entry.space_id, &entry.tag_name, &entry.field_name);
+            let collection_name = self.collection_name_for(&location);
+            self.logical_indexes.insert(
+                location,
+                IndexMetadata {
+                    name: collection_name,
+                    config: entry.config,
+                    created_at: entry.created_at,
+                    vector_count: 0,
+                    index_name: entry.index_name,
+                },
+            );
         }
     }
 
@@ -199,9 +324,11 @@ impl VectorIndexManager {
         loc.group_id_with(self.granularity())
     }
 
-    /// Whether the engine is disabled.
-    pub fn is_disabled_engine(&self) -> bool {
-        self.backend.is_disabled()
+    /// Vector rebuilds publish by renaming a local directory or by remapping
+    /// the remote collection pointer, so both backends support rebuilding a
+    /// live index.
+    pub fn supports_online_rebuild(&self) -> bool {
+        true
     }
 
     // ── Index lifecycle ───────────────────────────────────────────────
@@ -224,24 +351,6 @@ impl VectorIndexManager {
         self.emit_index_event(IndexEvent::VectorBuildStarted {
             index_name: logical_index_name.clone(),
         });
-
-        if self.is_disabled_engine() {
-            let logical_key = VectorIndexLocation::new(space_id, tag_name, field_name);
-            let meta = IndexMetadata::new(
-                collection_name.clone(),
-                CollectionConfig::new(vector_size, distance),
-            );
-            self.logical_indexes.insert(logical_key, meta);
-            info!(
-                "Logical vector index created in disabled mode: space={} tag={} field={} in collection {}",
-                space_id, tag_name, field_name, collection_name
-            );
-            self.emit_index_event(IndexEvent::VectorBuildCompleted {
-                index_name: logical_index_name,
-                vectors_count: 0,
-            });
-            return Ok(collection_name);
-        }
 
         let requested = self
             .backend
@@ -303,6 +412,7 @@ impl VectorIndexManager {
         let logical_key = VectorIndexLocation::new(space_id, tag_name, field_name);
         let meta = IndexMetadata::new(collection_name.clone(), config);
         self.logical_indexes.insert(logical_key, meta);
+        self.save_logical_indexes();
 
         info!(
             "Logical vector index created: space={} tag={} field={} in collection {}",
@@ -387,6 +497,7 @@ impl VectorIndexManager {
         let logical_key = VectorIndexLocation::new(space_id, tag_name, field_name);
         let meta = IndexMetadata::new(collection_name.clone(), config);
         self.logical_indexes.insert(logical_key, meta);
+        self.save_logical_indexes();
 
         info!(
             "Logical vector index created with config: space={} tag={} field={} in collection {}",
@@ -414,6 +525,7 @@ impl VectorIndexManager {
         let live_name = self.live_collection_name(&logical_key);
         let resolved_name = self.collection_name_for(&logical_key);
         self.logical_indexes.remove(&logical_key);
+        self.save_logical_indexes();
         self.collection_overrides.remove(&logical_key);
         self.discard_temps_for(space_id, tag_name, field_name).await;
 
@@ -460,22 +572,23 @@ impl VectorIndexManager {
                         error
                     );
                 }
-            } else if let Err(error) = self
-                .backend
-                .delete_by_filter(
-                    &live_name,
-                    VectorFilter::new().must(FilterCondition::match_value(
-                        "group_id",
-                        format!("{tag_name}_{field_name}"),
-                    )),
-                )
-                .await
-            {
-                tracing::error!(
-                    "Failed to purge dropped vector group '{tag_name}_{field_name}' from collection '{}': {}",
-                    live_name,
-                    error
-                );
+            } else if let Some(group_id) = logical_key.group_id_with(self.granularity()) {
+                let live = live_name.clone();
+                if let Err(error) = self
+                    .backend
+                    .delete_by_filter(
+                        &live,
+                        VectorFilter::new()
+                            .must(FilterCondition::match_value("group_id", group_id)),
+                    )
+                    .await
+                {
+                    tracing::error!(
+                        "Failed to purge dropped vector group from collection '{}': {}",
+                        live,
+                        error
+                    );
+                }
             }
         }
 
@@ -552,9 +665,6 @@ impl VectorIndexManager {
         tag_name: &str,
         field_name: &str,
     ) -> VectorCoordinatorResult<()> {
-        if self.is_disabled_engine() {
-            return Err(VectorCoordinatorError::EngineDisabled);
-        }
         // Mutual exclusion with online rebuild: refuse while a rebuild
         // scratch collection is registered, otherwise serialize the purge
         // under the publish fence write guard so no delivery apply straddles
@@ -615,14 +725,11 @@ impl VectorIndexManager {
 
     // ── Rebuild temps (temp-swap publishes) ─────────────────────────────
 
-    /// Temp owner suffix distinguishing sibling Space-granularity slices.
-    fn temp_owner_suffix(tag_name: &str, field_name: &str) -> String {
-        format!("{tag_name}_{field_name}")
-    }
-
     /// Temp collection name for one rebuild generation. Field granularity
     /// uses `{live}.rebuild-{gen}`; Space appends the logical owner so
-    /// sibling slices never share a temp.
+    /// sibling slices never share a temp. The owner suffix is the `group_id`
+    /// encoding itself, so two slices whose names differ only in where the
+    /// `_` separator falls can never collide.
     pub fn temp_name_for(
         &self,
         space_id: u64,
@@ -632,8 +739,10 @@ impl VectorIndexManager {
     ) -> String {
         let loc = VectorIndexLocation::new(space_id, tag_name, field_name);
         let live = self.live_collection_name(&loc);
-        let owner = (self.granularity() == CollectionGranularity::Space)
-            .then(|| Self::temp_owner_suffix(tag_name, field_name));
+        let owner = (self.granularity() == CollectionGranularity::Space).then(|| {
+            loc.group_id_with(CollectionGranularity::Space)
+                .unwrap_or_default()
+        });
         VectorBackend::temp_collection_name(&live, generation, owner.as_deref())
     }
 
@@ -651,9 +760,6 @@ impl VectorIndexManager {
         field_name: &str,
         generation: u64,
     ) -> VectorCoordinatorResult<String> {
-        if self.is_disabled_engine() {
-            return Err(VectorCoordinatorError::EngineDisabled);
-        }
         let loc = VectorIndexLocation::new(space_id, tag_name, field_name);
         let Some(meta) = self.logical_indexes.get(&loc).map(|entry| entry.clone()) else {
             return Err(VectorCoordinatorError::FieldNotIndexed {
@@ -836,9 +942,6 @@ impl VectorIndexManager {
         generation: u64,
         copy_batch: usize,
     ) -> VectorCoordinatorResult<PublishOutcome> {
-        if self.is_disabled_engine() {
-            return Err(VectorCoordinatorError::EngineDisabled);
-        }
         let loc = VectorIndexLocation::new(space_id, tag_name, field_name);
         let Some(temp) = self.get_temp(space_id, tag_name, field_name, generation) else {
             return Err(VectorCoordinatorError::Vector(VectorError::Internal(
@@ -1163,6 +1266,7 @@ impl VectorIndexManager {
             IndexMetadata::new(collection_name, config)
         };
         self.logical_indexes.insert(logical_key, meta);
+        self.save_logical_indexes();
     }
 
     // ── Search ────────────────────────────────────────────────────────
@@ -1173,9 +1277,6 @@ impl VectorIndexManager {
         collection: &str,
         query: SearchQuery,
     ) -> VectorCoordinatorResult<Vec<SearchResult>> {
-        if self.is_disabled_engine() {
-            return Err(VectorCoordinatorError::EngineDisabled);
-        }
         let results = self.backend.search(collection, query).await?;
         Ok(results)
     }
@@ -1190,9 +1291,6 @@ impl VectorIndexManager {
             Box<dyn futures::Stream<Item = VectorCoordinatorResult<SearchResult>> + Send>,
         >,
     > {
-        if self.is_disabled_engine() {
-            return Err(VectorCoordinatorError::EngineDisabled);
-        }
         let stream = self.backend.search_stream(collection, query).await?;
         Ok(stream)
     }
@@ -1207,9 +1305,6 @@ impl VectorIndexManager {
     ) -> VectorCoordinatorResult<
         std::pin::Pin<Box<dyn futures::Stream<Item = VectorCoordinatorResult<VectorPoint>> + Send>>,
     > {
-        if self.is_disabled_engine() {
-            return Err(VectorCoordinatorError::EngineDisabled);
-        }
         let stream = self
             .backend
             .scroll_stream(collection, batch_size, with_payload, with_vector)
@@ -1222,9 +1317,6 @@ impl VectorIndexManager {
         &self,
         options: SearchOptions,
     ) -> VectorCoordinatorResult<Vec<SearchResult>> {
-        if self.is_disabled_engine() {
-            return Err(VectorCoordinatorError::EngineDisabled);
-        }
         let loc =
             VectorIndexLocation::new(options.space_id, &options.tag_name, &options.field_name);
         let collection_name = self.collection_name_for(&loc);
@@ -1254,9 +1346,6 @@ impl VectorIndexManager {
         query_vector: Vec<f32>,
         limit: usize,
     ) -> VectorCoordinatorResult<Vec<SearchResult>> {
-        if self.is_disabled_engine() {
-            return Err(VectorCoordinatorError::EngineDisabled);
-        }
         let loc = VectorIndexLocation::new(space_id, tag_name, field_name);
         let collection_name = self.collection_name_for(&loc);
         let mut query = SearchQuery::new(query_vector, limit);
@@ -1277,9 +1366,6 @@ impl VectorIndexManager {
         limit: usize,
         filter: VectorFilter,
     ) -> VectorCoordinatorResult<Vec<SearchResult>> {
-        if self.is_disabled_engine() {
-            return Err(VectorCoordinatorError::EngineDisabled);
-        }
         let loc = VectorIndexLocation::new(space_id, tag_name, field_name);
         let collection_name = self.collection_name_for(&loc);
         let mut enriched = filter;
@@ -1365,5 +1451,62 @@ impl VectorIndexManager {
         }
 
         (upsert_by_collection, delete_by_collection)
+    }
+}
+
+#[cfg(all(test, feature = "vector"))]
+mod registry_tests {
+    use super::*;
+    use simvec::LocalVectorEngine;
+
+    fn manager(directory: &std::path::Path) -> VectorIndexManager {
+        let engine = LocalVectorEngine::open(&directory.join("vectors")).expect("local engine");
+        let manager = VectorIndexManager::new(VectorBackend::local(engine));
+        manager.attach_registry_directory(directory.join("vector_indexes"));
+        manager
+    }
+
+    #[tokio::test]
+    async fn logical_indexes_survive_reopen() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        {
+            let manager = manager(directory.path());
+            manager
+                .create_vector_index(1, "user", "embedding", 4, DistanceMetric::Cosine)
+                .await
+                .expect("create index");
+            assert_eq!(manager.list_indexes().len(), 1);
+        }
+
+        let reopened = manager(directory.path());
+        let indexes = reopened.list_indexes();
+        assert_eq!(indexes.len(), 1, "registry must survive a reopen");
+        assert_eq!(indexes[0].space_id, 1);
+        assert_eq!(indexes[0].tag_name, "user");
+        assert_eq!(indexes[0].field_name, "embedding");
+        // The collection name is derived, not persisted.
+        assert_eq!(indexes[0].collection_name, "space_vec_1");
+    }
+
+    #[tokio::test]
+    async fn dropped_index_is_removed_from_registry() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        {
+            let manager = manager(directory.path());
+            manager
+                .create_vector_index(1, "user", "embedding", 4, DistanceMetric::Cosine)
+                .await
+                .expect("create index");
+            manager
+                .drop_vector_index(1, "user", "embedding")
+                .await
+                .expect("drop index");
+        }
+
+        let reopened = manager(directory.path());
+        assert!(
+            reopened.list_indexes().is_empty(),
+            "a dropped index must not come back after a reopen"
+        );
     }
 }

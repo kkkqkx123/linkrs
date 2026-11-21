@@ -110,12 +110,6 @@ pub enum VectorCoordinatorError {
     #[error("Vector coordinator is shutting down")]
     ShuttingDown,
 
-    #[error(
-        "Vector engine is disabled by configuration; \
-         enable the vector engine (or check VectorEngineState) before issuing vector operations"
-    )]
-    EngineDisabled,
-
     #[error("Invalid operation: {0}")]
     InvalidOperation(String),
 
@@ -190,7 +184,6 @@ impl VectorCoordinatorError {
     pub fn kind(&self) -> VectorErrorKind {
         match self {
             VectorCoordinatorError::Vector(err) => VectorErrorKind::classify(err),
-            VectorCoordinatorError::EngineDisabled => VectorErrorKind::Retryable,
             VectorCoordinatorError::CollectionConfigConflict { .. }
             | VectorCoordinatorError::FieldNotIndexed { .. }
             | VectorCoordinatorError::InvalidOperation(_)
@@ -248,9 +241,7 @@ impl linkrs_core::error::search::ClassifySearchError for VectorCoordinatorError 
             Self::SpaceNotFound(_) => SearchErrorKind::SpaceNotFound,
             Self::TagNotFound(_) | Self::FieldNotIndexed { .. } => SearchErrorKind::SchemaNotFound,
             Self::RebuildBusy(_) => SearchErrorKind::RebuildBusy,
-            Self::EngineDisabled | Self::EmbeddingServiceNotAvailable => {
-                SearchErrorKind::EngineUnavailable
-            }
+            Self::EmbeddingServiceNotAvailable => SearchErrorKind::EngineUnavailable,
             Self::IndexCreationFailed { .. }
             | Self::IndexDropFailed { .. }
             | Self::IndexRebuildFailed(_)

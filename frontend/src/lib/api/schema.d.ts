@@ -4539,8 +4539,6 @@ export interface components {
             /** Format: int64 */
             materialized_lsn: number;
             targets?: components["schemas"]["TargetSyncDiagnostics"][];
-            /** Format: int64 */
-            vector_disabled_skips?: number;
         };
         /** @description Sync status response */
         SyncStatusResponse: {
@@ -4983,8 +4981,6 @@ export interface components {
             avg_latency_ms: number;
             /** Format: int64 */
             delete_errors: number;
-            /** Format: int64 */
-            disabled_skips: number;
             /** Format: int64 */
             total_deletes: number;
             /** Format: int64 */

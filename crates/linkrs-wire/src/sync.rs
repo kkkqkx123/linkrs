@@ -44,8 +44,6 @@ pub struct SyncDiagnosticsResponse {
     pub targets: Vec<TargetSyncDiagnostics>,
     #[serde(default)]
     pub indexes: Vec<IndexSyncDiagnostics>,
-    #[serde(default)]
-    pub vector_disabled_skips: u64,
 }
 
 /// One dead-letter row joined with its event metadata.

@@ -130,6 +130,29 @@ impl StorageReader for TestStorage {
     fn count_vertices_by_tag(&self, space: &str, tag: &str) -> Result<u64, StorageError> {
         Ok(self.get_vertices(space, tag).len() as u64)
     }
+    fn count_visible_vertices(&self, space: &str, tag: Option<&str>) -> Result<u64, StorageError> {
+        let map = self.vertices.lock().expect("vertices lock");
+        Ok(map
+            .iter()
+            .filter(|((stored_space, stored_tag), _)| {
+                stored_space == space && tag.is_none_or(|want| stored_tag == want)
+            })
+            .map(|(_, vertices)| vertices.len() as u64)
+            .sum())
+    }
+    fn count_visible_edges(
+        &self,
+        space: &str,
+        edge_type: &str,
+        _direction: EdgeDirection,
+    ) -> Result<u64, StorageError> {
+        Ok(self
+            .edges
+            .lock()
+            .expect("edges lock")
+            .get(&(space.to_string(), edge_type.to_string()))
+            .map_or(0, |edges| edges.len() as u64))
+    }
     fn count_edges_by_type(&self, space: &str, edge_type: &str) -> Result<u64, StorageError> {
         Ok(self
             .edges

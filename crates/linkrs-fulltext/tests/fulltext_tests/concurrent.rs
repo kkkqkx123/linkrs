@@ -15,7 +15,6 @@
 use super::common::{
     assert_search_result_contains, assert_search_result_count, FulltextTestContext,
 };
-use linkrs_fulltext::EngineType;
 use std::sync::Arc;
 use tokio::sync::Barrier;
 
@@ -26,7 +25,7 @@ async fn test_concurrent_inserts_bm25() {
     let num_tasks = 5;
     let barrier = Arc::new(Barrier::new(num_tasks));
 
-    ctx.create_test_index(1, "Article", "content", Some(EngineType::Bm25))
+    ctx.create_test_index(1, "Article", "content")
         .await
         .expect("Failed to create index");
 
@@ -81,7 +80,7 @@ async fn test_concurrent_searches() {
     let num_searches = 5;
     let barrier = Arc::new(Barrier::new(num_searches));
 
-    ctx.create_test_index(1, "Article", "content", Some(EngineType::Bm25))
+    ctx.create_test_index(1, "Article", "content")
         .await
         .expect("Failed to create index");
 
@@ -131,7 +130,7 @@ async fn test_concurrent_insert_and_search() {
     let num_inserts = 3;
     let num_searches = 3;
 
-    ctx.create_test_index(1, "Article", "content", Some(EngineType::Bm25))
+    ctx.create_test_index(1, "Article", "content")
         .await
         .expect("Failed to create index");
 
@@ -210,7 +209,7 @@ async fn test_concurrent_updates_same_document() {
     let ctx = Arc::new(FulltextTestContext::new());
     let num_updates = 5;
 
-    ctx.create_test_index(1, "Article", "content", Some(EngineType::Bm25))
+    ctx.create_test_index(1, "Article", "content")
         .await
         .expect("Failed to create index");
 
@@ -266,10 +265,10 @@ async fn test_concurrent_different_indexes() {
     let num_tasks = 3;
     let barrier = Arc::new(Barrier::new(num_tasks * 2));
 
-    ctx.create_test_index(1, "Article", "content_a", Some(EngineType::Bm25))
+    ctx.create_test_index(1, "Article", "content_a")
         .await
         .expect("Failed to create first index");
-    ctx.create_test_index(1, "Article", "content_b", Some(EngineType::Bm25))
+    ctx.create_test_index(1, "Article", "content_b")
         .await
         .expect("Failed to create second index");
 
@@ -361,7 +360,7 @@ async fn test_concurrent_index_creation() {
             barrier_clone.wait().await;
 
             ctx_clone
-                .create_test_index(1, &format!("Tag{}", i), "content", Some(EngineType::Bm25))
+                .create_test_index(1, &format!("Tag{}", i), "content")
                 .await
         });
 

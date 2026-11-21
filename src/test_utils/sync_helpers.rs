@@ -10,7 +10,7 @@ use crate::core::types::{DataType, PropertyDef, SpaceInfo, TagInfo};
 use crate::core::vertex_edge_path::Tag;
 use crate::core::{Value, Vertex};
 use crate::search::{
-    EngineType, FulltextConfig, FulltextIndexManager, SyncConfig, TantivyConfig, TokenizerKind,
+    FulltextConfig, FulltextIndexManager, SyncConfig, TantivyConfig, TokenizerKind,
 };
 use crate::storage::GraphStorage;
 use crate::storage::{StorageCommitOps, StorageReader, StorageSchemaOps, StorageWriter};
@@ -45,8 +45,9 @@ impl SyncTestHarness {
         // Create fulltext index manager
         let config = FulltextConfig {
             enabled: true,
+            backend: Default::default(),
+            es: Default::default(),
             index_path: index_path.clone(),
-            default_engine: EngineType::Bm25,
             sync: SyncConfig::default(),
             cache_size: 100,
             max_result_cache: 1000,
@@ -134,7 +135,7 @@ impl SyncTestHarness {
             for field in fulltext_fields {
                 let _ = coordinator
                     .fulltext_manager()
-                    .create_index(space_id, tag_name, field, Some(EngineType::Bm25))
+                    .create_index(space_id, tag_name, field)
                     .await;
             }
         });

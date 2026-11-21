@@ -18,6 +18,8 @@ use linkrs_core::metadata::SchemaManager;
 #[cfg(feature = "fulltext")]
 use linkrs_fulltext::manager::FulltextIndexManager;
 use linkrs_metrics::StatsManager;
+#[cfg(feature = "fulltext")]
+use linkrs_sync::fulltext_sync::FulltextSyncCoordinator;
 #[cfg(feature = "vector")]
 use linkrs_sync::vector_sync::VectorSyncCoordinator;
 use linkrs_sync::SyncManager;
@@ -47,6 +49,11 @@ pub struct QueryPipelineManager<S: QueryStorage + 'static> {
     pub(crate) index_manager: Option<Arc<dyn IndexMetadataManager>>,
     #[cfg(feature = "fulltext")]
     pub(crate) fulltext_manager: Option<Arc<FulltextIndexManager>>,
+    /// Coordinator hosting the same fulltext manager for read-your-writes
+    /// search. Present only when a sync layer is wired; management statements
+    /// need the manager alone.
+    #[cfg(feature = "fulltext")]
+    pub(crate) fulltext_coordinator: Option<Arc<FulltextSyncCoordinator>>,
     #[cfg(feature = "vector")]
     pub(crate) vector_coordinator: Option<Arc<VectorSyncCoordinator>>,
     pub(crate) storage: Option<Arc<RwLock<S>>>,
@@ -190,6 +197,8 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             index_manager: None,
             #[cfg(feature = "fulltext")]
             fulltext_manager: None,
+            #[cfg(feature = "fulltext")]
+            fulltext_coordinator: None,
             #[cfg(feature = "vector")]
             vector_coordinator: None,
             storage: Some(storage),
@@ -503,6 +512,8 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             index_manager: None,
             #[cfg(feature = "fulltext")]
             fulltext_manager: None,
+            #[cfg(feature = "fulltext")]
+            fulltext_coordinator: None,
             #[cfg(feature = "vector")]
             vector_coordinator: None,
             storage: Some(storage),
@@ -555,6 +566,21 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         self
     }
 
+    /// Install the coordinator that serves read-your-writes fulltext search.
+    ///
+    /// Management statements (`CREATE` / `DROP` / `SHOW` / `DESCRIBE` /
+    /// `ALTER`) work with [`Self::with_fulltext_manager`] alone; `SEARCH INDEX`
+    /// additionally needs the coordinator, because it resolves the index
+    /// snapshot through the sync layer.
+    #[cfg(feature = "fulltext")]
+    pub fn with_fulltext_coordinator(
+        mut self,
+        fulltext_coordinator: Arc<FulltextSyncCoordinator>,
+    ) -> Self {
+        self.fulltext_coordinator = Some(fulltext_coordinator);
+        self
+    }
+
     #[cfg(feature = "vector")]
     pub fn with_vector_coordinator(
         mut self,
@@ -588,6 +614,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         #[cfg(feature = "fulltext")]
         if let Some(coordinator) = sync_manager.fulltext_coordinator() {
             self.fulltext_manager = Some(coordinator.fulltext_manager().clone());
+            self.fulltext_coordinator = Some(coordinator.clone());
         }
         // Prefer the sync-manager-hosted vector coordinator so the query
         // plan and the HTTP/gRPC vector APIs share one source of truth.

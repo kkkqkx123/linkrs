@@ -24,8 +24,8 @@ pub use error::{Result, SearchError};
 #[cfg(feature = "fulltext-es")]
 pub use es::EsSearchEngine;
 pub use linkrs_config::fulltext::{
-    Bm25Params, FulltextConfig, FulltextEngineType as EngineType, SyncConfig, SyncFailurePolicy,
-    TantivyConfig, TokenizerKind,
+    Bm25Params, FulltextBackendKind, FulltextConfig, SyncConfig, SyncFailurePolicy, TantivyConfig,
+    TokenizerKind,
 };
 pub use linkrs_core::ConsistencyState;
 #[cfg(feature = "fulltext")]

@@ -99,7 +99,7 @@ fn create_vector_backend(
                 return Ok(None);
             }
             let manager = create_vector_manager(client_config, runtime)?;
-            Ok(Some(VectorBackend::qdrant(manager)))
+            Ok(Some(VectorBackend::qdrant(manager)?))
         }
     }
 }

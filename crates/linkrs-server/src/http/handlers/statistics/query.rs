@@ -307,9 +307,6 @@ pub async fn search<
     let vector_delete_errors = stats_manager
         .get_value(MetricType::VectorDeleteErrors)
         .unwrap_or(0);
-    let vector_disabled_skips = stats_manager
-        .get_value(MetricType::VectorDisabledSkips)
-        .unwrap_or(0);
     let embedding_ops = stats_manager
         .get_value(MetricType::VectorEmbeddingOps)
         .unwrap_or(0);
@@ -434,7 +431,6 @@ pub async fn search<
             upsert_errors: vector_upsert_errors,
             total_deletes: vector_deletes,
             delete_errors: vector_delete_errors,
-            disabled_skips: vector_disabled_skips,
         },
         embedding: EmbeddingSection {
             total_operations: embedding_ops,

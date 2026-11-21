@@ -41,12 +41,7 @@ fn test_edge_insert_sync_via_manager() {
         harness
             .sync_coordinator
             .fulltext_manager()
-            .create_index(
-                space_id,
-                "KNOWS",
-                "description",
-                Some(linkrs::search::EngineType::Bm25),
-            )
+            .create_index(space_id, "KNOWS", "description")
             .await
             .expect("Failed to create fulltext index for edge");
     });
@@ -149,12 +144,7 @@ fn test_edge_with_fulltext_property_sync() {
         harness
             .sync_coordinator
             .fulltext_manager()
-            .create_index(
-                space_id,
-                "KNOWS",
-                "description",
-                Some(linkrs::search::EngineType::Bm25),
-            )
+            .create_index(space_id, "KNOWS", "description")
             .await
             .expect("Failed to create fulltext index for edge");
     });
@@ -240,12 +230,7 @@ fn test_edge_delete_sync_via_manager() {
         harness
             .sync_coordinator
             .fulltext_manager()
-            .create_index(
-                space_id,
-                "KNOWS",
-                "description",
-                Some(linkrs::search::EngineType::Bm25),
-            )
+            .create_index(space_id, "KNOWS", "description")
             .await
             .expect("Failed to create index");
     });
@@ -345,12 +330,7 @@ fn test_edge_update_sync_via_manager() {
         harness
             .sync_coordinator
             .fulltext_manager()
-            .create_index(
-                space_id,
-                "KNOWS",
-                "description",
-                Some(linkrs::search::EngineType::Bm25),
-            )
+            .create_index(space_id, "KNOWS", "description")
             .await
             .expect("Failed to create index");
     });

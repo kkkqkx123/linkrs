@@ -218,15 +218,6 @@ impl super::SyncManager {
     }
 
     #[cfg(feature = "vector")]
-    pub fn vector_index_exists(&self, space_id: u64, tag_name: &str, field_name: &str) -> bool {
-        if let Some(ref vector_coord) = self.vector_coordinator {
-            vector_coord.index_exists(space_id, tag_name, field_name)
-        } else {
-            false
-        }
-    }
-
-    #[cfg(feature = "vector")]
     pub async fn create_vector_index(
         &self,
         space_id: u64,

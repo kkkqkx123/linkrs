@@ -49,9 +49,6 @@ pub trait VectorEngineHandle: Send + Sync + fmt::Debug + 'static {
         false
     }
 
-    /// Whether the engine is currently unavailable (e.g. disabled Qdrant).
-    fn is_disabled(&self) -> bool;
-
     /// Engine health status.
     async fn health_check(&self) -> VectorCoordinatorResult<HealthStatus>;
 
@@ -328,10 +325,6 @@ impl VectorEngineHandle for LocalEngineHandle {
 
     fn is_in_process(&self) -> bool {
         true
-    }
-
-    fn is_disabled(&self) -> bool {
-        false
     }
 
     async fn health_check(&self) -> VectorCoordinatorResult<HealthStatus> {
@@ -749,9 +742,6 @@ pub struct QdrantEngineHandle {
     manager: Arc<VectorManager>,
     /// `[vector.qdrant.collection]` creation defaults.
     defaults: CollectionDefaults,
-    /// Cached result of `manager.engine().name() == "disabled"` resolved at
-    /// construction time, so capability checks never compare name strings.
-    disabled: bool,
     /// Protects remote write batches from cascading failures when the
     /// Qdrant service keeps rejecting requests.
     breaker: Arc<CircuitBreaker>,
@@ -767,11 +757,9 @@ impl QdrantEngineHandle {
     /// Wrap an already-allocated Qdrant manager with explicit creation
     /// defaults taken from configuration.
     pub fn with_defaults(manager: Arc<VectorManager>, defaults: CollectionDefaults) -> Self {
-        let disabled = manager.engine().name() == "disabled";
         Self {
             manager,
             defaults,
-            disabled,
             breaker: Arc::new(CircuitBreaker::new(
                 "qdrant-write",
                 CircuitBreakerConfig::default(),
@@ -791,10 +779,6 @@ impl QdrantEngineHandle {
 impl VectorEngineHandle for QdrantEngineHandle {
     fn engine_name(&self) -> &'static str {
         "qdrant"
-    }
-
-    fn is_disabled(&self) -> bool {
-        self.disabled
     }
 
     async fn health_check(&self) -> VectorCoordinatorResult<HealthStatus> {
@@ -1331,27 +1315,33 @@ impl VectorBackend {
     }
 
     /// Wrap a [`VectorManager`] in the [`VectorBackend`] handle.
+    ///
+    /// Rejects a manager built from a disabled client configuration: an
+    /// unavailable vector subsystem is represented by the absence of a
+    /// backend, never by a handle whose every call fails.
     #[cfg(feature = "vector-qdrant")]
-    pub fn qdrant(manager: Arc<VectorManager>) -> Self {
-        let metrics = Arc::new(crate::metrics_handle::MetricsEngineHandle::new(Arc::new(
-            QdrantEngineHandle::new(manager),
-        )));
-        Self {
-            engine: metrics.clone(),
-            metrics: Some(metrics),
-        }
+    pub fn qdrant(manager: Arc<VectorManager>) -> VectorCoordinatorResult<Self> {
+        Self::qdrant_with_defaults(manager, CollectionDefaults::default())
     }
 
     /// Wrap a [`VectorManager`] with configuration-driven creation defaults.
     #[cfg(feature = "vector-qdrant")]
-    pub fn qdrant_with_defaults(manager: Arc<VectorManager>, defaults: CollectionDefaults) -> Self {
+    pub fn qdrant_with_defaults(
+        manager: Arc<VectorManager>,
+        defaults: CollectionDefaults,
+    ) -> VectorCoordinatorResult<Self> {
+        if !manager.is_engine_available() {
+            return Err(VectorCoordinatorError::Vector(VectorError::ConfigError(
+                "Qdrant vector engine is disabled by configuration".to_string(),
+            )));
+        }
         let metrics = Arc::new(crate::metrics_handle::MetricsEngineHandle::new(Arc::new(
             QdrantEngineHandle::with_defaults(manager, defaults),
         )));
-        Self {
+        Ok(Self {
             engine: metrics.clone(),
             metrics: Some(metrics),
-        }
+        })
     }
 
     /// Late-bind the shared observability handle so engine-level operations
@@ -1368,9 +1358,10 @@ impl VectorBackend {
         self.engine.is_in_process()
     }
 
-    /// Whether the engine is currently unavailable (e.g. disabled Qdrant).
-    pub fn is_disabled(&self) -> bool {
-        self.engine.is_disabled()
+    /// Short engine identifier (`local` / `qdrant`), for reporting which
+    /// backend serves an index.
+    pub fn engine_name(&self) -> &'static str {
+        self.engine.engine_name()
     }
 
     /// Build the engine selected by `config`.
@@ -1409,19 +1400,28 @@ impl VectorBackend {
         match config.engine {
             linkrs_config::VectorEngineKind::Local => Self::from_config(config),
             linkrs_config::VectorEngineKind::Qdrant => {
+                // `is_vector_enabled` requires both switches; constructing a
+                // backend from a disabled Qdrant client would hand the caller
+                // an engine that rejects every operation.
+                if !config.qdrant.enabled {
+                    return Err(VectorCoordinatorError::Vector(VectorError::ConfigError(
+                        "vector.engine = \"qdrant\" requires vector.qdrant.enabled = true"
+                            .to_string(),
+                    )));
+                }
                 let client_config = qdrant_client_config(&config.qdrant);
                 let manager = Arc::new(
                     VectorManager::new(client_config)
                         .await
                         .map_err(|e| VectorCoordinatorError::Vector(VectorError::from(e)))?,
                 );
-                Ok(Self::qdrant_with_defaults(
+                Self::qdrant_with_defaults(
                     manager,
                     CollectionDefaults::from_qdrant(
                         &config.qdrant.collection,
                         config.limits.default_max_points,
                     ),
-                ))
+                )
             }
         }
     }
@@ -1811,7 +1811,7 @@ mod tests {
     use crate::vector_error::VectorErrorKind;
     use vector_client::VectorClientConfig;
 
-    async fn disabled_handle() -> QdrantEngineHandle {
+    async fn offline_handle() -> QdrantEngineHandle {
         let manager = Arc::new(
             VectorManager::new(VectorClientConfig::disabled())
                 .await
@@ -1821,15 +1821,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn disabled_manager_yields_disabled_handle() {
-        let handle = disabled_handle().await;
-        assert!(handle.is_disabled());
-        assert!(!handle.is_in_process());
+    async fn disabled_manager_is_rejected_by_backend_construction() {
+        let manager = Arc::new(
+            VectorManager::new(VectorClientConfig::disabled())
+                .await
+                .expect("disabled manager builds without I/O"),
+        );
+        let error = VectorBackend::qdrant(manager)
+            .err()
+            .expect("a disabled manager must not become a backend");
+        assert!(matches!(
+            error,
+            VectorCoordinatorError::Vector(VectorError::ConfigError(_))
+        ));
     }
 
     #[tokio::test]
     async fn tripped_breaker_rejects_write_batch_as_retryable() {
-        let handle = disabled_handle().await;
+        let handle = offline_handle().await;
         handle.circuit_breaker().trip();
         assert_eq!(handle.circuit_breaker().state(), CircuitState::Open);
 

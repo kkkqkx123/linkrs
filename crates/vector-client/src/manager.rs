@@ -99,6 +99,16 @@ impl VectorManager {
         &self.engine
     }
 
+    /// Whether this manager holds a live engine.
+    ///
+    /// A manager built from a disabled configuration holds a no-op engine
+    /// that rejects every call with `EngineNotAvailable`. Callers that need
+    /// a working backend must check this before wrapping the manager rather
+    /// than discovering the failure on the first operation.
+    pub fn is_engine_available(&self) -> bool {
+        self.config.enabled
+    }
+
     /// The client configuration (connection details, API key, etc.).
     pub fn config(&self) -> &VectorClientConfig {
         &self.config

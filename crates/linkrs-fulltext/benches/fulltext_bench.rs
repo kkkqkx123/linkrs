@@ -19,7 +19,6 @@ use bench_group::create_benchmark_group;
 fn bench_fulltext_index_build(c: &mut Criterion) {
     use linkrs_config::fulltext::FulltextConfig;
     use linkrs_fulltext::manager::FulltextIndexManager;
-    use linkrs_fulltext::EngineType;
     use std::sync::Arc;
     use tempfile::TempDir;
 
@@ -32,7 +31,6 @@ fn bench_fulltext_index_build(c: &mut Criterion) {
             enabled: true,
             backend: Default::default(),
             index_path: temp_dir.path().to_path_buf(),
-            default_engine: EngineType::Bm25,
             es: Default::default(),
             sync: Default::default(),
             tantivy: Default::default(),
@@ -55,7 +53,7 @@ fn bench_fulltext_index_build(c: &mut Criterion) {
                     let mgr = m.clone();
                     rt.block_on(async move {
                         let _ = mgr.drop_index(1, "Article", "content").await;
-                        mgr.create_index(1, "Article", "content", Some(EngineType::Bm25))
+                        mgr.create_index(1, "Article", "content")
                             .await
                             .expect("create");
                         mgr
@@ -101,7 +99,6 @@ fn bench_fulltext_index_build(c: &mut Criterion) {
 fn bench_fulltext_search(c: &mut Criterion) {
     use linkrs_config::fulltext::FulltextConfig;
     use linkrs_fulltext::manager::FulltextIndexManager;
-    use linkrs_fulltext::EngineType;
     use std::sync::Arc;
     use tempfile::TempDir;
 
@@ -111,7 +108,6 @@ fn bench_fulltext_search(c: &mut Criterion) {
         enabled: true,
         backend: Default::default(),
         index_path: temp_dir.path().to_path_buf(),
-        default_engine: EngineType::Bm25,
         es: Default::default(),
         sync: Default::default(),
         tantivy: Default::default(),
@@ -122,7 +118,7 @@ fn bench_fulltext_search(c: &mut Criterion) {
     let manager = Arc::new(FulltextIndexManager::new(config).expect("manager"));
     let m = manager.clone();
     rt.block_on(async {
-        m.create_index(1, "Article", "content", Some(EngineType::Bm25))
+        m.create_index(1, "Article", "content")
             .await
             .expect("create");
         for i in 0..1000 {

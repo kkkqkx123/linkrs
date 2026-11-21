@@ -187,7 +187,6 @@ pub async fn diagnostics<
                 degraded: i.degraded,
             })
             .collect(),
-        vector_disabled_skips: diag.vector_disabled_skips,
     }))
 }
 

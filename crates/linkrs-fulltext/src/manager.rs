@@ -12,9 +12,7 @@ use crate::tantivy_index::TantivySearchEngine;
 use crate::ConsistencyState;
 #[cfg(feature = "fulltext-es")]
 use crate::EsSearchEngine;
-use linkrs_config::fulltext::{
-    FulltextBackendKind, FulltextConfig, FulltextEngineType as EngineType,
-};
+use linkrs_config::fulltext::{FulltextBackendKind, FulltextConfig};
 use linkrs_core::event_dispatch::{EventFilter, EventSubscriptions, SubscriptionId};
 use linkrs_core::index_events::{IndexEvent, IndexEventCallback, RebuildPhase, RebuildProgress};
 use linkrs_core::metadata::SchemaManager;
@@ -27,8 +25,6 @@ pub struct FulltextIndexManager {
     engines: DashMap<IndexKey, Arc<dyn FulltextSearchEngine>>,
     metadata: DashMap<IndexKey, IndexMetadata>,
     base_path: PathBuf,
-    #[cfg(feature = "fulltext")]
-    default_engine: EngineType,
     #[cfg(feature = "fulltext")]
     config: FulltextConfig,
     schema_manager: Option<Arc<SchemaManager>>,
@@ -66,8 +62,6 @@ impl FulltextIndexManager {
             metadata: DashMap::new(),
             base_path,
             #[cfg(feature = "fulltext")]
-            default_engine: config.default_engine,
-            #[cfg(feature = "fulltext")]
             config,
             schema_manager: None,
             stats_manager: Mutex::new(None),
@@ -92,12 +86,12 @@ impl FulltextIndexManager {
         index_id: &str,
         storage_path: &std::path::Path,
     ) -> Result<Arc<dyn FulltextSearchEngine>, SearchError> {
+        #[cfg(not(feature = "fulltext-es"))]
+        let _ = index_id;
         match self.config.backend {
             FulltextBackendKind::Local => {
-                let engine = TantivySearchEngine::open_or_create(
-                    storage_path,
-                    self.config.tantivy.clone(),
-                )?;
+                let engine =
+                    TantivySearchEngine::open_or_create(storage_path, self.config.tantivy.clone())?;
                 Ok(Arc::new(engine) as Arc<dyn FulltextSearchEngine>)
             }
             FulltextBackendKind::Es => {
@@ -115,6 +109,16 @@ impl FulltextIndexManager {
                 }
             }
         }
+    }
+
+    /// Whether this backend can publish a rebuilt index without stopping
+    /// writes. The local backend renames a scratch directory into place; the ES
+    /// backend would need an alias swap, which is not implemented, so callers
+    /// reject rebuild requests up front instead of accepting a task that can
+    /// only fail later.
+    #[cfg(feature = "fulltext")]
+    pub fn supports_online_rebuild(&self) -> bool {
+        self.config.backend == FulltextBackendKind::Local
     }
 
     /// Shared index-event registry for the central `HookBus`.
@@ -155,20 +159,28 @@ impl FulltextIndexManager {
 
     fn discover_existing_indexes(&self) -> Result<(), SearchError> {
         #[cfg(feature = "fulltext")]
-        if let Ok(loaded) = self.load_metadata_from_file() {
-            for metadata in loaded {
-                if self.restore_index_from_metadata(&metadata).is_ok() {
-                    tracing::debug!(
-                        index_id = %metadata.index_id,
-                        "Restored index from metadata"
-                    );
+        {
+            if let Ok(loaded) = self.load_metadata_from_file() {
+                for metadata in loaded {
+                    if self.restore_index_from_metadata(&metadata).is_ok() {
+                        tracing::debug!(
+                            index_id = %metadata.index_id,
+                            "Restored index from metadata"
+                        );
+                    }
                 }
+                return Ok(());
             }
-            return Ok(());
-        }
 
-        #[cfg(feature = "fulltext")]
-        return self.discover_indexes_from_disk();
+            // The ES backend keeps index state server-side and addresses it by
+            // logical index id, so leftover local directories belong to an
+            // earlier local run and must never be adopted as live indexes.
+            if self.config.backend == FulltextBackendKind::Es {
+                return Ok(());
+            }
+
+            self.discover_indexes_from_disk()
+        }
 
         #[cfg(not(feature = "fulltext"))]
         Ok(())
@@ -217,18 +229,16 @@ impl FulltextIndexManager {
         path: &std::path::Path,
     ) -> Option<(IndexKey, Arc<dyn FulltextSearchEngine>, IndexMetadata)> {
         if let Some((space_id, tag_name, field_name)) = Self::read_key_sidecar(path) {
-            let engine =
-                TantivySearchEngine::open_or_create(path, self.config.tantivy.clone()).ok()?;
-
-            let engine: Arc<dyn FulltextSearchEngine> = Arc::new(engine);
             let key = IndexKey::new(space_id, &tag_name, &field_name);
+            let engine = self.build_engine(&key.to_index_id(), path).ok()?;
+
             let metadata = IndexMetadata {
                 index_id: key.to_index_id(),
                 index_name: format!("idx_{}_{}_{}", space_id, tag_name, field_name),
                 space_id,
                 tag_name: tag_name.clone(),
                 field_name: field_name.clone(),
-                engine_type: EngineType::Bm25,
+                backend: self.config.backend,
                 storage_path: path.to_string_lossy().to_string(),
                 created_at: chrono::Utc::now(),
                 last_updated: chrono::Utc::now(),
@@ -243,21 +253,18 @@ impl FulltextIndexManager {
         let dir_name = path.file_name()?.to_string_lossy();
         let (space_id, tag_name, field_name) = self.parse_index_id(&dir_name)?;
 
-        let engine = TantivySearchEngine::open_or_create(
-            &self.base_path.join(&*dir_name),
-            self.config.tantivy.clone(),
-        )
-        .ok()?;
-
-        let engine: Arc<dyn FulltextSearchEngine> = Arc::new(engine);
         let key = IndexKey::new(space_id, &tag_name, &field_name);
+        let engine = self
+            .build_engine(&key.to_index_id(), &self.base_path.join(&*dir_name))
+            .ok()?;
+
         let metadata = IndexMetadata {
-            index_id: dir_name.to_string(),
+            index_id: key.to_index_id(),
             index_name: format!("idx_{}_{}_{}", space_id, tag_name, field_name),
             space_id,
             tag_name: tag_name.clone(),
             field_name: field_name.clone(),
-            engine_type: EngineType::Bm25,
+            backend: self.config.backend,
             storage_path: path.to_string_lossy().to_string(),
             created_at: chrono::Utc::now(),
             last_updated: chrono::Utc::now(),
@@ -269,22 +276,13 @@ impl FulltextIndexManager {
         Some((key, engine, metadata))
     }
 
-    /// Legacy directory-name fallback. The `space_ft_{space}_{tag}_{field}`
-    /// form is ambiguous when tag/field names contain `_`, so new indexes
-    /// write a `fulltext_key.json` sidecar (authoritative) and this parser
-    /// only accepts the unambiguous five-segment form.
+    /// Directory-name fallback for indexes created before the sidecar was
+    /// written. Directory names are length-prefixed (`space_ft_1_8_User_tag_2_id`)
+    /// so a tag or field containing `_` can never be decoded as a different
+    /// pair; the `fulltext_key.json` sidecar stays authoritative when present.
     #[cfg(feature = "fulltext")]
     fn parse_index_id(&self, index_id: &str) -> Option<(u64, String, String)> {
-        let parts: Vec<&str> = index_id.split('_').collect();
-        if parts.len() != 5 || parts[0] != "space" || parts[1] != "ft" {
-            return None;
-        }
-
-        let space_id: u64 = parts[2].parse().ok()?;
-        let tag_name = parts[3].to_string();
-        let field_name = parts[4].to_string();
-
-        Some((space_id, tag_name, field_name))
+        IndexKey::from_index_id(index_id).map(|key| (key.space_id, key.tag_name, key.field_name))
     }
 
     #[cfg(feature = "fulltext")]
@@ -467,31 +465,26 @@ impl FulltextIndexManager {
         space_id: u64,
         tag_name: &str,
         field_name: &str,
-        engine_type: Option<EngineType>,
     ) -> Result<String, SearchError> {
         let display_name = format!("idx_{}_{}_{}", space_id, tag_name, field_name);
-        self.create_index_with_engine_config(
-            space_id,
-            tag_name,
-            field_name,
-            &display_name,
-            engine_type,
-            None,
-        )
-        .await
+        self.create_index_with_engine_config(space_id, tag_name, field_name, &display_name, None)
+            .await
     }
 
     /// Create a fulltext index with explicit engine configuration.
     ///
     /// The `tag_name` parameter is a schema name: a vertex tag or an edge
     /// type name sharing one index namespace (see [`Self::create_index`]).
+    ///
+    /// The serving backend is not a per-index choice: it comes from
+    /// [`FulltextConfig::backend`] via [`Self::build_engine`], and the same
+    /// value is recorded in the index metadata.
     pub async fn create_index_with_engine_config(
         &self,
         space_id: u64,
         tag_name: &str,
         field_name: &str,
         _user_index_name: &str,
-        _engine_type: Option<EngineType>,
         engine_config: Option<serde_json::Value>,
     ) -> Result<String, SearchError> {
         self.validate_space_exists(space_id)?;
@@ -508,7 +501,6 @@ impl FulltextIndexManager {
 
         #[cfg(feature = "fulltext")]
         {
-            let engine_type = _engine_type.unwrap_or(self.default_engine);
             let storage_path = self.get_space_storage_path(space_id)?;
 
             self.emit_index_event(IndexEvent::FulltextBuildStarted {
@@ -530,7 +522,7 @@ impl FulltextIndexManager {
                 space_id,
                 tag_name: tag_name.to_string(),
                 field_name: field_name.to_string(),
-                engine_type,
+                backend: self.config.backend,
                 storage_path: storage_path.join(&index_id).to_string_lossy().to_string(),
                 created_at: chrono::Utc::now(),
                 last_updated: chrono::Utc::now(),
@@ -1013,8 +1005,7 @@ impl FulltextIndexManager {
         tokio::fs::create_dir_all(&temp_dir).await?;
 
         // No key sidecar on purpose: discovery must never adopt scratch dirs.
-        let engine = TantivySearchEngine::open_or_create(&temp_dir, self.config.tantivy.clone())?;
-        let engine: Arc<dyn FulltextSearchEngine> = Arc::new(engine);
+        let engine = self.build_engine(&index_id, &temp_dir)?;
 
         if let Some(mut metadata) = self.metadata.get_mut(&key) {
             metadata.status = IndexStatus::Rebuilding;
@@ -1226,11 +1217,8 @@ impl FulltextIndexManager {
             }
         }
 
-        let engine = TantivySearchEngine::open_or_create(&backup, self.config.tantivy.clone())?;
-        self.engines.insert(
-            key.clone(),
-            Arc::new(engine) as Arc<dyn FulltextSearchEngine>,
-        );
+        let engine = self.build_engine(&index_id, &backup)?;
+        self.engines.insert(key.clone(), engine);
         if let Some(mut metadata) = self.metadata.get_mut(&key) {
             metadata.storage_path = backup.to_string_lossy().to_string();
             metadata.status = IndexStatus::Error;

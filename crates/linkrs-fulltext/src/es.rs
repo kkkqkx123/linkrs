@@ -689,7 +689,7 @@ mod tests {
                 single_index,
                 ..Default::default()
             },
-            "space_ft_1_person_name".to_string(),
+            "space_ft_1_6_person_4_name".to_string(),
         )
         .expect("test engine builds without I/O")
     }
@@ -742,7 +742,7 @@ mod tests {
         let filters = body.pointer("/query/bool/filter").and_then(J::as_array).expect("filters");
         let text = serde_json::to_string(filters).expect("filters serialize");
         assert!(text.contains(DOC_TYPE_DOCUMENT));
-        assert!(text.contains("space_ft_1_person_name"));
+        assert!(text.contains("space_ft_1_6_person_4_name"));
         assert!(!text.contains(DOC_TYPE_FENCE));
     }
 

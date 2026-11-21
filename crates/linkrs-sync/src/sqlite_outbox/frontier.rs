@@ -167,7 +167,6 @@ impl SqliteOutbox {
             materialized_lsn,
             targets,
             indexes,
-            vector_disabled_skips: 0,
         })
     }
 }

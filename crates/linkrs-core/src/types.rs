@@ -474,11 +474,8 @@ mod tests {
 // Exporting Base Schema Types from Atomic Modules
 pub use self::edge::{EdgeStrategy, EdgeTypeInfo};
 pub use self::index::{Index, IndexConfig, IndexField, IndexStatus, IndexType};
-// Export full-text index types
-pub use self::index::{
-    BM25IndexConfig, ConsistencyState, FulltextEngineType, FulltextIndexField,
-    FulltextIndexOptions, IndexStats, SearchStats,
-};
+// Export index consistency and statistics types
+pub use self::index::{ConsistencyState, IndexStats, SearchStats};
 // Export full-text query types
 pub use self::fulltext_query::{
     FieldQuery, FulltextQuery, FulltextQueryOptions, FulltextSearchResult, HighlightOptions,

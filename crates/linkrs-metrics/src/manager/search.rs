@@ -169,10 +169,6 @@ impl StatsManager {
         }
     }
 
-    pub fn record_vector_disabled_skips(&self, count: u64) {
-        self.set_value(MetricType::VectorDisabledSkips, count);
-    }
-
     /// Record one embedding call (global bucket only).
     ///
     /// The embedding path has no space context, so only global counters are
