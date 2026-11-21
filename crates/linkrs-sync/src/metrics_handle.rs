@@ -63,6 +63,10 @@ impl VectorEngineHandle for MetricsEngineHandle {
         self.inner.engine_name()
     }
 
+    fn is_in_process(&self) -> bool {
+        self.inner.is_in_process()
+    }
+
     fn is_disabled(&self) -> bool {
         self.inner.is_disabled()
     }

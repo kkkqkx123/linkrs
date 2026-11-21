@@ -1,5 +1,7 @@
 pub mod engine;
 pub mod error;
+#[cfg(feature = "fulltext-es")]
+pub mod es;
 #[cfg(feature = "jieba")]
 pub mod jieba_tokenizer;
 #[cfg(feature = "fulltext")]
@@ -19,6 +21,8 @@ mod isolation_test;
 
 pub use engine::FulltextSearchEngine;
 pub use error::{Result, SearchError};
+#[cfg(feature = "fulltext-es")]
+pub use es::EsSearchEngine;
 pub use linkrs_config::fulltext::{
     Bm25Params, FulltextConfig, FulltextEngineType as EngineType, SyncConfig, SyncFailurePolicy,
     TantivyConfig, TokenizerKind,

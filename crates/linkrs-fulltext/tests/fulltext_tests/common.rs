@@ -17,8 +17,10 @@ impl FulltextTestContext {
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let config = FulltextConfig {
             enabled: true,
+            backend: Default::default(),
             index_path: temp_dir.path().to_path_buf(),
             default_engine: EngineType::Bm25,
+            es: Default::default(),
             sync: linkrs_fulltext::SyncConfig::default(),
             tantivy: Default::default(),
             cache_size: 100,

@@ -64,6 +64,16 @@ pub trait FulltextSearchEngine: Send + Sync + std::fmt::Debug + 'static {
         Ok(())
     }
 
+    /// Ensure the backend's index structure is ready for reads and writes.
+    ///
+    /// Local engines create their on-disk index during construction, so the
+    /// default is a no-op. Remote engines override this to create an explicit
+    /// mapping (keyword fields must not fall back to dynamic text mapping).
+    /// Called once by the manager when an index is first created.
+    async fn ensure_ready(&self) -> Result<(), SearchError> {
+        Ok(())
+    }
+
     /// Flush pending writes to durable storage.
     async fn commit(&self) -> Result<(), SearchError>;
 

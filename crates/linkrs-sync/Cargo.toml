@@ -22,6 +22,7 @@ vector-qdrant = ["vector", "dep:vector-client", "linkrs-config/vector-qdrant"]
 vector-http = ["vector-qdrant", "vector-client/qdrant-http"]
 vector-grpc = ["vector-qdrant", "vector-client/qdrant-grpc"]
 fulltext = ["dep:linkrs-fulltext", "linkrs-fulltext/fulltext"]
+fulltext-es = ["fulltext", "linkrs-fulltext/fulltext-es"]
 
 [dependencies]
 linkrs-core = { version = "0.1.0", path = "../linkrs-core" }

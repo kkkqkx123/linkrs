@@ -30,8 +30,10 @@ fn bench_fulltext_index_build(c: &mut Criterion) {
         let temp_dir = TempDir::new().expect("temp dir");
         let config = FulltextConfig {
             enabled: true,
+            backend: Default::default(),
             index_path: temp_dir.path().to_path_buf(),
             default_engine: EngineType::Bm25,
+            es: Default::default(),
             sync: Default::default(),
             tantivy: Default::default(),
             cache_size: 100,
@@ -107,8 +109,10 @@ fn bench_fulltext_search(c: &mut Criterion) {
     let temp_dir = TempDir::new().expect("temp dir");
     let config = FulltextConfig {
         enabled: true,
+        backend: Default::default(),
         index_path: temp_dir.path().to_path_buf(),
         default_engine: EngineType::Bm25,
+        es: Default::default(),
         sync: Default::default(),
         tantivy: Default::default(),
         cache_size: 100,

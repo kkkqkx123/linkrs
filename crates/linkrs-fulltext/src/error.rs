@@ -39,6 +39,9 @@ pub enum SearchError {
     #[error("Config error: {0}")]
     ConfigError(String),
 
+    #[error("Operation not supported: {0}")]
+    NotSupported(String),
+
     #[error("Query parse error: {0}")]
     QueryParseError(String),
 

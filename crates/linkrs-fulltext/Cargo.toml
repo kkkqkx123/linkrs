@@ -25,6 +25,7 @@ dashmap.workspace = true
 async-trait.workspace = true
 tracing.workspace = true
 tokio = { workspace = true, features = ["fs"] }
+reqwest = { workspace = true, optional = true }
 
 [features]
 # `fulltext` stays opt-in instead of default: the tantivy backend roughly
@@ -33,6 +34,10 @@ tokio = { workspace = true, features = ["fs"] }
 # with `--features fulltext`.
 fulltext = ["dep:tantivy"]
 jieba = ["dep:jieba-rs", "dep:tantivy-tokenizer-api"]
+# `fulltext-es` enables the Elasticsearch remote backend. It is independent
+# of `fulltext` (the ES engine does not depend on Tantivy) so remote-only
+# deployments avoid the local index stack.
+fulltext-es = ["dep:reqwest"]
 
 [dev-dependencies]
 criterion.workspace = true

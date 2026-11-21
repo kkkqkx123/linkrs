@@ -23,6 +23,10 @@ use simvec::{
 #[cfg(feature = "vector-qdrant")]
 use vector_client::VectorManager;
 
+#[cfg(feature = "vector-qdrant")]
+use super::circuit_breaker::{
+    with_circuit_breaker, CircuitBreaker, CircuitBreakerConfig, CircuitBreakerError,
+};
 use super::vector_defaults::CollectionDefaults;
 use super::vector_error::{VectorCoordinatorError, VectorCoordinatorResult, VectorError};
 
@@ -36,6 +40,14 @@ use super::vector_error::{VectorCoordinatorError, VectorCoordinatorResult, Vecto
 pub trait VectorEngineHandle: Send + Sync + fmt::Debug + 'static {
     /// Short engine identifier (`local` / `qdrant`).
     fn engine_name(&self) -> &'static str;
+
+    /// Whether the engine runs in-process with no network hop. Delivery
+    /// paths use this capability to decide whether a batch may take the
+    /// durable-outbox-free fast path; callers must not infer it from the
+    /// engine name.
+    fn is_in_process(&self) -> bool {
+        false
+    }
 
     /// Whether the engine is currently unavailable (e.g. disabled Qdrant).
     fn is_disabled(&self) -> bool;
@@ -312,6 +324,10 @@ impl LocalEngineHandle {
 impl VectorEngineHandle for LocalEngineHandle {
     fn engine_name(&self) -> &'static str {
         "local"
+    }
+
+    fn is_in_process(&self) -> bool {
+        true
     }
 
     fn is_disabled(&self) -> bool {
@@ -733,22 +749,40 @@ pub struct QdrantEngineHandle {
     manager: Arc<VectorManager>,
     /// `[vector.qdrant.collection]` creation defaults.
     defaults: CollectionDefaults,
+    /// Cached result of `manager.engine().name() == "disabled"` resolved at
+    /// construction time, so capability checks never compare name strings.
+    disabled: bool,
+    /// Protects remote write batches from cascading failures when the
+    /// Qdrant service keeps rejecting requests.
+    breaker: Arc<CircuitBreaker>,
 }
 
 #[cfg(feature = "vector-qdrant")]
 impl QdrantEngineHandle {
     /// Wrap an already-allocated Qdrant manager.
     pub fn new(manager: Arc<VectorManager>) -> Self {
-        Self {
-            manager,
-            defaults: CollectionDefaults::default(),
-        }
+        Self::with_defaults(manager, CollectionDefaults::default())
     }
 
     /// Wrap an already-allocated Qdrant manager with explicit creation
     /// defaults taken from configuration.
     pub fn with_defaults(manager: Arc<VectorManager>, defaults: CollectionDefaults) -> Self {
-        Self { manager, defaults }
+        let disabled = manager.engine().name() == "disabled";
+        Self {
+            manager,
+            defaults,
+            disabled,
+            breaker: Arc::new(CircuitBreaker::new(
+                "qdrant-write",
+                CircuitBreakerConfig::default(),
+            )),
+        }
+    }
+
+    /// Circuit breaker protecting remote write batches. Exposed so callers
+    /// can observe state without depending on the concrete manager.
+    pub fn circuit_breaker(&self) -> &CircuitBreaker {
+        &self.breaker
     }
 }
 
@@ -760,7 +794,7 @@ impl VectorEngineHandle for QdrantEngineHandle {
     }
 
     fn is_disabled(&self) -> bool {
-        self.manager.engine().name() == "disabled"
+        self.disabled
     }
 
     async fn health_check(&self) -> VectorCoordinatorResult<HealthStatus> {
@@ -847,35 +881,48 @@ impl VectorEngineHandle for QdrantEngineHandle {
         deletes: HashMap<String, Vec<String>>,
     ) -> VectorCoordinatorResult<()> {
         use std::future::Future;
-        let mut pending: Vec<
-            Pin<Box<dyn Future<Output = VectorCoordinatorResult<()>> + Send + '_>>,
-        > = Vec::new();
-        for (collection, points) in upserts {
-            pending.push(Box::pin(async move {
-                if points.len() == 1 {
-                    self.upsert(&collection, points.into_iter().next().expect("len checked"))
-                        .await?;
-                } else if !points.is_empty() {
-                    self.upsert_batch(&collection, points).await?;
-                }
-                Ok(())
-            }));
+        let breaker = Arc::clone(&self.breaker);
+        let result = with_circuit_breaker(&breaker, || async {
+            let mut pending: Vec<
+                Pin<Box<dyn Future<Output = VectorCoordinatorResult<()>> + Send + '_>>,
+            > = Vec::new();
+            for (collection, points) in upserts {
+                pending.push(Box::pin(async move {
+                    if points.len() == 1 {
+                        self.upsert(&collection, points.into_iter().next().expect("len checked"))
+                            .await?;
+                    } else if !points.is_empty() {
+                        self.upsert_batch(&collection, points).await?;
+                    }
+                    Ok(())
+                }));
+            }
+            for (collection, point_ids) in deletes {
+                pending.push(Box::pin(async move {
+                    if point_ids.len() == 1 {
+                        self.delete(&collection, &point_ids[0]).await?;
+                    } else if !point_ids.is_empty() {
+                        let refs: Vec<&str> = point_ids.iter().map(|id| id.as_str()).collect();
+                        self.delete_batch(&collection, &refs).await?;
+                    }
+                    Ok(())
+                }));
+            }
+            if !pending.is_empty() {
+                futures::future::try_join_all(pending).await?;
+            }
+            Ok::<(), VectorCoordinatorError>(())
+        })
+        .await;
+        match result {
+            Ok(()) => Ok(()),
+            Err(CircuitBreakerError::CircuitOpen) => Err(
+                VectorCoordinatorError::Vector(VectorError::EngineUnavailable(
+                    "qdrant write circuit breaker is open".to_string(),
+                )),
+            ),
+            Err(CircuitBreakerError::OperationFailed(error)) => Err(error),
         }
-        for (collection, point_ids) in deletes {
-            pending.push(Box::pin(async move {
-                if point_ids.len() == 1 {
-                    self.delete(&collection, &point_ids[0]).await?;
-                } else if !point_ids.is_empty() {
-                    let refs: Vec<&str> = point_ids.iter().map(|id| id.as_str()).collect();
-                    self.delete_batch(&collection, &refs).await?;
-                }
-                Ok(())
-            }));
-        }
-        if !pending.is_empty() {
-            futures::future::try_join_all(pending).await?;
-        }
-        Ok(())
     }
 
     async fn list_collections(&self) -> VectorCoordinatorResult<Vec<String>> {
@@ -1041,8 +1088,8 @@ impl VectorEngineHandle for QdrantEngineHandle {
     ) -> VectorCoordinatorResult<
         Pin<Box<dyn Stream<Item = VectorCoordinatorResult<SearchResult>> + Send>>,
     > {
-        // Prefer native streaming when the gRPC engine is in use; fall back
-        // to unary search + iter for HTTP or disabled.
+        // The remote client exposes no native streaming API yet, so buffer a
+        // unary search into a stream. Large result sets are held in memory.
         let results = self.manager.search(collection, query).await?;
         let stream = futures::stream::iter(results.into_iter().map(Ok));
         Ok(Box::pin(stream))
@@ -1318,7 +1365,7 @@ impl VectorBackend {
 
     /// Whether this backend is the built-in local engine.
     pub fn is_local(&self) -> bool {
-        self.engine.engine_name() == "local"
+        self.engine.is_in_process()
     }
 
     /// Whether the engine is currently unavailable (e.g. disabled Qdrant).
@@ -1741,13 +1788,61 @@ impl VectorBackend {
             .await
     }
 
-    /// Whether payload indexes are natively supported by this backend.
+    /// Whether payload indexes are supported. Both the local and Qdrant
+    /// handles implement `create_payload_index`, so this holds for every
+    /// current backend. A future backend that cannot must expose the
+    /// capability on `VectorEngineHandle` instead of hard-coding it here.
     pub fn supports_payload_index(&self) -> bool {
         true
     }
 
-    /// Whether streaming search is available.
+    /// Whether a stream-shaped search/scroll surface is available. Both
+    /// handles provide it (the remote handle buffers a unary call into a
+    /// stream), so callers may rely on it regardless of backend.
     pub fn supports_streaming(&self) -> bool {
         true
+    }
+}
+
+#[cfg(all(test, feature = "vector-qdrant"))]
+mod tests {
+    use super::*;
+    use crate::circuit_breaker::CircuitState;
+    use crate::vector_error::VectorErrorKind;
+    use vector_client::VectorClientConfig;
+
+    async fn disabled_handle() -> QdrantEngineHandle {
+        let manager = Arc::new(
+            VectorManager::new(VectorClientConfig::disabled())
+                .await
+                .expect("disabled manager builds without I/O"),
+        );
+        QdrantEngineHandle::new(manager)
+    }
+
+    #[tokio::test]
+    async fn disabled_manager_yields_disabled_handle() {
+        let handle = disabled_handle().await;
+        assert!(handle.is_disabled());
+        assert!(!handle.is_in_process());
+    }
+
+    #[tokio::test]
+    async fn tripped_breaker_rejects_write_batch_as_retryable() {
+        let handle = disabled_handle().await;
+        handle.circuit_breaker().trip();
+        assert_eq!(handle.circuit_breaker().state(), CircuitState::Open);
+
+        let result = handle
+            .apply_grouped_batch(HashMap::new(), HashMap::new())
+            .await;
+        let error = result.expect_err("open breaker must reject the batch");
+        match &error {
+            VectorCoordinatorError::Vector(VectorError::EngineUnavailable(message)) => {
+                assert!(message.contains("circuit breaker is open"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+        assert!(matches!(error.kind(), VectorErrorKind::Retryable));
     }
 }

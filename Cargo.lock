@@ -2345,6 +2345,7 @@ dependencies = [
  "linkrs-metrics",
  "log",
  "parking_lot",
+ "reqwest",
  "serde",
  "serde_json",
  "tantivy-tokenizer-api",

@@ -10,7 +10,11 @@ use crate::metrics::MetricsSearchEngine;
 use crate::result::{IndexStats, SearchResult};
 use crate::tantivy_index::TantivySearchEngine;
 use crate::ConsistencyState;
-use linkrs_config::fulltext::{FulltextConfig, FulltextEngineType as EngineType};
+#[cfg(feature = "fulltext-es")]
+use crate::EsSearchEngine;
+use linkrs_config::fulltext::{
+    FulltextBackendKind, FulltextConfig, FulltextEngineType as EngineType,
+};
 use linkrs_core::event_dispatch::{EventFilter, EventSubscriptions, SubscriptionId};
 use linkrs_core::index_events::{IndexEvent, IndexEventCallback, RebuildPhase, RebuildProgress};
 use linkrs_core::metadata::SchemaManager;
@@ -75,6 +79,42 @@ impl FulltextIndexManager {
         manager.discover_existing_indexes()?;
 
         Ok(manager)
+    }
+
+    /// Construct the concrete engine for one logical index according to the
+    /// configured backend. Local storage uses Tantivy over `storage_path`;
+    /// the ES backend binds to the logical index id and ignores the path.
+    /// Returns an error when the ES backend is compiled out but selected in
+    /// configuration, so a misconfigured build fails loudly at startup.
+    #[cfg(feature = "fulltext")]
+    fn build_engine(
+        &self,
+        index_id: &str,
+        storage_path: &std::path::Path,
+    ) -> Result<Arc<dyn FulltextSearchEngine>, SearchError> {
+        match self.config.backend {
+            FulltextBackendKind::Local => {
+                let engine = TantivySearchEngine::open_or_create(
+                    storage_path,
+                    self.config.tantivy.clone(),
+                )?;
+                Ok(Arc::new(engine) as Arc<dyn FulltextSearchEngine>)
+            }
+            FulltextBackendKind::Es => {
+                #[cfg(feature = "fulltext-es")]
+                {
+                    let engine = EsSearchEngine::new(self.config.es.clone(), index_id.to_string())?;
+                    Ok(Arc::new(engine) as Arc<dyn FulltextSearchEngine>)
+                }
+                #[cfg(not(feature = "fulltext-es"))]
+                {
+                    Err(SearchError::ConfigError(
+                        "fulltext backend 'es' selected but the fulltext-es feature is not enabled"
+                            .to_string(),
+                    ))
+                }
+            }
+        }
     }
 
     /// Shared index-event registry for the central `HookBus`.
@@ -282,12 +322,9 @@ impl FulltextIndexManager {
         } else {
             self.base_path.join(&metadata.index_id)
         };
-        let engine = TantivySearchEngine::open_or_create(&index_path, self.config.tantivy.clone())?;
+        let engine = self.build_engine(&metadata.index_id, &index_path)?;
 
-        self.engines.insert(
-            key.clone(),
-            Arc::new(engine) as Arc<dyn FulltextSearchEngine>,
-        );
+        self.engines.insert(key.clone(), engine);
         self.metadata.insert(key, metadata.clone());
 
         Ok(())
@@ -478,17 +515,14 @@ impl FulltextIndexManager {
                 index_name: index_id.clone(),
             });
 
-            let engine = TantivySearchEngine::open_or_create(
-                &storage_path.join(&index_id),
-                self.config.tantivy.clone(),
-            )?;
+            let engine = self.build_engine(&index_id, &storage_path.join(&index_id))?;
+            engine.ensure_ready().await?;
             Self::write_key_sidecar(
                 &storage_path.join(&index_id),
                 space_id,
                 tag_name,
                 field_name,
             );
-            let engine: Arc<dyn FulltextSearchEngine> = Arc::new(engine);
 
             let metadata = IndexMetadata {
                 index_id: index_id.clone(),
@@ -938,6 +972,18 @@ impl FulltextIndexManager {
         field_name: &str,
         generation: u64,
     ) -> Result<Arc<dyn FulltextSearchEngine>, SearchError> {
+        // Online rebuild relies on a local scratch directory and an atomic
+        // directory rename at publish time. The ES backend needs an index
+        // alias swap instead, which is not part of this backend yet; fail
+        // loudly rather than building a scratch directory that can never be
+        // published. Incremental sync (the normal path) is fully supported.
+        if self.config.backend == FulltextBackendKind::Es {
+            return Err(SearchError::NotSupported(
+                "online fulltext rebuild is not supported with the es backend; \
+                 the index is kept consistent by the durable outbox"
+                    .to_string(),
+            ));
+        }
         let key = IndexKey::new(space_id, tag_name, field_name);
         let live_path = self
             .metadata

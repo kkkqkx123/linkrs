@@ -246,6 +246,9 @@ server = ["linkrs-config/server"]
 # grows the default build, while the placeholder bench keeps both run modes
 # usable without the feature.
 fulltext = ["linkrs-api/fulltext", "linkrs-server/fulltext", "linkrs-fulltext/fulltext", "linkrs-sync/fulltext"]
+# Elasticsearch remote fulltext backend. Implies the local fulltext stack so
+# the manager's backend factory is compiled in.
+fulltext-es = ["fulltext", "linkrs-fulltext/fulltext-es", "linkrs-sync/fulltext-es"]
 jieba = ["linkrs-fulltext/jieba"]
 vector = ["linkrs-api/vector", "linkrs-server/vector", "linkrs-config/vector", "linkrs-sync/vector", "linkrs-query/vector"]
 embedding = ["vector", "linkrs-sync/embedding", "linkrs-server/embedding"]

@@ -93,6 +93,7 @@ fulltext = [
     "linkrs-query/fulltext",
     "linkrs-api/fulltext",
 ]
+fulltext-es = ["fulltext", "linkrs-fulltext/fulltext-es", "linkrs-sync/fulltext-es"]
 
 [target.'cfg(windows)'.dependencies]
 windows-service = "0.8"

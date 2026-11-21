@@ -19,6 +19,119 @@ impl std::fmt::Display for FulltextEngineType {
     }
 }
 
+/// Where fulltext indexes are physically stored.
+///
+/// `Local` keeps the embedded Tantivy engine (the historical default).
+/// `Es` routes indexing and search through a remote Elasticsearch cluster.
+/// The two backends are mutually exclusive for a running instance: switching
+/// requires a rebuild, because index data is not portable between them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FulltextBackendKind {
+    #[default]
+    Local,
+    Es,
+}
+
+impl std::fmt::Display for FulltextBackendKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FulltextBackendKind::Local => write!(f, "local"),
+            FulltextBackendKind::Es => write!(f, "es"),
+        }
+    }
+}
+
+fn default_es_bulk_size() -> usize {
+    500
+}
+
+fn default_es_request_timeout_ms() -> u64 {
+    5_000
+}
+
+fn default_es_index_name() -> String {
+    "linkrs_fulltext".to_string()
+}
+
+/// Connection and behavior settings for the Elasticsearch remote backend.
+///
+/// Only read when [`FulltextConfig::backend`] is [`FulltextBackendKind::Es`].
+/// Authentication is optional: `api_key` (sent as an `ApiKey` header) takes
+/// precedence over the `username`/`password` basic-auth pair when both are
+/// present.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EsConfig {
+    /// Cluster base URL (e.g. `http://127.0.0.1:9200`), without trailing slash.
+    pub url: String,
+    /// Target index name. Shared by every local fulltext index when `single_index` is true.
+    #[serde(default = "default_es_index_name")]
+    pub index_name: String,
+    /// Store every logical fulltext index in one ES index, scoped by a keyword field.
+    #[serde(default = "default_true")]
+    pub single_index: bool,
+    /// API key for `ApiKey` authorization, when set.
+    #[serde(default)]
+    pub api_key: Option<String>,
+    /// Basic-auth user name, when set together with `password`.
+    #[serde(default)]
+    pub username: Option<String>,
+    /// Basic-auth password.
+    #[serde(default)]
+    pub password: Option<String>,
+    /// Maximum number of documents per bulk request.
+    #[serde(default = "default_es_bulk_size")]
+    pub bulk_size: usize,
+    /// Per-request timeout in milliseconds.
+    #[serde(default = "default_es_request_timeout_ms")]
+    pub request_timeout_ms: u64,
+    /// Number of times a transient remote failure is retried before giving up.
+    #[serde(default)]
+    pub max_retries: u32,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for EsConfig {
+    fn default() -> Self {
+        Self {
+            url: String::new(),
+            index_name: default_es_index_name(),
+            single_index: true,
+            api_key: None,
+            username: None,
+            password: None,
+            bulk_size: default_es_bulk_size(),
+            request_timeout_ms: default_es_request_timeout_ms(),
+            max_retries: 0,
+        }
+    }
+}
+
+impl EsConfig {
+    /// Validate remote settings. Empty URLs are accepted while the backend is
+    /// disabled so a default config stays loadable; they are rejected when the
+    /// ES backend is selected (checked by [`FulltextConfig::validate`]).
+    pub fn validate(&self) -> Result<(), String> {
+        if self.url.trim().is_empty() {
+            return Err("fulltext.es.url must not be empty".to_string());
+        }
+        if self.index_name.trim().is_empty() {
+            return Err("fulltext.es.index_name must not be empty".to_string());
+        }
+        if self.bulk_size == 0 {
+            return Err("fulltext.es.bulk_size must be greater than 0".to_string());
+        }
+        if self.request_timeout_ms == 0 {
+            return Err("fulltext.es.request_timeout_ms must be greater than 0".to_string());
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TokenizerKind {
@@ -128,9 +241,15 @@ fn default_batch_size() -> usize {
 #[serde(deny_unknown_fields)]
 pub struct FulltextConfig {
     pub enabled: bool,
+    /// Physical storage backend for fulltext indexes.
+    #[serde(default)]
+    pub backend: FulltextBackendKind,
     /// Engine that produced the indexes. Only the local BM25 engine exists;
     /// the field documents index provenance and must stay `Bm25`.
     pub default_engine: FulltextEngineType,
+    /// Remote backend settings; only consulted when `backend` is `Es`.
+    #[serde(default)]
+    pub es: EsConfig,
     pub index_path: PathBuf,
     pub sync: SyncConfig,
     pub tantivy: TantivyConfig,
@@ -143,7 +262,9 @@ impl Default for FulltextConfig {
     fn default() -> Self {
         Self {
             enabled: false,
+            backend: FulltextBackendKind::default(),
             default_engine: FulltextEngineType::default(),
+            es: EsConfig::default(),
             index_path: PathBuf::from("data/fulltext"),
             sync: SyncConfig::default(),
             tantivy: TantivyConfig::default(),
@@ -180,6 +301,9 @@ impl FulltextConfig {
         {
             return Err("fulltext bm25_params.b must be within 0.0..=1.0".to_string());
         }
+        if self.backend == FulltextBackendKind::Es {
+            self.es.validate()?;
+        }
         Ok(())
     }
 }
@@ -206,5 +330,53 @@ mod tests {
             ..Default::default()
         };
         assert!(bm25.validate().is_err());
+    }
+
+    #[test]
+    fn test_es_backend_validation() {
+        // Local backend ignores an empty ES url.
+        let local = FulltextConfig::default();
+        assert_eq!(local.backend, FulltextBackendKind::Local);
+        assert!(local.validate().is_ok());
+
+        // Switching to ES without a url is rejected.
+        let es_no_url = FulltextConfig {
+            backend: FulltextBackendKind::Es,
+            ..Default::default()
+        };
+        assert!(es_no_url.validate().is_err());
+
+        // A complete ES config is accepted.
+        let es_ok = FulltextConfig {
+            backend: FulltextBackendKind::Es,
+            es: EsConfig {
+                url: "http://127.0.0.1:9200".to_string(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(es_ok.validate().is_ok());
+
+        // Display strings are stable for config logs.
+        assert_eq!(FulltextBackendKind::Local.to_string(), "local");
+        assert_eq!(FulltextBackendKind::Es.to_string(), "es");
+    }
+
+    #[test]
+    fn test_es_config_zero_values_rejected() {
+        assert!(EsConfig {
+            url: "http://127.0.0.1:9200".to_string(),
+            bulk_size: 0,
+            ..Default::default()
+        }
+        .validate()
+        .is_err());
+        assert!(EsConfig {
+            url: "http://127.0.0.1:9200".to_string(),
+            request_timeout_ms: 0,
+            ..Default::default()
+        }
+        .validate()
+        .is_err());
     }
 }

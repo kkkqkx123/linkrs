@@ -48,6 +48,7 @@ fulltext = [
     "linkrs-sync/fulltext",
     "linkrs-query/fulltext",
 ]
+fulltext-es = ["fulltext", "linkrs-fulltext/fulltext-es", "linkrs-sync/fulltext-es"]
 # Online schema migration orchestration (plan generation + fenced execute / rollback).
 # Kept out of the minimal embedded closure; the server enables it unconditionally
 # so its HTTP/gRPC migration handlers keep working without feature flags.

@@ -17,8 +17,10 @@ use linkrs_fulltext::{Bm25Params, EngineType, FulltextConfig, FulltextIndexManag
 fn create_manager_with_path(path: &std::path::Path) -> Arc<FulltextIndexManager> {
     let config = FulltextConfig {
         enabled: true,
+        backend: Default::default(),
         index_path: path.to_path_buf(),
         default_engine: EngineType::Bm25,
+        es: Default::default(),
         sync: linkrs_fulltext::SyncConfig::default(),
         tantivy: Default::default(),
         cache_size: 100,
@@ -337,8 +339,10 @@ async fn test_custom_bm25_params_persistence() {
 
     let config = FulltextConfig {
         enabled: true,
+        backend: Default::default(),
         index_path: temp_dir.path().to_path_buf(),
         default_engine: EngineType::Bm25,
+        es: Default::default(),
         sync: linkrs_fulltext::SyncConfig::default(),
         tantivy: linkrs_fulltext::TantivyConfig {
             bm25_params: Bm25Params { k1: 2.5, b: 0.4 },
