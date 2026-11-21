@@ -8,8 +8,8 @@ use crate::runtime;
 pub fn status(cx: &App) -> Task<Result<serde_json::Value, ClientError>> {
     let manager = SessionStore::manager(cx);
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard.client().sync_status().await
+        let client = manager.lock().await.client_clone();
+        client.sync_status().await
     })
 }
 
@@ -17,8 +17,8 @@ pub fn status(cx: &App) -> Task<Result<serde_json::Value, ClientError>> {
 pub fn diagnostics(cx: &App) -> Task<Result<serde_json::Value, ClientError>> {
     let manager = SessionStore::manager(cx);
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard.client().outbox_diagnostics().await
+        let client = manager.lock().await.client_clone();
+        client.outbox_diagnostics().await
     })
 }
 
@@ -33,9 +33,8 @@ pub fn dead_letters(
 ) -> Task<Result<serde_json::Value, ClientError>> {
     let manager = SessionStore::manager(cx);
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard
-            .client()
+        let client = manager.lock().await.client_clone();
+        client
             .outbox_dead_letters(target.as_deref(), index_id, generation, limit, offset)
             .await
     })
@@ -48,8 +47,8 @@ pub fn requeue(
 ) -> Task<Result<serde_json::Value, ClientError>> {
     let manager = SessionStore::manager(cx);
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard.client().outbox_requeue(&request).await
+        let client = manager.lock().await.client_clone();
+        client.outbox_requeue(&request).await
     })
 }
 
@@ -57,8 +56,8 @@ pub fn requeue(
 pub fn retry(cx: &App) -> Task<Result<serde_json::Value, ClientError>> {
     let manager = SessionStore::manager(cx);
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard.client().outbox_retry().await
+        let client = manager.lock().await.client_clone();
+        client.outbox_retry().await
     })
 }
 
@@ -71,9 +70,8 @@ pub fn degraded_ranges(
 ) -> Task<Result<serde_json::Value, ClientError>> {
     let manager = SessionStore::manager(cx);
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard
-            .client()
+        let client = manager.lock().await.client_clone();
+        client
             .outbox_degraded_ranges(target.as_deref(), index_id, generation)
             .await
     })
@@ -86,8 +84,8 @@ pub fn degraded_clear(
 ) -> Task<Result<serde_json::Value, ClientError>> {
     let manager = SessionStore::manager(cx);
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard.client().outbox_degraded_clear(&request).await
+        let client = manager.lock().await.client_clone();
+        client.outbox_degraded_clear(&request).await
     })
 }
 
@@ -95,8 +93,8 @@ pub fn degraded_clear(
 pub fn retention_status(cx: &App) -> Task<Result<serde_json::Value, ClientError>> {
     let manager = SessionStore::manager(cx);
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard.client().retention_status().await
+        let client = manager.lock().await.client_clone();
+        client.retention_status().await
     })
 }
 
@@ -108,10 +106,7 @@ pub fn retention_run(
 ) -> Task<Result<serde_json::Value, ClientError>> {
     let manager = SessionStore::manager(cx);
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard
-            .client()
-            .retention_run(grace_lsn_distance, max_age_ms)
-            .await
+        let client = manager.lock().await.client_clone();
+        client.retention_run(grace_lsn_distance, max_age_ms).await
     })
 }

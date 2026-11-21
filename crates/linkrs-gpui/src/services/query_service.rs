@@ -17,10 +17,9 @@ pub fn execute_with_options(
     let sql = sql.to_string();
     let session_id = AppState::global(cx).read(cx).session_id;
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
+        let client = manager.lock().await.client_clone();
         let id = session_id.ok_or(ClientError::NotConnected)?;
-        guard
-            .client()
+        client
             .execute_query_with_options(&sql, id, parameters, session_variables)
             .await
     })
@@ -468,15 +467,22 @@ pub fn format_script(script: &str) -> String {
     out
 }
 
-/// Execute a query in streaming mode.
-pub fn execute_stream(cx: &App, sql: &str) -> Task<Result<QueryResult, ClientError>> {
+/// Execute a streaming query with an explicit cancellation token. The caller
+/// can abort the in-flight HTTP request when it retires the work early.
+pub fn execute_stream_cancellable(
+    cx: &App,
+    sql: &str,
+) -> (
+    Task<Result<QueryResult, ClientError>>,
+    runtime::CancellationToken,
+) {
     let manager = SessionStore::manager(cx);
     let sql = sql.to_string();
     let session_id = AppState::global(cx).read(cx).session_id;
-    runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
+    runtime::spawn_cancellable(cx, async move {
+        let client = manager.lock().await.client_clone();
         let id = session_id.ok_or(ClientError::NotConnected)?;
-        guard.client().execute_query_stream(&sql, id).await
+        client.execute_query_stream(&sql, id).await
     })
 }
 
@@ -486,9 +492,9 @@ pub fn validate(cx: &App, sql: &str) -> Task<Result<serde_json::Value, ClientErr
     let sql = sql.to_string();
     let session_id = AppState::global(cx).read(cx).session_id;
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
+        let client = manager.lock().await.client_clone();
         let id = session_id.ok_or(ClientError::NotConnected)?;
-        guard.client().validate_query(&sql, id).await
+        client.validate_query(&sql, id).await
     })
 }
 
@@ -496,8 +502,8 @@ pub fn validate(cx: &App, sql: &str) -> Task<Result<serde_json::Value, ClientErr
 pub fn list_running(cx: &App) -> Task<Result<serde_json::Value, ClientError>> {
     let manager = SessionStore::manager(cx);
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard.client().list_queries().await
+        let client = manager.lock().await.client_clone();
+        client.list_queries().await
     })
 }
 
@@ -509,8 +515,8 @@ pub fn kill_running(
 ) -> Task<Result<serde_json::Value, ClientError>> {
     let manager = SessionStore::manager(cx);
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard.client().kill_query(session_id, query_id).await
+        let client = manager.lock().await.client_clone();
+        client.kill_query(session_id, query_id).await
     })
 }
 
@@ -520,9 +526,9 @@ pub fn explain(cx: &App, sql: &str) -> Task<Result<QueryResult, ClientError>> {
     let sql = sql.to_string();
     let session_id = AppState::global(cx).read(cx).session_id;
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
+        let client = manager.lock().await.client_clone();
         let id = session_id.ok_or(ClientError::NotConnected)?;
-        guard.client().explain_query(&sql, id).await
+        client.explain_query(&sql, id).await
     })
 }
 
@@ -534,8 +540,8 @@ pub fn profile(
     let manager = SessionStore::manager(cx);
     let trace_id = trace_id.to_string();
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard.client().get_query_profile_detail(&trace_id).await
+        let client = manager.lock().await.client_clone();
+        client.get_query_profile_detail(&trace_id).await
     })
 }
 

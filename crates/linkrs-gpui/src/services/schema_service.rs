@@ -47,9 +47,8 @@ pub fn create_space(
     let vid_type = vid_type.map(str::to_string);
     let comment = comment.map(str::to_string);
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard
-            .client()
+        let client = manager.lock().await.client_clone();
+        client
             .create_space(&name, vid_type.as_deref(), comment.as_deref())
             .await
     })
@@ -60,8 +59,8 @@ pub fn drop_space(cx: &App, name: &str) -> Task<Result<(), ClientError>> {
     let manager = SessionStore::manager(cx);
     let name = name.to_string();
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard.client().drop_space(&name).await
+        let client = manager.lock().await.client_clone();
+        client.drop_space(&name).await
     })
 }
 
@@ -76,8 +75,8 @@ pub fn create_tag(
     let space = space.to_string();
     let name = name.to_string();
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard.client().create_tag(&space, &name, properties).await
+        let client = manager.lock().await.client_clone();
+        client.create_tag(&space, &name, properties).await
     })
 }
 
@@ -92,11 +91,8 @@ pub fn create_edge_type(
     let space = space.to_string();
     let name = name.to_string();
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard
-            .client()
-            .create_edge_type(&space, &name, properties)
-            .await
+        let client = manager.lock().await.client_clone();
+        client.create_edge_type(&space, &name, properties).await
     })
 }
 
@@ -106,8 +102,8 @@ pub fn drop_tag(cx: &App, space: &str, name: &str) -> Task<Result<(), ClientErro
     let space = space.to_string();
     let name = name.to_string();
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard.client().drop_tag(&space, &name).await
+        let client = manager.lock().await.client_clone();
+        client.drop_tag(&space, &name).await
     })
 }
 
@@ -117,8 +113,8 @@ pub fn drop_edge_type(cx: &App, space: &str, name: &str) -> Task<Result<(), Clie
     let space = space.to_string();
     let name = name.to_string();
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard.client().drop_edge_type(&space, &name).await
+        let client = manager.lock().await.client_clone();
+        client.drop_edge_type(&space, &name).await
     })
 }
 
@@ -132,8 +128,8 @@ pub fn list_indexes(cx: &App, space: &str) -> Task<Result<Vec<serde_json::Value>
         if space.is_empty() {
             return Err(ClientError::NoSpaceSelected);
         }
-        let guard = manager.lock().await;
-        guard.client().list_schema_indexes(&space).await
+        let client = manager.lock().await.client_clone();
+        client.list_schema_indexes(&space).await
     })
 }
 
@@ -154,9 +150,8 @@ pub fn create_index(
     let entity_type = entity_type.to_string();
     let entity_name = entity_name.to_string();
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard
-            .client()
+        let client = manager.lock().await.client_clone();
+        client
             .create_schema_index(
                 &space,
                 &name,
@@ -175,8 +170,8 @@ pub fn drop_index(cx: &App, space: &str, name: &str) -> Task<Result<(), ClientEr
     let space = space.to_string();
     let name = name.to_string();
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard.client().drop_schema_index(&space, &name).await
+        let client = manager.lock().await.client_clone();
+        client.drop_schema_index(&space, &name).await
     })
 }
 
@@ -186,8 +181,8 @@ pub fn rebuild_index(cx: &App, space: &str, name: &str) -> Task<Result<(), Clien
     let space = space.to_string();
     let name = name.to_string();
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard.client().rebuild_schema_index(&space, &name).await
+        let client = manager.lock().await.client_clone();
+        client.rebuild_schema_index(&space, &name).await
     })
 }
 
@@ -265,9 +260,8 @@ pub fn version_history(
     let space = space.to_string();
     let label = label.to_string();
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard
-            .client()
+        let client = manager.lock().await.client_clone();
+        client
             .get_schema_version_history(&space, &label, is_edge)
             .await
     })
@@ -286,9 +280,8 @@ pub fn changes(
     let space = space.to_string();
     let label = label.to_string();
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard
-            .client()
+        let client = manager.lock().await.client_clone();
+        client
             .get_schema_changes(&space, &label, from_version, to_version, is_edge)
             .await
     })
@@ -307,9 +300,8 @@ pub fn breaking_changes(
     let space = space.to_string();
     let label = label.to_string();
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard
-            .client()
+        let client = manager.lock().await.client_clone();
+        client
             .detect_schema_breaking_changes(&space, &label, from_version, to_version, is_edge)
             .await
     })

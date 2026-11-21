@@ -1,4 +1,4 @@
-mod credentials;
+pub(crate) mod credentials;
 mod login_view;
 mod session_store;
 

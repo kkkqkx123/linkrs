@@ -22,9 +22,8 @@ pub fn create_plan(
     let space = space.to_string();
     let label = label.to_string();
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard
-            .client()
+        let client = manager.lock().await.client_clone();
+        client
             .create_migration_plan(
                 &space,
                 &label,
@@ -42,8 +41,8 @@ pub fn execute(cx: &App, plan_json: &str) -> Task<Result<MigrationExecuteRespons
     let manager = SessionStore::manager(cx);
     let plan_json = plan_json.to_string();
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard.client().execute_migration(&plan_json).await
+        let client = manager.lock().await.client_clone();
+        client.execute_migration(&plan_json).await
     })
 }
 
@@ -52,8 +51,8 @@ pub fn rollback(cx: &App, plan_json: &str) -> Task<Result<MigrationExecuteRespon
     let manager = SessionStore::manager(cx);
     let plan_json = plan_json.to_string();
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard.client().rollback_migration(&plan_json).await
+        let client = manager.lock().await.client_clone();
+        client.rollback_migration(&plan_json).await
     })
 }
 
@@ -62,8 +61,8 @@ pub fn dry_run(cx: &App, plan_json: &str) -> Task<Result<MigrationExecuteRespons
     let manager = SessionStore::manager(cx);
     let plan_json = plan_json.to_string();
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard.client().dry_run_migration(&plan_json).await
+        let client = manager.lock().await.client_clone();
+        client.dry_run_migration(&plan_json).await
     })
 }
 
@@ -78,11 +77,8 @@ pub fn history(
     let space = space.to_string();
     let label = label.to_string();
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard
-            .client()
-            .migration_history(&space, &label, is_edge)
-            .await
+        let client = manager.lock().await.client_clone();
+        client.migration_history(&space, &label, is_edge).await
     })
 }
 
@@ -97,11 +93,8 @@ pub fn status(
     let space = space.to_string();
     let label = label.to_string();
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard
-            .client()
-            .migration_status(&space, &label, is_edge)
-            .await
+        let client = manager.lock().await.client_clone();
+        client.migration_status(&space, &label, is_edge).await
     })
 }
 
@@ -116,9 +109,8 @@ pub fn progress(
     let space = space.to_string();
     let label = label.to_string();
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard
-            .client()
+        let client = manager.lock().await.client_clone();
+        client
             .stream_migration_progress(&space, &label, is_edge)
             .await
     })

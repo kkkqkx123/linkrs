@@ -27,6 +27,12 @@ pub struct AppState {
     /// generation that published it.
     pub graph_drop: Option<(u64, Neighborhood)>,
     pub graph_generation: u64,
+    /// A one-shot message for the shell to surface as a toast. Background
+    /// tasks (e.g. silent re-login) cannot reach a `Window` directly, so they
+    /// publish here and the shell drains it on the next state notification.
+    /// The generation makes repeated identical messages still observable.
+    pub notice: Option<SharedString>,
+    pub notice_generation: u64,
 }
 
 pub struct AppStateGlobal(Entity<AppState>);
@@ -57,6 +63,8 @@ impl AppState {
             locale,
             graph_drop: None,
             graph_generation: 0,
+            notice: None,
+            notice_generation: 0,
         });
         cx.set_global(AppStateGlobal(entity));
     }
@@ -162,6 +170,19 @@ impl AppState {
         cx.notify();
     }
 
+    /// Publish a one-shot toast message (e.g. a background re-login notice).
+    /// The generation counter lets the shell detect each publication even if
+    /// the message text repeats.
+    pub fn push_notice(
+        &mut self,
+        message: impl Into<SharedString>,
+        cx: &mut gpui_kit::Context<Self>,
+    ) {
+        self.notice_generation = self.notice_generation.wrapping_add(1);
+        self.notice = Some(message.into());
+        cx.notify();
+    }
+
     pub fn set_unhealthy(&mut self, unhealthy: bool, cx: &mut gpui_kit::Context<Self>) {
         if self.status == ConnectionStatus::Connected && unhealthy {
             self.status = ConnectionStatus::Unhealthy;
@@ -187,6 +208,8 @@ mod tests {
             locale: Locale::En,
             graph_drop: None,
             graph_generation: 0,
+            notice: None,
+            notice_generation: 0,
         }
     }
 

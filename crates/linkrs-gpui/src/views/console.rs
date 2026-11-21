@@ -26,6 +26,7 @@ use crate::components::{
     QueryTableDelegate,
 };
 use crate::i18n::{t, tf};
+use crate::runtime;
 use crate::services::{
     completion_service::{LinkrsCompletionProvider, SchemaSnapshot, SharedSchemaSnapshot},
     connection_service, cursor_service, graph_service, query_service, schema_service,
@@ -84,6 +85,7 @@ pub struct ConsolePanel {
     tabs: Vec<ResultTab>,
     active_tab: Option<usize>,
     running: Option<Task<()>>,
+    stream_cancel: Option<runtime::CancellationToken>,
     fav_name: Entity<InputState>,
     fav_path: Option<HistoryPath>,
     inspect: Option<InspectOutput>,
@@ -162,6 +164,7 @@ impl ConsolePanel {
             tabs: Vec::new(),
             active_tab: None,
             running: None,
+            stream_cancel: None,
             fav_name,
             fav_path: None,
             inspect: None,
@@ -405,7 +408,9 @@ impl ConsolePanel {
                     cx.notify();
                     let sql = this.tabs[ix].sql.clone();
                     if stream {
-                        query_service::execute_stream(cx, &sql)
+                        let (task, token) = query_service::execute_stream_cancellable(cx, &sql);
+                        this.stream_cancel = Some(token);
+                        task
                     } else if bound {
                         let bindings = bindings.clone();
                         query_service::execute_with_options(
@@ -437,6 +442,7 @@ impl ConsolePanel {
 
             this.update_in(cx, |this, window, cx| {
                 this.running = None;
+                this.stream_cancel = None;
                 this.finish_run(failed, window, cx);
             })
             .ok();
@@ -576,6 +582,11 @@ impl ConsolePanel {
 
     fn cancel(&mut self, cx: &mut Context<Self>) {
         if self.running.take().is_some() {
+            // Abort the in-flight streaming HTTP request instead of relying on
+            // the task-drop abandon semantics.
+            if let Some(token) = self.stream_cancel.take() {
+                token.cancel();
+            }
             for tab in &mut self.tabs {
                 if tab.status == TabStatus::Running || tab.status == TabStatus::Pending {
                     tab.status = TabStatus::Pending;

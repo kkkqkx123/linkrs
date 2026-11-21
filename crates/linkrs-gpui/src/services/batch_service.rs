@@ -14,11 +14,8 @@ pub fn create(
 ) -> Task<Result<String, ClientError>> {
     let manager = SessionStore::manager(cx);
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard
-            .client()
-            .create_batch(space_id, batch_type, batch_size)
-            .await
+        let client = manager.lock().await.client_clone();
+        client.create_batch(space_id, batch_type, batch_size).await
     })
 }
 
@@ -31,8 +28,8 @@ pub fn add_items(
     let manager = SessionStore::manager(cx);
     let batch_id = batch_id.to_string();
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard.client().add_batch_items(&batch_id, items).await
+        let client = manager.lock().await.client_clone();
+        client.add_batch_items(&batch_id, items).await
     })
 }
 
@@ -41,8 +38,8 @@ pub fn execute(cx: &App, batch_id: &str) -> Task<Result<ExecuteBatchResponse, Cl
     let manager = SessionStore::manager(cx);
     let batch_id = batch_id.to_string();
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard.client().execute_batch(&batch_id).await
+        let client = manager.lock().await.client_clone();
+        client.execute_batch(&batch_id).await
     })
 }
 
@@ -51,8 +48,8 @@ pub fn status(cx: &App, batch_id: &str) -> Task<Result<BatchStatusResponse, Clie
     let manager = SessionStore::manager(cx);
     let batch_id = batch_id.to_string();
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard.client().get_batch_status(&batch_id).await
+        let client = manager.lock().await.client_clone();
+        client.get_batch_status(&batch_id).await
     })
 }
 
@@ -61,8 +58,8 @@ pub fn cancel(cx: &App, batch_id: &str) -> Task<Result<(), ClientError>> {
     let manager = SessionStore::manager(cx);
     let batch_id = batch_id.to_string();
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard.client().cancel_batch(&batch_id).await
+        let client = manager.lock().await.client_clone();
+        client.cancel_batch(&batch_id).await
     })
 }
 
@@ -71,7 +68,7 @@ pub fn delete(cx: &App, batch_id: &str) -> Task<Result<(), ClientError>> {
     let manager = SessionStore::manager(cx);
     let batch_id = batch_id.to_string();
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard.client().delete_batch(&batch_id).await
+        let client = manager.lock().await.client_clone();
+        client.delete_batch(&batch_id).await
     })
 }

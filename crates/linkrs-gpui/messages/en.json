@@ -458,6 +458,7 @@
   "status.connecting": "Connecting…",
   "status.disconnected": "Not connected",
   "status.notSignedIn": "Not signed in",
+  "status.reconnectedNotice": "Session restored. Any uncommitted transactions from the old session are no longer valid; please review and re-run them if needed.",
   "status.signOut": "Sign out",
   "status.spaceHint": "Open the schema panel to switch spaces",
   "status.themeDark": "Dark",

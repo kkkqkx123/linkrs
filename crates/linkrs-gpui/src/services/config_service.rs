@@ -8,8 +8,8 @@ use crate::runtime;
 pub fn get(cx: &App) -> Task<Result<serde_json::Value, ClientError>> {
     let manager = SessionStore::manager(cx);
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard.client().get_config().await
+        let client = manager.lock().await.client_clone();
+        client.get_config().await
     })
 }
 
@@ -19,8 +19,8 @@ pub fn get_key(cx: &App, section: &str, key: &str) -> Task<Result<serde_json::Va
     let section = section.to_string();
     let key = key.to_string();
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard.client().get_config_key(&section, &key).await
+        let client = manager.lock().await.client_clone();
+        client.get_config_key(&section, &key).await
     })
 }
 
@@ -35,8 +35,8 @@ pub fn update(
     let section = section.to_string();
     let key = key.to_string();
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard.client().update_config(&section, &key, value).await
+        let client = manager.lock().await.client_clone();
+        client.update_config(&section, &key, value).await
     })
 }
 
@@ -46,7 +46,7 @@ pub fn reset(cx: &App, section: &str, key: &str) -> Task<Result<serde_json::Valu
     let section = section.to_string();
     let key = key.to_string();
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard.client().reset_config(&section, &key).await
+        let client = manager.lock().await.client_clone();
+        client.reset_config(&section, &key).await
     })
 }

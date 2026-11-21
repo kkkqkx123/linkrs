@@ -8,8 +8,8 @@ use crate::runtime;
 pub fn overview(cx: &App) -> Task<Result<serde_json::Value, ClientError>> {
     let manager = SessionStore::manager(cx);
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard.client().get_overview().await
+        let client = manager.lock().await.client_clone();
+        client.get_overview().await
     })
 }
 
@@ -17,8 +17,8 @@ pub fn overview(cx: &App) -> Task<Result<serde_json::Value, ClientError>> {
 pub fn system(cx: &App) -> Task<Result<serde_json::Value, ClientError>> {
     let manager = SessionStore::manager(cx);
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard.client().get_system_statistics().await
+        let client = manager.lock().await.client_clone();
+        client.get_system_statistics().await
     })
 }
 
@@ -26,9 +26,8 @@ pub fn system(cx: &App) -> Task<Result<serde_json::Value, ClientError>> {
 pub fn query_stats(cx: &App) -> Task<Result<serde_json::Value, ClientError>> {
     let manager = SessionStore::manager(cx);
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard
-            .client()
+        let client = manager.lock().await.client_clone();
+        client
             .get_query_statistics()
             .await
             .map(|stats| serde_json::to_value(&stats).unwrap_or(serde_json::Value::Null))
@@ -39,9 +38,8 @@ pub fn query_stats(cx: &App) -> Task<Result<serde_json::Value, ClientError>> {
 pub fn database(cx: &App) -> Task<Result<serde_json::Value, ClientError>> {
     let manager = SessionStore::manager(cx);
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard
-            .client()
+        let client = manager.lock().await.client_clone();
+        client
             .get_database_statistics()
             .await
             .map(|stats| serde_json::to_value(&stats).unwrap_or(serde_json::Value::Null))

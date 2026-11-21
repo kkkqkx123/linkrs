@@ -18,8 +18,8 @@ pub fn info(cx: &App, name: &str) -> Task<Result<serde_json::Value, ClientError>
     let manager = SessionStore::manager(cx);
     let name = name.to_string();
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard.client().get_function_info(&name).await
+        let client = manager.lock().await.client_clone();
+        client.get_function_info(&name).await
     })
 }
 
@@ -33,11 +33,8 @@ pub fn register(
     let name = name.to_string();
     let implementation = implementation.to_string();
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard
-            .client()
-            .register_function(&name, &implementation)
-            .await
+        let client = manager.lock().await.client_clone();
+        client.register_function(&name, &implementation).await
     })
 }
 
@@ -46,7 +43,7 @@ pub fn unregister(cx: &App, name: &str) -> Task<Result<(), ClientError>> {
     let manager = SessionStore::manager(cx);
     let name = name.to_string();
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard.client().unregister_function(&name).await
+        let client = manager.lock().await.client_clone();
+        client.unregister_function(&name).await
     })
 }

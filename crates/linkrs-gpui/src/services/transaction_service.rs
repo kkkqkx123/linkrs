@@ -12,8 +12,8 @@ pub fn begin(
 ) -> Task<Result<TransactionResponse, ClientError>> {
     let manager = SessionStore::manager(cx);
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard.client().begin_transaction(options).await
+        let client = manager.lock().await.client_clone();
+        client.begin_transaction(options).await
     })
 }
 
@@ -21,8 +21,8 @@ pub fn begin(
 pub fn commit(cx: &App, txn_id: u64) -> Task<Result<(), ClientError>> {
     let manager = SessionStore::manager(cx);
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard.client().commit_transaction(txn_id).await
+        let client = manager.lock().await.client_clone();
+        client.commit_transaction(txn_id).await
     })
 }
 
@@ -30,8 +30,8 @@ pub fn commit(cx: &App, txn_id: u64) -> Task<Result<(), ClientError>> {
 pub fn rollback(cx: &App, txn_id: u64) -> Task<Result<(), ClientError>> {
     let manager = SessionStore::manager(cx);
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard.client().rollback_transaction(txn_id).await
+        let client = manager.lock().await.client_clone();
+        client.rollback_transaction(txn_id).await
     })
 }
 
@@ -39,8 +39,8 @@ pub fn rollback(cx: &App, txn_id: u64) -> Task<Result<(), ClientError>> {
 pub fn list(cx: &App) -> Task<Result<Vec<serde_json::Value>, ClientError>> {
     let manager = SessionStore::manager(cx);
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard.client().list_transactions().await
+        let client = manager.lock().await.client_clone();
+        client.list_transactions().await
     })
 }
 
@@ -48,8 +48,8 @@ pub fn list(cx: &App) -> Task<Result<Vec<serde_json::Value>, ClientError>> {
 pub fn kill(cx: &App, txn_id: u64) -> Task<Result<serde_json::Value, ClientError>> {
     let manager = SessionStore::manager(cx);
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard.client().kill_transaction(txn_id).await
+        let client = manager.lock().await.client_clone();
+        client.kill_transaction(txn_id).await
     })
 }
 
@@ -57,8 +57,8 @@ pub fn kill(cx: &App, txn_id: u64) -> Task<Result<serde_json::Value, ClientError
 pub fn metrics(cx: &App) -> Task<Result<serde_json::Value, ClientError>> {
     let manager = SessionStore::manager(cx);
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard.client().transaction_metrics().await
+        let client = manager.lock().await.client_clone();
+        client.transaction_metrics().await
     })
 }
 
@@ -66,8 +66,8 @@ pub fn metrics(cx: &App) -> Task<Result<serde_json::Value, ClientError>> {
 pub fn retry_outbox(cx: &App, txn_id: u64) -> Task<Result<serde_json::Value, ClientError>> {
     let manager = SessionStore::manager(cx);
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard.client().retry_transaction_outbox(txn_id).await
+        let client = manager.lock().await.client_clone();
+        client.retry_transaction_outbox(txn_id).await
     })
 }
 
@@ -79,8 +79,8 @@ pub fn create_savepoint(
 ) -> Task<Result<SavepointResponse, ClientError>> {
     let manager = SessionStore::manager(cx);
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard.client().create_savepoint(txn_id, name).await
+        let client = manager.lock().await.client_clone();
+        client.create_savepoint(txn_id, name).await
     })
 }
 
@@ -88,8 +88,8 @@ pub fn create_savepoint(
 pub fn list_savepoints(cx: &App, txn_id: u64) -> Task<Result<Vec<serde_json::Value>, ClientError>> {
     let manager = SessionStore::manager(cx);
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard.client().list_savepoints(txn_id).await
+        let client = manager.lock().await.client_clone();
+        client.list_savepoints(txn_id).await
     })
 }
 
@@ -101,11 +101,8 @@ pub fn rollback_to_savepoint(
 ) -> Task<Result<serde_json::Value, ClientError>> {
     let manager = SessionStore::manager(cx);
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard
-            .client()
-            .rollback_to_savepoint(txn_id, savepoint_id)
-            .await
+        let client = manager.lock().await.client_clone();
+        client.rollback_to_savepoint(txn_id, savepoint_id).await
     })
 }
 
@@ -117,7 +114,7 @@ pub fn release_savepoint(
 ) -> Task<Result<serde_json::Value, ClientError>> {
     let manager = SessionStore::manager(cx);
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard.client().release_savepoint(txn_id, savepoint_id).await
+        let client = manager.lock().await.client_clone();
+        client.release_savepoint(txn_id, savepoint_id).await
     })
 }

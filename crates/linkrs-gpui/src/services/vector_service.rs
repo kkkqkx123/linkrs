@@ -16,9 +16,8 @@ pub fn create_index(
     let tag_name = tag_name.to_string();
     let field_name = field_name.to_string();
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard
-            .client()
+        let client = manager.lock().await.client_clone();
+        client
             .create_vector_index(space_id, &tag_name, &field_name, vector_size)
             .await
     })
@@ -28,8 +27,8 @@ pub fn create_index(
 pub fn list_indexes(cx: &App) -> Task<Result<serde_json::Value, ClientError>> {
     let manager = SessionStore::manager(cx);
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard.client().list_vector_indexes().await
+        let client = manager.lock().await.client_clone();
+        client.list_vector_indexes().await
     })
 }
 
@@ -44,9 +43,8 @@ pub fn index_info(
     let tag_name = tag_name.to_string();
     let field_name = field_name.to_string();
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard
-            .client()
+        let client = manager.lock().await.client_clone();
+        client
             .get_vector_index_info(space_id, &tag_name, &field_name)
             .await
     })
@@ -63,9 +61,8 @@ pub fn drop_index(
     let tag_name = tag_name.to_string();
     let field_name = field_name.to_string();
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard
-            .client()
+        let client = manager.lock().await.client_clone();
+        client
             .drop_vector_index(space_id, &tag_name, &field_name)
             .await
     })
@@ -84,9 +81,8 @@ pub fn search(
     let tag_name = tag_name.to_string();
     let field_name = field_name.to_string();
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard
-            .client()
+        let client = manager.lock().await.client_clone();
+        client
             .vector_search(space_id, &tag_name, &field_name, &query_vector, limit)
             .await
     })
@@ -103,11 +99,8 @@ pub fn count(
     let tag_name = tag_name.to_string();
     let field_name = field_name.to_string();
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard
-            .client()
-            .vector_count(space_id, &tag_name, &field_name)
-            .await
+        let client = manager.lock().await.client_clone();
+        client.vector_count(space_id, &tag_name, &field_name).await
     })
 }
 
@@ -122,9 +115,8 @@ pub fn rebuild(
     let tag_name = tag_name.to_string();
     let field_name = field_name.to_string();
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard
-            .client()
+        let client = manager.lock().await.client_clone();
+        client
             .rebuild_vector_index(space_id, &tag_name, &field_name)
             .await
     })
@@ -135,8 +127,8 @@ pub fn rebuild_status(cx: &App, rebuild_id: &str) -> Task<Result<serde_json::Val
     let manager = SessionStore::manager(cx);
     let rebuild_id = rebuild_id.to_string();
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard.client().vector_rebuild_status(&rebuild_id).await
+        let client = manager.lock().await.client_clone();
+        client.vector_rebuild_status(&rebuild_id).await
     })
 }
 
@@ -152,9 +144,8 @@ pub fn clear(
     let tag_name = tag_name.to_string();
     let field_name = field_name.to_string();
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard
-            .client()
+        let client = manager.lock().await.client_clone();
+        client
             .clear_vector_index(space_id, &tag_name, &field_name, force)
             .await
     })
@@ -173,9 +164,8 @@ pub fn get_point(
     let field_name = field_name.to_string();
     let point_id = point_id.to_string();
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard
-            .client()
+        let client = manager.lock().await.client_clone();
+        client
             .get_vector_point(space_id, &tag_name, &field_name, &point_id)
             .await
     })
@@ -194,9 +184,8 @@ pub fn set_payload(
     let tag_name = tag_name.to_string();
     let field_name = field_name.to_string();
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard
-            .client()
+        let client = manager.lock().await.client_clone();
+        client
             .set_vector_payload(space_id, &tag_name, &field_name, &point_ids, payload)
             .await
     })
@@ -215,9 +204,8 @@ pub fn merge_payload_fields(
     let tag_name = tag_name.to_string();
     let field_name = field_name.to_string();
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard
-            .client()
+        let client = manager.lock().await.client_clone();
+        client
             .merge_vector_payload_fields(space_id, &tag_name, &field_name, &point_ids, payload)
             .await
     })
@@ -236,9 +224,8 @@ pub fn delete_payload(
     let tag_name = tag_name.to_string();
     let field_name = field_name.to_string();
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard
-            .client()
+        let client = manager.lock().await.client_clone();
+        client
             .delete_vector_payload(space_id, &tag_name, &field_name, &point_ids, &keys)
             .await
     })
@@ -258,9 +245,8 @@ pub fn scroll(
     let field_name = field_name.to_string();
     let offset = offset.map(str::to_string);
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard
-            .client()
+        let client = manager.lock().await.client_clone();
+        client
             .scroll_vectors(space_id, &tag_name, &field_name, limit, offset.as_deref())
             .await
     })

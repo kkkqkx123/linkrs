@@ -1,4 +1,6 @@
-use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _, TitleBar};
+use gpui_kit::component::{
+    h_flex, notification::Notification, v_flex, ActiveTheme as _, TitleBar, WindowExt as _,
+};
 use gpui_kit::{
     div, AppContext as _, Context, Entity, FontWeight, IntoElement, ParentElement as _, Render,
     SharedString, Styled as _, Window,
@@ -18,6 +20,8 @@ pub struct Shell {
     /// Last console result import generation already switched to; tracks
     /// the global drop box so a send from the console opens the graph.
     last_graph_generation: u64,
+    /// Last one-shot notice generation surfaced as a toast.
+    last_notice_generation: u64,
 }
 
 impl Shell {
@@ -31,15 +35,21 @@ impl Shell {
             login,
             main: None,
             last_graph_generation: 0,
+            last_notice_generation: 0,
         };
         shell.sync(window, cx);
         shell
     }
 
     fn sync(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let (status, generation) = {
+        let (status, generation, notice_generation, notice) = {
             let state = AppState::global(cx).read(cx);
-            (state.status, state.graph_generation)
+            (
+                state.status,
+                state.graph_generation,
+                state.notice_generation,
+                state.notice.clone(),
+            )
         };
         match status {
             ConnectionStatus::Connected | ConnectionStatus::Unhealthy => {
@@ -55,6 +65,12 @@ impl Shell {
             self.last_graph_generation = generation;
             if let Some(main) = self.main.clone() {
                 main.update(cx, |main, cx| main.activate_graph(window, cx));
+            }
+        }
+        if notice_generation != self.last_notice_generation {
+            self.last_notice_generation = notice_generation;
+            if let Some(message) = notice {
+                window.push_notification(Notification::info(message), cx);
             }
         }
         cx.notify();

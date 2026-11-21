@@ -141,8 +141,8 @@ impl SessionManager {
         self.config.username = username.to_string();
         self.config.password = password.to_string();
 
-        // Re-create client with new credentials
-        self.client = HttpClient::with_config(self.config.clone())?;
+        // Reconfigure in place so handed-out client clones share this session.
+        self.client.reconfigure(self.config.clone())?;
 
         let session_info = self.client.connect().await?;
 
@@ -284,6 +284,11 @@ impl SessionManager {
     /// Get client reference
     pub fn client(&self) -> &HttpClient {
         &self.client
+    }
+
+    /// Get a clone of the request handle sharing this manager's session state.
+    pub fn client_clone(&self) -> HttpClient {
+        self.client.client_clone()
     }
 
     /// Current space or [`ClientError::NoSpaceSelected`] when none is set.

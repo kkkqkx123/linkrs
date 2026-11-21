@@ -18,9 +18,8 @@ pub fn search(
     let field_name = field_name.to_string();
     let query = query.to_string();
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard
-            .client()
+        let client = manager.lock().await.client_clone();
+        client
             .fulltext_search(space_id, &tag_name, &field_name, &query, limit)
             .await
     })
@@ -30,8 +29,8 @@ pub fn search(
 pub fn list_indexes(cx: &App) -> Task<Result<serde_json::Value, ClientError>> {
     let manager = SessionStore::manager(cx);
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard.client().list_fulltext_indexes().await
+        let client = manager.lock().await.client_clone();
+        client.list_fulltext_indexes().await
     })
 }
 
@@ -39,8 +38,8 @@ pub fn list_indexes(cx: &App) -> Task<Result<serde_json::Value, ClientError>> {
 pub fn list_inconsistent(cx: &App) -> Task<Result<serde_json::Value, ClientError>> {
     let manager = SessionStore::manager(cx);
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard.client().list_inconsistent_fulltext_indexes().await
+        let client = manager.lock().await.client_clone();
+        client.list_inconsistent_fulltext_indexes().await
     })
 }
 
@@ -55,9 +54,8 @@ pub fn rebuild(
     let tag_name = tag_name.to_string();
     let field_name = field_name.to_string();
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard
-            .client()
+        let client = manager.lock().await.client_clone();
+        client
             .rebuild_fulltext_index(space_id, &tag_name, &field_name)
             .await
     })
@@ -68,8 +66,8 @@ pub fn rebuild_status(cx: &App, rebuild_id: &str) -> Task<Result<serde_json::Val
     let manager = SessionStore::manager(cx);
     let rebuild_id = rebuild_id.to_string();
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard.client().fulltext_rebuild_status(&rebuild_id).await
+        let client = manager.lock().await.client_clone();
+        client.fulltext_rebuild_status(&rebuild_id).await
     })
 }
 
@@ -85,9 +83,8 @@ pub fn clear(
     let tag_name = tag_name.to_string();
     let field_name = field_name.to_string();
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard
-            .client()
+        let client = manager.lock().await.client_clone();
+        client
             .clear_fulltext_index(space_id, &tag_name, &field_name, force)
             .await
     })

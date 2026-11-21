@@ -31,9 +31,8 @@ pub fn import_file(
     let file_name = request.file_name;
     let file_bytes = request.file_bytes;
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard
-            .client()
+        let client = manager.lock().await.client_clone();
+        client
             .server_import_file(
                 &space,
                 &format,
@@ -52,8 +51,8 @@ pub fn import_status(cx: &App, job_id: &str) -> Task<Result<serde_json::Value, C
     let manager = SessionStore::manager(cx);
     let job_id = job_id.to_string();
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard.client().import_status(&job_id).await
+        let client = manager.lock().await.client_clone();
+        client.import_status(&job_id).await
     })
 }
 
@@ -69,10 +68,9 @@ pub fn export_bytes(
     let format = format.to_string();
     let session_id = AppState::global(cx).read(cx).session_id;
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
+        let client = manager.lock().await.client_clone();
         let id = session_id.ok_or(ClientError::NotConnected)?;
-        guard
-            .client()
+        client
             .server_export_bytes(&query, id, &format, space.as_deref())
             .await
     })
@@ -92,10 +90,9 @@ pub fn export_to_file(
     let path = path.to_string();
     let session_id = AppState::global(cx).read(cx).session_id;
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
+        let client = manager.lock().await.client_clone();
         let id = session_id.ok_or(ClientError::NotConnected)?;
-        guard
-            .client()
+        client
             .server_export_to_file(&query, id, &format, space.as_deref(), &path)
             .await
     })

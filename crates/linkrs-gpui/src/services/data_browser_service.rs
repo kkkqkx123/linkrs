@@ -63,8 +63,8 @@ pub fn space_statistics(cx: &App, space: &str) -> Task<Result<serde_json::Value,
     let manager = SessionStore::manager(cx);
     let space = space.to_string();
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard.client().get_space_statistics(&space).await
+        let client = manager.lock().await.client_clone();
+        client.get_space_statistics(&space).await
     })
 }
 

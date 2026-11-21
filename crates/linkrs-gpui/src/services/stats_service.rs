@@ -11,9 +11,9 @@ pub fn session(cx: &App) -> Task<Result<SessionStatistics, ClientError>> {
     let manager = SessionStore::manager(cx);
     let session_id = AppState::global(cx).read(cx).session_id;
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
+        let client = manager.lock().await.client_clone();
         let id = session_id.ok_or(ClientError::NotConnected)?;
-        guard.client().get_session_statistics(id).await
+        client.get_session_statistics(id).await
     })
 }
 
@@ -21,8 +21,8 @@ pub fn session(cx: &App) -> Task<Result<SessionStatistics, ClientError>> {
 pub fn search(cx: &App) -> Task<Result<serde_json::Value, ClientError>> {
     let manager = SessionStore::manager(cx);
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard.client().get_search_statistics().await
+        let client = manager.lock().await.client_clone();
+        client.get_search_statistics().await
     })
 }
 
@@ -30,8 +30,8 @@ pub fn search(cx: &App) -> Task<Result<serde_json::Value, ClientError>> {
 pub fn freeze(cx: &App) -> Task<Result<serde_json::Value, ClientError>> {
     let manager = SessionStore::manager(cx);
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard.client().get_freeze_statistics().await
+        let client = manager.lock().await.client_clone();
+        client.get_freeze_statistics().await
     })
 }
 
@@ -39,8 +39,8 @@ pub fn freeze(cx: &App) -> Task<Result<serde_json::Value, ClientError>> {
 pub fn trigger_freeze(cx: &App) -> Task<Result<serde_json::Value, ClientError>> {
     let manager = SessionStore::manager(cx);
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard.client().trigger_freeze().await
+        let client = manager.lock().await.client_clone();
+        client.trigger_freeze().await
     })
 }
 
@@ -48,7 +48,7 @@ pub fn trigger_freeze(cx: &App) -> Task<Result<serde_json::Value, ClientError>> 
 pub fn migration(cx: &App) -> Task<Result<serde_json::Value, ClientError>> {
     let manager = SessionStore::manager(cx);
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard.client().get_migration_statistics().await
+        let client = manager.lock().await.client_clone();
+        client.get_migration_statistics().await
     })
 }

@@ -458,6 +458,7 @@
   "status.connecting": "连接中…",
   "status.disconnected": "未连接",
   "status.notSignedIn": "未登录",
+  "status.reconnectedNotice": "会话已恢复。旧会话中的未提交事务已失效，请检查并按需重新执行。",
   "status.signOut": "退出登录",
   "status.spaceHint": "打开模式面板切换空间",
   "status.themeDark": "深色",

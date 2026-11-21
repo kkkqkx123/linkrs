@@ -9,8 +9,8 @@ use crate::runtime;
 pub fn list(cx: &App) -> Task<Result<UserListResponse, ClientError>> {
     let manager = SessionStore::manager(cx);
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard.client().list_users().await
+        let client = manager.lock().await.client_clone();
+        client.list_users().await
     })
 }
 
@@ -20,8 +20,8 @@ pub fn create(cx: &App, username: &str, password: &str) -> Task<Result<(), Clien
     let username = username.to_string();
     let password = password.to_string();
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard.client().create_user(&username, &password).await
+        let client = manager.lock().await.client_clone();
+        client.create_user(&username, &password).await
     })
 }
 
@@ -30,8 +30,8 @@ pub fn drop(cx: &App, name: &str) -> Task<Result<(), ClientError>> {
     let manager = SessionStore::manager(cx);
     let name = name.to_string();
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard.client().drop_user(&name).await
+        let client = manager.lock().await.client_clone();
+        client.drop_user(&name).await
     })
 }
 
@@ -41,11 +41,8 @@ pub fn reset_password(cx: &App, name: &str, new_password: &str) -> Task<Result<(
     let name = name.to_string();
     let new_password = new_password.to_string();
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard
-            .client()
-            .reset_user_password(&name, &new_password)
-            .await
+        let client = manager.lock().await.client_clone();
+        client.reset_user_password(&name, &new_password).await
     })
 }
 
@@ -54,8 +51,8 @@ pub fn enable(cx: &App, name: &str) -> Task<Result<(), ClientError>> {
     let manager = SessionStore::manager(cx);
     let name = name.to_string();
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard.client().enable_user(&name).await
+        let client = manager.lock().await.client_clone();
+        client.enable_user(&name).await
     })
 }
 
@@ -64,8 +61,8 @@ pub fn disable(cx: &App, name: &str) -> Task<Result<(), ClientError>> {
     let manager = SessionStore::manager(cx);
     let name = name.to_string();
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard.client().disable_user(&name).await
+        let client = manager.lock().await.client_clone();
+        client.disable_user(&name).await
     })
 }
 
@@ -76,8 +73,8 @@ pub fn grant_role(cx: &App, name: &str, role: &str, space: &str) -> Task<Result<
     let role = role.to_string();
     let space = space.to_string();
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard.client().grant_user_role(&name, &role, &space).await
+        let client = manager.lock().await.client_clone();
+        client.grant_user_role(&name, &role, &space).await
     })
 }
 
@@ -114,7 +111,7 @@ pub fn revoke_role(cx: &App, name: &str, space: &str) -> Task<Result<(), ClientE
     let name = name.to_string();
     let space = space.to_string();
     runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        guard.client().revoke_user_role(&name, &space).await
+        let client = manager.lock().await.client_clone();
+        client.revoke_user_role(&name, &space).await
     })
 }

@@ -3,6 +3,7 @@
 //! All request/response bodies use the shared `linkrs-wire` DTOs, so the
 //! CLI never maintains a second copy of the HTTP contract.
 
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use linkrs_wire::batch::{
@@ -89,13 +90,27 @@ pub struct NeighborListData {
     pub neighbors: Vec<serde_json::Value>,
 }
 
-/// HTTP client for connecting to remote Linkrs server
-pub struct HttpClient {
-    inner: reqwest::Client,
-    base_url: String,
-    config: ClientConfig,
+/// Session fields that change over the lifetime of a connection. They live in
+/// shared storage so cloned request handles observe login/logout immediately.
+#[derive(Debug, Default)]
+struct SessionState {
     connected: bool,
     session_info: Option<SessionInfo>,
+}
+
+/// HTTP client for connecting to remote Linkrs server.
+///
+/// Clones share one session state, so request tasks can hold a cheap handle
+/// without serializing behind the session owner's lock.
+#[derive(Clone)]
+pub struct HttpClient {
+    inner: reqwest::Client,
+    /// Client for long-lived SSE responses: no total timeout so a slow stream
+    /// is not truncated mid-read; idle timeout still applies at the transport.
+    stream_inner: reqwest::Client,
+    base_url: String,
+    config: ClientConfig,
+    session: Arc<RwLock<SessionState>>,
 }
 
 impl HttpClient {
@@ -105,21 +120,48 @@ impl HttpClient {
         Self::with_config(config)
     }
 
+    /// Build the regular request client with a total timeout.
+    fn build_client(config: &ClientConfig) -> Result<reqwest::Client> {
+        reqwest::Client::builder()
+            .timeout(Duration::from_secs(config.timeout_seconds))
+            .build()
+            .map_err(|e| ClientError::connection(format!("Failed to create HTTP client: {}", e)))
+    }
+
+    /// Build a client for long-lived SSE streams. No total timeout is set, so a
+    /// slow stream is not cut off mid-read; a connect timeout still guards the
+    /// initial TCP/TLS handshake.
+    fn build_stream_client() -> Result<reqwest::Client> {
+        reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .build()
+            .map_err(|e| ClientError::connection(format!("Failed to create stream client: {}", e)))
+    }
+
     /// Create a new HTTP client with custom configuration
     pub fn with_config(config: ClientConfig) -> Result<Self> {
         let base_url = format!("http://{}:{}/v1", config.host, config.port);
-        let inner = reqwest::Client::builder()
-            .timeout(Duration::from_secs(config.timeout_seconds))
-            .build()
-            .map_err(|e| ClientError::connection(format!("Failed to create HTTP client: {}", e)))?;
+        let inner = Self::build_client(&config)?;
+        let stream_inner = Self::build_stream_client()?;
 
         Ok(Self {
             inner,
+            stream_inner,
             base_url,
             config,
-            connected: false,
-            session_info: None,
+            session: Arc::new(RwLock::new(SessionState::default())),
         })
+    }
+
+    /// Reconfigure the endpoint in place, preserving the shared session state
+    /// so previously handed-out clones keep observing login/logout changes.
+    pub fn reconfigure(&mut self, config: ClientConfig) -> Result<()> {
+        let base_url = format!("http://{}:{}/v1", config.host, config.port);
+        let inner = Self::build_client(&config)?;
+        self.base_url = base_url;
+        self.config = config;
+        self.inner = inner;
+        Ok(())
     }
 
     /// Get the base URL
@@ -134,7 +176,10 @@ impl HttpClient {
 
     /// Check if client is currently connected
     pub fn is_connected(&self) -> bool {
-        self.connected
+        self.session
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .connected
     }
 
     /// Get connection string
@@ -144,7 +189,17 @@ impl HttpClient {
 
     /// Active session identifier for authenticated requests.
     pub fn session_id(&self) -> Option<i64> {
-        self.session_info.as_ref().map(|s| s.session_id)
+        self.session
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .session_info
+            .as_ref()
+            .map(|s| s.session_id)
+    }
+
+    /// Clone of this request handle sharing the same session state.
+    pub fn client_clone(&self) -> HttpClient {
+        self.clone()
     }
 
     /// Attach the session header required by protected routes.
@@ -192,15 +247,25 @@ impl HttpClient {
             display_role: login.display_role,
         };
 
-        self.session_info = Some(session_info.clone());
-        self.connected = true;
+        {
+            let mut state = self.session.write().unwrap_or_else(|e| e.into_inner());
+            state.session_info = Some(session_info.clone());
+            state.connected = true;
+        }
 
         Ok(session_info)
     }
 
     /// Disconnect from the database
-    pub async fn disconnect(&mut self) -> Result<()> {
-        if let Some(ref session_info) = self.session_info {
+    pub async fn disconnect(&self) -> Result<()> {
+        // Take a snapshot before the await so no lock is held across network I/O.
+        let session_snapshot = self
+            .session
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .session_info
+            .clone();
+        if let Some(ref session_info) = session_snapshot {
             let url = format!("{}/auth/logout", self.base_url);
             let request = LogoutRequest {
                 session_id: session_info.session_id,
@@ -220,8 +285,11 @@ impl HttpClient {
             }
         }
 
-        self.connected = false;
-        self.session_info = None;
+        {
+            let mut state = self.session.write().unwrap_or_else(|e| e.into_inner());
+            state.connected = false;
+            state.session_info = None;
+        }
         Ok(())
     }
 
@@ -664,9 +732,7 @@ impl HttpClient {
         let url = format!("{}/transactions/{}/commit", self.base_url, txn_id);
 
         let session_id = self
-            .session_info
-            .as_ref()
-            .map(|s| s.session_id)
+            .session_id()
             .ok_or_else(|| ClientError::session("Not connected".to_string()))?;
 
         let request = TransactionActionRequest { session_id };
@@ -734,9 +800,7 @@ impl HttpClient {
         let url = format!("{}/transactions/{}/rollback", self.base_url, txn_id);
 
         let session_id = self
-            .session_info
-            .as_ref()
-            .map(|s| s.session_id)
+            .session_id()
             .ok_or_else(|| ClientError::session("Not connected".to_string()))?;
 
         let request = TransactionActionRequest { session_id };
@@ -1018,28 +1082,47 @@ impl HttpClient {
     ) -> Result<Vec<serde_json::Value>> {
         let url = format!("{}/migration/stream/{}/{}", self.base_url, space, label);
         let response = self
-            .authed(self.inner.get(&url))
+            .authed(self.stream_inner.get(&url))
             .header("Accept", "text/event-stream")
             .query(&[("is_edge", is_edge.to_string())])
             .send()
             .await?;
         let response = Self::check_response(response, "Migration progress stream failed").await?;
-        let text = response.text().await?;
+        use futures::StreamExt;
+        let mut byte_stream = response.bytes_stream();
         let mut events = Vec::new();
-        for line in text.lines() {
-            let line = line.trim();
-            let Some(payload) = line.strip_prefix("data:") else {
-                continue;
-            };
-            let payload = payload.trim();
-            if payload.is_empty() || payload == "[DONE]" {
-                continue;
-            }
-            if let Ok(value) = serde_json::from_str(payload) {
-                events.push(value);
+        let mut line_buffer = String::new();
+        while let Some(chunk) = byte_stream.next().await {
+            let chunk = chunk?;
+            let text = String::from_utf8_lossy(&chunk);
+            for ch in text.chars() {
+                if ch == '\n' {
+                    Self::collect_migration_line(&line_buffer, &mut events);
+                    line_buffer.clear();
+                } else {
+                    line_buffer.push(ch);
+                }
             }
         }
+        if !line_buffer.is_empty() {
+            Self::collect_migration_line(&line_buffer, &mut events);
+        }
         Ok(events)
+    }
+
+    /// Parse one SSE line of a migration stream into the collected payloads.
+    fn collect_migration_line(line: &str, events: &mut Vec<serde_json::Value>) {
+        let line = line.trim();
+        let Some(payload) = line.strip_prefix("data:") else {
+            return;
+        };
+        let payload = payload.trim();
+        if payload.is_empty() || payload == "[DONE]" {
+            return;
+        }
+        if let Ok(value) = serde_json::from_str(payload) {
+            events.push(value);
+        }
     }
 
     // ── Statistics ──
@@ -1193,7 +1276,7 @@ impl HttpClient {
         };
 
         let response = self
-            .authed(self.inner.post(&url))
+            .authed(self.stream_inner.post(&url))
             .header("Accept", "text/event-stream")
             .json(&request)
             .send()
@@ -1201,10 +1284,27 @@ impl HttpClient {
 
         let response = Self::check_response(response, "Stream query failed").await?;
 
-        let text = response.text().await?;
+        // Read the body incrementally so the whole SSE text is never buffered
+        // at once and the stream client's lack of a total timeout can take
+        // effect on long-running queries.
+        use futures::StreamExt;
+        let mut byte_stream = response.bytes_stream();
         let mut parser = crate::sse::SseParser::new();
-        for line in text.lines() {
-            parser.feed_line(line);
+        let mut line_buffer = String::new();
+        while let Some(chunk) = byte_stream.next().await {
+            let chunk = chunk?;
+            let text = String::from_utf8_lossy(&chunk);
+            for ch in text.chars() {
+                if ch == '\n' {
+                    parser.feed_line(line_buffer.trim_end_matches('\r'));
+                    line_buffer.clear();
+                } else {
+                    line_buffer.push(ch);
+                }
+            }
+        }
+        if !line_buffer.is_empty() {
+            parser.feed_line(line_buffer.trim_end_matches('\r'));
         }
         parser.finish()
     }
