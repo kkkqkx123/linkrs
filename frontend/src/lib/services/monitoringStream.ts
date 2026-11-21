@@ -15,7 +15,7 @@ import { scenarioWantsError } from '$lib/mock/scenario';
 import type { OverviewResponse } from '$services/statistics';
 import { getApiBaseUrl, getSessionHeaders } from '$utils/http';
 import { parseJsonTolerant } from '$utils/sseParser';
-import { SseFrameReader } from '$utils/sseFrames';
+import { SseFrameReader, type SseFrame } from '$utils/sseFrames';
 
 export type MonitoringStreamStatus =
 	| 'off'
@@ -81,12 +81,8 @@ async function streamRealSnapshots(
 		const decoder = new TextDecoder();
 		const frameReader = new SseFrameReader();
 		onStatus?.('live');
-		for (;;) {
-			const { done, value } = await reader.read();
-			if (done) {
-				return { cancelled: false, snapshots, streamError: null };
-			}
-			for (const frame of frameReader.feed(decoder.decode(value, { stream: true }))) {
+		const consumeFrames = (frames: SseFrame[]) => {
+			for (const frame of frames) {
 				if (frame.event === 'snapshot') {
 					const parsed = parseJsonTolerant(frame.data);
 					if (parsed && typeof parsed === 'object') {
@@ -104,7 +100,14 @@ async function streamRealSnapshots(
 					);
 				}
 			}
+		};
+		for (;;) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			consumeFrames(frameReader.feed(decoder.decode(value, { stream: true })));
 		}
+		consumeFrames(frameReader.flush());
+		return { cancelled: false, snapshots, streamError: null };
 	} catch (error) {
 		if (error instanceof DOMException && error.name === 'AbortError') {
 			return { cancelled: true, snapshots, streamError: null };

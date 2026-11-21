@@ -19,6 +19,8 @@ import JSONBigint from 'json-bigint';
 import type { paths } from './schema';
 import { API_BASE_URL } from '$app/env/public';
 import { STORAGE_KEYS } from '$config/constants';
+import { storage } from '$utils/storage';
+import { clearSessionId } from '$utils/http';
 
 export const BASE_URL = API_BASE_URL;
 
@@ -31,11 +33,7 @@ const JSONBig = JSONBigint({ storeAsString: true });
 const SESSION_DEAD_CODES = new Set(['unauthenticated', 'account_locked']);
 
 function handleUnauthorized() {
-	try {
-		localStorage.removeItem(STORAGE_KEYS.SESSION_ID);
-	} catch {
-		/* storage unavailable */
-	}
+	clearSessionId();
 	if (page.url.pathname !== '/login') void goto('/login');
 }
 
@@ -45,7 +43,6 @@ async function bigintFetch(
 	init?: RequestInit,
 ): Promise<Response> {
 	const response = await fetch(input, init);
-	if (response.status === 401) handleUnauthorized();
 	const contentType = response.headers.get('content-type') ?? '';
 	if (!contentType.includes('application/json')) return response;
 	const text = await response.text();
@@ -160,7 +157,7 @@ const networkClient = createClient<paths>({
 networkClient.use({
 	async onRequest({ request }) {
 		try {
-			const sessionId = localStorage.getItem(STORAGE_KEYS.SESSION_ID);
+			const sessionId = storage.get<string>(STORAGE_KEYS.SESSION_ID);
 			if (sessionId) request.headers.set('X-Session-ID', sessionId);
 		} catch {
 			/* storage unavailable */

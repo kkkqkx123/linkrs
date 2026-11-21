@@ -85,6 +85,7 @@ function placeCardRow(
 
 let streamController: AbortController | null = null;
 let streamGeneration = 0;
+const ROW_FLUSH_MS = 50;
 
 export function createStreamStore() {
 	const { subscribe, update } = writable<StreamState>(idleStream());
@@ -145,6 +146,42 @@ export function createStreamStore() {
 				}
 			: { query: cardQueries[0] };
 
+		// Coalesce row callbacks into one store update per frame. A single
+		// query can emit thousands of rows; updating (and cloning) the whole
+		// cards array per row is quadratic. Rows are staged by statement index
+		// and committed in place, preserving placeCardRow's dedup semantics.
+		let pendingRows: Array<{ row: Record<string, unknown>; index: number; stmt: number }> = [];
+		let flushTimer: ReturnType<typeof setTimeout> | null = null;
+		const flushRows = () => {
+			if (flushTimer !== null) {
+				clearTimeout(flushTimer);
+				flushTimer = null;
+			}
+			if (pendingRows.length === 0) return;
+			const batchRows = pendingRows;
+			pendingRows = [];
+			if (!isCurrent(generation)) return;
+			update((s) => {
+				const cards = s.cards.map((card) => {
+					const rows = batchRows.filter((r) => r.stmt === card.index);
+					if (rows.length === 0) return card;
+					const next: StreamCardState = {
+						...card,
+						rows: card.rows.slice(),
+						status: 'receiving',
+					};
+					for (const { row, index } of rows) placeCardRow(next, row, index);
+					return next;
+				});
+				return {
+					...s,
+					status: 'receiving',
+					cards,
+					firstRowAt: s.firstRowAt ?? Date.now(),
+				};
+			});
+		};
+
 		try {
 			const outcome = await streamQuery(
 				{ ...cardQuery, signal: controller.signal },
@@ -196,25 +233,10 @@ export function createStreamStore() {
 					},
 					onRow: (row, index, stmt) => {
 						if (!isCurrent(generation)) return;
-						const target = stmt;
-						update((s) => {
-							const cards = s.cards.map((card) => {
-								if (card.index !== target) return card;
-								const next: StreamCardState = {
-									...card,
-									rows: [...card.rows],
-									status: 'receiving' as StreamCardStatus,
-								};
-								placeCardRow(next, row, index);
-								return next;
-							});
-							return {
-								...s,
-								status: 'receiving',
-								cards,
-								firstRowAt: s.firstRowAt ?? Date.now(),
-							};
-						});
+						pendingRows.push({ row, index, stmt });
+						if (flushTimer === null) {
+							flushTimer = setTimeout(flushRows, ROW_FLUSH_MS);
+						}
 					},
 					onMetadata: (info) => {
 						if (!isCurrent(generation)) return;
@@ -253,6 +275,7 @@ export function createStreamStore() {
 				},
 			);
 
+			flushRows();
 			if (!isCurrent(generation)) return { cancelled: true, doneReceived: false, streamError: null, executionTimeMs: 0 };
 			if (streamController === controller) streamController = null;
 
@@ -282,6 +305,7 @@ export function createStreamStore() {
 			}));
 			return { cancelled: false, doneReceived: true, streamError: null, executionTimeMs: Date.now() - startedAt };
 		} catch (error) {
+			flushRows();
 			if (!isCurrent(generation)) return { cancelled: true, doneReceived: false, streamError: null, executionTimeMs: 0 };
 			if (streamController === controller) streamController = null;
 			if (controller.signal.aborted) {

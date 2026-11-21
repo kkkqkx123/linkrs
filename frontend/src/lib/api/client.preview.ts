@@ -17,7 +17,7 @@ import { t } from '$i18n';
 import type { Client } from 'openapi-fetch';
 import type { paths } from './schema';
 import { API_BASE_URL } from '$app/env/public';
-import { STORAGE_KEYS } from '$config/constants';
+import { clearSessionId } from '$utils/http';
 import {
 	MockFailure,
 	failureBody,
@@ -43,11 +43,7 @@ export const isMockMode = true;
 const SESSION_DEAD_CODES = new Set(['unauthenticated', 'account_locked']);
 
 function handleUnauthorized() {
-	try {
-		localStorage.removeItem(STORAGE_KEYS.SESSION_ID);
-	} catch {
-		/* storage unavailable */
-	}
+	clearSessionId();
 	if (page.url.pathname !== '/login') void goto('/login');
 }
 
@@ -145,7 +141,6 @@ function mockFailureResult(failure: MockFailure): {
 	error: unknown;
 	response: Response;
 } {
-	if (failure.status === 401) handleUnauthorized();
 	return {
 		error: failureBody(failure.code, failure.message),
 		response: new Response(

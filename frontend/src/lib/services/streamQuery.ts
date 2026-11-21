@@ -1,6 +1,6 @@
 import { goto } from '$app/navigation';
 import { page } from '$app/state';
-import { SseParser } from '$utils/sseParser';
+import { SseParser, type StreamEvent } from '$utils/sseParser';
 import {
 	getApiBaseUrl,
 	getSessionHeaders,
@@ -159,51 +159,53 @@ export async function streamQuery(
 	}
 	const reader = response.body.getReader();
 	const decoder = new TextDecoder();
+	const dispatch = (events: StreamEvent[]) => {
+		for (const event of events) {
+			if (event.kind === 'schema')
+				handlers.onSchema?.(event.columns, event.stmt);
+			else if (event.kind === 'row')
+				handlers.onRow?.(event.row, event.index, event.stmt);
+			else if (event.kind === 'metadata') {
+				outcome.rowsReturned = event.rowsReturned;
+				outcome.executionTimeMs = event.executionTimeMs;
+				handlers.onMetadata?.({
+					rowsReturned: event.rowsReturned,
+					executionTimeMs: event.executionTimeMs,
+					stmt: event.stmt,
+				});
+			} else if (event.kind === 'error') {
+				const message = event.message || t('errors.queryFailed');
+				outcome.streamError = { code: event.code, message };
+				handlers.onStreamError?.({
+					code: event.code,
+					message,
+					stmt: event.stmt,
+				});
+			} else if (event.kind === 'statement_begin') {
+				handlers.onStatementBegin?.({
+					index: event.index,
+					query: event.query,
+				});
+			} else if (event.kind === 'statement_end') {
+				handlers.onStatementEnd?.({
+					index: event.index,
+					success: event.success,
+					rowsReturned: event.rowsReturned,
+					executionTimeMs: event.executionTimeMs,
+					code: event.code,
+					message: event.message,
+				});
+			}
+		}
+	};
 	try {
 		for (;;) {
 			const { done, value } = await reader.read();
 			if (done) break;
-			const events = parser.feed(decoder.decode(value, { stream: true }));
-			for (const event of events) {
-				if (event.kind === 'schema')
-					handlers.onSchema?.(event.columns, event.stmt);
-				else if (event.kind === 'row')
-					handlers.onRow?.(event.row, event.index, event.stmt);
-				else if (event.kind === 'metadata') {
-					outcome.rowsReturned = event.rowsReturned;
-					outcome.executionTimeMs = event.executionTimeMs;
-					handlers.onMetadata?.({
-						rowsReturned: event.rowsReturned,
-						executionTimeMs: event.executionTimeMs,
-						stmt: event.stmt,
-					});
-				} else if (event.kind === 'error') {
-					const message = event.message || t('errors.queryFailed');
-					outcome.streamError = { code: event.code, message };
-					handlers.onStreamError?.({
-						code: event.code,
-						message,
-						stmt: event.stmt,
-					});
-				} else if (event.kind === 'statement_begin') {
-					handlers.onStatementBegin?.({
-						index: event.index,
-						query: event.query,
-					});
-				} else if (event.kind === 'statement_end') {
-					handlers.onStatementEnd?.({
-						index: event.index,
-						success: event.success,
-						rowsReturned: event.rowsReturned,
-						executionTimeMs: event.executionTimeMs,
-						code: event.code,
-						message: event.message,
-					});
-				}
-			}
+			dispatch(parser.feed(decoder.decode(value, { stream: true })));
 			if (parser.doneReceived) break;
 		}
-		parser.feed(decoder.decode());
+		dispatch(parser.feed(decoder.decode()));
 	} catch (error) {
 		if (isAbortError(error) || options.signal?.aborted) {
 			outcome.cancelled = true;

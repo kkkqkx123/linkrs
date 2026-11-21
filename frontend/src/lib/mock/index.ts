@@ -1,5 +1,5 @@
 /**
- * Mock request router, active when the app runs with `USE_MOCK` set.
+ * Mock request router, active in mock/preview mode (see vite.config.ts alias).
  *
  * Handlers are registered under `"<METHOD> <path-template>"` keys using the
  * exact OpenAPI path templates the services pass to the client (e.g.

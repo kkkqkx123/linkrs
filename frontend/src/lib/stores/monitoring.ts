@@ -134,17 +134,25 @@ function createMonitoringStore() {
 
 	let timer: ReturnType<typeof setInterval> | null = null;
 	let streamAbort: AbortController | null = null;
+	let retryTimer: ReturnType<typeof setTimeout> | null = null;
+	let retryDelayMs = 2_000;
+	const MAX_RETRY_DELAY_MS = 30_000;
 
 	/** One refresh pass; a failed pass keeps the last good payloads. */
 	async function refresh() {
-		const { paused, timeRange } = get({ subscribe });
+		const { paused, timeRange, streamStatus } = get({ subscribe });
 		if (paused) return;
+		// The live SSE stream already pushes overview (which embeds system and
+		// database). Skip those three while it is live to avoid duplicate
+		// requests; polling still covers the remaining panels and acts as the
+		// full fallback whenever the stream is unavailable.
+		const live = streamStatus === 'live';
 		const queryBounds = rangeQueryBounds(timeRange);
 		update((s) => ({ ...s, loading: true }));
 		const settled = await Promise.allSettled([
-			statisticsService.overview(),
-			statisticsService.system(),
-			statisticsService.database(),
+			live ? Promise.resolve(undefined) : statisticsService.overview(),
+			live ? Promise.resolve(undefined) : statisticsService.system(),
+			live ? Promise.resolve(undefined) : statisticsService.database(),
 			statisticsService.queries(
 				queryBounds ? { from: queryBounds.from, to: queryBounds.to } : undefined,
 			),
@@ -172,9 +180,12 @@ function createMonitoringStore() {
 			);
 		update((s) => {
 			const next = { ...s.snapshots };
-			if (overview.status === 'fulfilled') next.overview = overview.value;
-			if (system.status === 'fulfilled') next.system = system.value;
-			if (database.status === 'fulfilled') next.database = database.value;
+			if (overview.status === 'fulfilled' && overview.value !== undefined)
+				next.overview = overview.value;
+			if (system.status === 'fulfilled' && system.value !== undefined)
+				next.system = system.value;
+			if (database.status === 'fulfilled' && database.value !== undefined)
+				next.database = database.value;
 			if (queries.status === 'fulfilled') next.queries = queries.value;
 			if (search.status === 'fulfilled') next.search = search.value;
 			if (transaction.status === 'fulfilled')
@@ -238,14 +249,30 @@ function createMonitoringStore() {
 			onStatus: (status) =>
 				update((s) => ({ ...s, streamStatus: status })),
 		});
+		if (streamAbort !== controller) return;
 		streamAbort = null;
-		update((s) => ({
-			...s,
-			streamStatus: outcome.streamError ? 'unavailable' : 'stopped',
-		}));
+		if (outcome.cancelled) {
+			update((s) => ({ ...s, streamStatus: 'stopped' }));
+			return;
+		}
+		if (!outcome.streamError) {
+			retryDelayMs = 2_000;
+			update((s) => ({ ...s, streamStatus: 'stopped' }));
+			return;
+		}
+		update((s) => ({ ...s, streamStatus: 'unavailable' }));
+		retryTimer = setTimeout(() => {
+			retryTimer = null;
+			void startStreaming();
+		}, retryDelayMs);
+		retryDelayMs = Math.min(retryDelayMs * 2, MAX_RETRY_DELAY_MS);
 	}
 
 	function stopStreaming() {
+		if (retryTimer !== null) {
+			clearTimeout(retryTimer);
+			retryTimer = null;
+		}
 		streamAbort?.abort();
 	}
 

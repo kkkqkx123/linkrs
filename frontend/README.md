@@ -43,12 +43,13 @@ live-stream badge and its polling fallback). The first run needs
 
 `src/env.ts` declares the browser-visible variables:
 
-| Variable       | Default                 | Purpose                                        |
-| -------------- | ----------------------- | ---------------------------------------------- |
-| `API_BASE_URL` | `http://localhost:9758` | Backend base URL                               |
-| `USE_MOCK`     | `false`                 | Serve API requests from `src/lib/mock` instead |
+| Variable       | Default                 | Purpose          |
+| -------------- | ----------------------- | ---------------- |
+| `API_BASE_URL` | `http://localhost:9758` | Backend base URL |
 
-`.env` holds the defaults, `.env.mock` turns on the mock layer.
+`.env` holds the defaults. Mock/preview mode is selected at build time by
+`npm run dev:mock` / `npm run dev:preview` (Vite `mode` aliases the API client
+to `src/lib/api/client.preview.ts`); it is not a runtime flag.
 
 ## Mock layer
 

@@ -1,4 +1,4 @@
-import { BASE_URL } from '$lib/api/client';
+import { API_BASE_URL } from '$app/env/public';
 
 /**
  * Session helpers for API access.
@@ -12,7 +12,7 @@ import { STORAGE_KEYS } from '$config/constants';
 import { storage } from '$utils/storage';
 
 export function getApiBaseUrl(): string {
-	return BASE_URL;
+	return API_BASE_URL;
 }
 
 /** Session id persistence via the unified storage helpers. */
