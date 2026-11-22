@@ -582,11 +582,9 @@ impl Config {
     pub fn is_vector_enabled(&self) -> bool {
         #[cfg(feature = "vector")]
         {
-            match self.vector.engine {
-                VectorEngineKind::Local => self.vector.enabled,
-                #[cfg(feature = "vector-qdrant")]
-                VectorEngineKind::Qdrant => self.vector.enabled && self.vector.qdrant.enabled,
-            }
+            self.vector
+                .selection()
+                .is_ok_and(|selection| selection != VectorSelection::Off)
         }
         #[cfg(not(feature = "vector"))]
         {
@@ -597,7 +595,7 @@ impl Config {
     pub fn is_local_vector(&self) -> bool {
         #[cfg(feature = "vector")]
         {
-            self.vector.enabled && self.vector.engine == VectorEngineKind::Local
+            self.vector.selection() == Ok(VectorSelection::Local)
         }
         #[cfg(not(feature = "vector"))]
         {
@@ -608,7 +606,12 @@ impl Config {
     pub fn vector_engine(&self) -> Option<VectorEngineKind> {
         #[cfg(feature = "vector")]
         {
-            self.vector.enabled.then_some(self.vector.engine)
+            match self.vector.selection().ok()? {
+                VectorSelection::Off => None,
+                VectorSelection::Local => Some(VectorEngineKind::Local),
+                #[cfg(feature = "vector-qdrant")]
+                VectorSelection::Qdrant => Some(VectorEngineKind::Qdrant),
+            }
         }
         #[cfg(not(feature = "vector"))]
         {
@@ -1185,7 +1188,7 @@ upsert_timeout_secs = 30
 "#;
         let config: Config = toml::from_str(toml).expect("vector section should deserialize");
         assert!(config.is_vector_enabled());
-        assert_eq!(config.vector_engine(), Some(VectorEngineKind::Qdrant));
+        assert_eq!(config.vector.selection(), Ok(VectorSelection::Qdrant));
         assert_eq!(
             config.vector_data_dir(),
             std::path::PathBuf::from("data/linkrs/vector")
@@ -1470,12 +1473,14 @@ slow_query_threshold_ms = 500
     }
 
     /// The production example (Qdrant vector backend) must load and validate
-    /// as-is under the matching feature set.
+    /// under the matching feature set. The feature-gated embedding section is
+    /// included only when the `embedding` feature is compiled in.
     #[cfg(all(feature = "server", feature = "vector-qdrant"))]
     #[test]
     fn test_doc_prod_example_config_loads_and_validates() {
         let file = NamedTempFile::new().expect("temp config file");
-        let content = r#"
+        let mut content = String::from(
+            r#"
 [database]
 host = "0.0.0.0"
 port = 9758
@@ -1545,14 +1550,28 @@ use_tls = true
 request_timeout_secs = 30
 search_timeout_secs = 60
 upsert_timeout_secs = 30
+"#,
+        );
 
+        // The reference doc's production example carries a
+        // `[vector.qdrant.embedding]` section, but that field is gated behind
+        // the `embedding` feature while `QdrantConfig` denies unknown fields.
+        // Include the section only when the feature is compiled in, so the
+        // test validates the matching config surface under either feature set.
+        #[cfg(feature = "embedding")]
+        content.push_str(
+            r#"
 [vector.qdrant.embedding]
 base_url = "https://api.openai.com/v1/embeddings"
 api_key = "sk-xxx"
 model = "text-embedding-3-small"
 dimension = 1536
 timeout_secs = 60
+"#,
+        );
 
+        content.push_str(
+            r#"
 [fulltext]
 enabled = true
 index_path = "/var/lib/linkrs/fulltext"
@@ -1582,11 +1601,12 @@ threshold_ms = 1000
 log_file_path = "/var/log/linkrs/slow_query.log"
 max_file_size_mb = 500
 max_files = 10
-"#;
+"#,
+        );
         std::fs::write(file.path(), content).expect("write config");
         let config = Config::load(file.path()).expect("prod example must load");
         config.validate().expect("prod example must validate");
-        assert_eq!(config.vector_engine(), Some(VectorEngineKind::Qdrant));
+        assert_eq!(config.vector.selection(), Ok(VectorSelection::Qdrant));
         assert_eq!(config.common.monitoring.slow_query_log.max_files, 10);
     }
 }

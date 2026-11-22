@@ -259,6 +259,7 @@ impl QueryPlanCache {
             is_transaction,
             optimizer_version,
             planning_config_hash,
+            in_write_context,
         } = context;
         let query_bytes = query.len();
         let param_type_sig = Self::compute_param_type_signature(&param_positions);
@@ -271,6 +272,7 @@ impl QueryPlanCache {
                 param_type_signature: param_type_sig,
                 optimizer_version,
                 planning_config_hash,
+                in_write_context,
             },
         );
 
@@ -424,6 +426,7 @@ impl QueryPlanCache {
             is_transaction,
             optimizer_version,
             planning_config_hash,
+            in_write_context,
         } = context;
         let param_type_sig = Self::compute_param_type_signature(&param_positions);
         let key = PlanCacheKey::from_query_with_partition_and_context(
@@ -436,6 +439,7 @@ impl QueryPlanCache {
                 param_type_signature: param_type_sig,
                 optimizer_version,
                 planning_config_hash,
+                in_write_context,
             },
         );
         let priority = if self.config.priority_config.enable_priority {

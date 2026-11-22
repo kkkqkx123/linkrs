@@ -32,9 +32,11 @@ fn vector_manage_to_command(
         Show(n) => VectorManageCommand::Show {
             pattern: n.pattern.clone(),
             from_schema: n.from_schema.clone(),
+            space_id: n.space_id,
         },
         Describe(n) => VectorManageCommand::Describe {
             index_name: n.index_name.clone(),
+            space_id: n.space_id,
         },
     }
 }

@@ -76,6 +76,9 @@ pub struct PlanCachePutContext {
     pub is_transaction: bool,
     pub optimizer_version: u64,
     pub planning_config_hash: u64,
+    /// Mirrors `PlanCacheContext::in_write_context` so put and get derive the
+    /// same key when the statement runs where staged rows may be visible.
+    pub in_write_context: bool,
 }
 
 impl PlanCachePutContext {
@@ -97,6 +100,7 @@ impl PlanCachePutContext {
             is_transaction,
             optimizer_version: context.optimizer_version,
             planning_config_hash: context.planning_config_hash,
+            in_write_context: context.in_write_context,
         }
     }
 }
@@ -110,6 +114,12 @@ pub struct PlanCacheContext {
     pub param_type_signature: Option<u64>,
     pub optimizer_version: u64,
     pub planning_config_hash: u64,
+    /// Whether the statement runs where uncommitted staged rows may be
+    /// visible (an explicit write transaction, or autocommit group mode).
+    /// Such a context must not reuse a plan compiled for a plain read:
+    /// metadata-count plans read committed tables and would miss staged
+    /// rows. Keeping this in the key forces a fresh compile in that context.
+    pub in_write_context: bool,
 }
 
 /// Query Plan Cache Key
@@ -218,6 +228,7 @@ impl PlanCacheKey {
         context.index_version.hash(&mut hasher);
         context.optimizer_version.hash(&mut hasher);
         context.planning_config_hash.hash(&mut hasher);
+        context.in_write_context.hash(&mut hasher);
         let hash = hasher.finish();
 
         Self {
@@ -273,6 +284,7 @@ impl PlanCacheKey {
         context.index_version.hash(&mut hasher);
         context.optimizer_version.hash(&mut hasher);
         context.planning_config_hash.hash(&mut hasher);
+        context.in_write_context.hash(&mut hasher);
         let hash = hasher.finish();
 
         Self {

@@ -111,23 +111,44 @@ pub(crate) fn manage_result(
     )
 }
 
-/// Whether an index passes the `SHOW <family> INDEX [LIKE pattern] [FROM schema]`
-/// filter.
+/// The `SHOW <family> INDEX [LIKE pattern] [FROM schema]` predicate.
 ///
-/// `pattern` matches as a substring of the statement-level index name; an
-/// index with no statement-level name never matches a pattern.
-pub(crate) fn matches_show_filter(
-    pattern: Option<&str>,
-    from_schema: Option<&str>,
-    index_name: Option<&str>,
-    tag_name: &str,
-) -> bool {
-    let pattern_ok = match pattern {
-        Some(pattern) => index_name.is_some_and(|name| name.contains(pattern)),
-        None => true,
-    };
-    let schema_ok = from_schema.is_none_or(|schema| tag_name == schema);
-    pattern_ok && schema_ok
+/// Three independent dimensions, each carried explicitly:
+///
+/// - `space_id` scopes the listing to the space the statement runs in. Index
+///   names are only unique inside a space, so a listing that ignores the
+///   space mixes catalogs that never see each other.
+/// - `schema` is the `FROM <schema>` filter and matches the **tag** name —
+///   the space name is not a schema and must not be substituted for it.
+/// - `pattern` matches as a substring of the statement-level index name; an
+///   index with no statement-level name never matches a pattern.
+pub(crate) struct ShowFilter<'a> {
+    pattern: Option<&'a str>,
+    schema: Option<&'a str>,
+    space_id: u64,
+}
+
+impl<'a> ShowFilter<'a> {
+    pub(crate) fn new(pattern: Option<&'a str>, schema: Option<&'a str>, space_id: u64) -> Self {
+        Self {
+            pattern,
+            schema,
+            space_id,
+        }
+    }
+
+    /// Whether one catalog entry belongs in the listing.
+    pub(crate) fn matches(&self, index_name: Option<&str>, tag_name: &str, space_id: u64) -> bool {
+        if space_id != self.space_id {
+            return false;
+        }
+        let pattern_ok = match self.pattern {
+            Some(pattern) => index_name.is_some_and(|name| name.contains(pattern)),
+            None => true,
+        };
+        let schema_ok = self.schema.is_none_or(|schema| tag_name == schema);
+        pattern_ok && schema_ok
+    }
 }
 
 /// Apply `IF EXISTS` semantics to a drop target whose location planning could
@@ -155,15 +176,31 @@ mod tests {
 
     #[test]
     fn show_filter_requires_a_named_index_when_pattern_given() {
-        assert!(matches_show_filter(Some("idx"), None, Some("idx_a"), "t"));
-        assert!(!matches_show_filter(Some("idx"), None, None, "t"));
-        assert!(matches_show_filter(None, None, None, "t"));
+        let filter = ShowFilter::new(Some("idx"), None, 1);
+        assert!(filter.matches(Some("idx_a"), "t", 1));
+        assert!(!filter.matches(None, "t", 1));
+        assert!(ShowFilter::new(None, None, 1).matches(None, "t", 1));
     }
 
     #[test]
     fn show_filter_matches_schema_exactly() {
-        assert!(matches_show_filter(None, Some("t"), None, "t"));
-        assert!(!matches_show_filter(None, Some("t"), None, "t2"));
+        let filter = ShowFilter::new(None, Some("t"), 1);
+        assert!(filter.matches(None, "t", 1));
+        assert!(!filter.matches(None, "t2", 1));
+    }
+
+    #[test]
+    fn show_filter_is_scoped_to_one_space() {
+        let filter = ShowFilter::new(None, None, 7);
+        assert!(filter.matches(None, "t", 7));
+        assert!(
+            !filter.matches(None, "t", 8),
+            "an index from another space must not be listed"
+        );
+        assert!(
+            !ShowFilter::new(None, Some("t"), 7).matches(None, "t", 8),
+            "the space filter must win over a matching tag name"
+        );
     }
 
     #[test]

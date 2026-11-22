@@ -36,3 +36,4 @@ pub mod query_request_context;
 pub use query_context::QueryContext;
 pub use query_context_builder::QueryContextBuilder;
 pub use query_request_context::QueryRequestContext;
+pub(crate) use query_request_context::staged_writes_visible;

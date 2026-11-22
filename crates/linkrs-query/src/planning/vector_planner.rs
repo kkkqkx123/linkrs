@@ -120,17 +120,25 @@ impl VectorSearchPlanner {
             None => None,
         };
 
-        // Pre-resolve tag_name and field_name from the index registry; an
-        // unknown index leaves them empty for the executor to reject.
-        let (tag_name, field_name) = metadata
-            .and_then(|metadata| metadata.get_index_metadata(&search.index_name))
-            .map(|index_metadata| {
-                (
+        // Pre-resolve tag_name and field_name from the index registry. With
+        // schema metadata in hand an unknown name means the index does not
+        // exist, which is a planning error and not an unresolved location:
+        // the executor would otherwise answer a dropped index with "location
+        // is not resolved". Without metadata nothing can be resolved here, so
+        // the executor keeps ownership of the diagnostic.
+        let (tag_name, field_name) =
+            match metadata.and_then(|metadata| metadata.get_index_metadata(&search.index_name)) {
+                Some(index_metadata) => (
                     index_metadata.tag_name.clone(),
                     index_metadata.field_name.clone(),
-                )
-            })
-            .unwrap_or_else(|| (String::new(), String::new()));
+                ),
+                None => {
+                    if metadata.is_some() {
+                        return Err(PlannerError::IndexNotFound(search.index_name.clone()));
+                    }
+                    (String::new(), String::new())
+                }
+            };
 
         let node = self.build_simvec_node(
             search,
@@ -187,16 +195,25 @@ impl VectorSearchPlanner {
     fn transform_match_vector(
         &self,
         match_stmt: &MatchVector,
-        _space_id: u64,
+        space_id: u64,
     ) -> Result<SubPlan, PlannerError> {
         let yield_fields = self.parse_output_fields(&match_stmt.yield_clause);
 
+        // `MATCH VECTOR` names no index: it resolves the (tag, field) pair
+        // from the pattern and searches the collection of the space the
+        // statement runs in. Without the space it fell back to 0 and searched
+        // a collection that does not exist.
         let node = VectorMatchNode::new(
             match_stmt.pattern.clone(),
             match_stmt.vector_condition.field.clone(),
             match_stmt.vector_condition.query.clone(),
             match_stmt.vector_condition.threshold,
             yield_fields,
+        )
+        .with_metadata(
+            space_id,
+            pattern_label(&match_stmt.pattern),
+            match_stmt.vector_condition.field.clone(),
         );
 
         Ok(SubPlan::new(Some(node.into_enum()), None))
@@ -765,5 +782,48 @@ mod tests {
 
     fn planner_hints(filter: &VectorFilter) -> Vec<PayloadIndexHint> {
         VectorSearchPlanner::new().classify_payload_index_hints(filter)
+    }
+}
+
+/// The tag named by a `MATCH` pattern, e.g. `(n:item)` → `item`.
+///
+/// `MATCH VECTOR` carries its pattern as text; the label inside it is the tag
+/// whose collection holds the vectors, and the field comes from the
+/// `vector=` condition, so the pair identifies the index location without a
+/// registry lookup. An unlabelled pattern yields an empty tag, which the
+/// executor reports as an unresolved location instead of guessing.
+fn pattern_label(pattern: &str) -> String {
+    let Some(open) = pattern.find('(') else {
+        return String::new();
+    };
+    let rest = &pattern[open + 1..];
+    let end = rest.find(')').unwrap_or(rest.len());
+    let inner = &rest[..end];
+    let Some(colon) = inner.find(':') else {
+        return String::new();
+    };
+    inner[colon + 1..]
+        .trim()
+        .split(|c: char| c.is_whitespace() || c == '{' || c == '-' || c == ':')
+        .next()
+        .unwrap_or_default()
+        .to_string()
+}
+
+#[cfg(test)]
+mod pattern_label_tests {
+    use super::pattern_label;
+
+    #[test]
+    fn extracts_the_tag_from_a_single_label_pattern() {
+        assert_eq!(pattern_label("(n:item)"), "item");
+        assert_eq!(pattern_label("(n: item )"), "item");
+        assert_eq!(pattern_label("(n:item {name: 'a'})"), "item");
+    }
+
+    #[test]
+    fn unlabelled_patterns_yield_no_tag() {
+        assert_eq!(pattern_label("(n)"), "");
+        assert_eq!(pattern_label(""), "");
     }
 }

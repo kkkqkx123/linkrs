@@ -9,6 +9,20 @@ use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+/// Whether `op_ctx` can hold uncommitted staged rows that a metadata-based
+/// count cannot see.
+///
+/// This mirrors the gate in the metadata-count spec builder: an explicit
+/// write transaction, or autocommit group mode, may stage rows that table
+/// walks miss. Plain autocommit reads and read-only contexts cannot. It is
+/// shared with the plan-cache key so a plan compiled for a plain read is
+/// never reused in a context where those optimizations are unsafe.
+pub(crate) fn staged_writes_visible(op_ctx: Option<&StorageOperationContext>) -> bool {
+    op_ctx.is_some_and(|context| {
+        !context.read_only && !(context.auto_commit && context.auto_commit_group_start.is_none())
+    })
+}
+
 /// Query request context – Simplified version
 ///
 /// Contains:

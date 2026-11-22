@@ -7,8 +7,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use log::{error, info};
-#[cfg(feature = "vector-qdrant")]
-use vector_client::VectorManager;
 
 use crate::config::Config;
 use crate::storage::{
@@ -142,61 +140,40 @@ pub async fn start_service_with_config_path(
     // Configuration is validated before this point, so a failure here is an
     // environment problem (unwritable directory, unreachable server) and
     // aborts startup: a silently disabled vector subsystem turns every later
-    // vector query into a confusing "index missing" error.
+    // vector query into a confusing "index missing" error. Which engine to
+    // build — and whether there is one at all — is resolved by the backend
+    // assembler, so this path cannot drift from the embedded one.
     #[cfg(feature = "vector")]
-    let (vector_backend, local_engine_handle): (
-        Option<VectorBackend>,
-        Option<Arc<simvec::LocalVectorEngine>>,
-    ) = if config.is_vector_enabled() {
-        match config.vector_config().engine {
-            linkrs_config::VectorEngineKind::Local => {
-                let data_dir = config.vector_data_dir();
-                let engine = linkrs_sync::vector_defaults::assemble_local_engine(
-                    config.vector_config(),
-                    data_dir.clone(),
-                )
-                .map_err(|error| {
-                    linkrs_core::DBError::validation(format!("Vector subsystem: {error}"))
-                })?;
-                info!("Local vector engine initialized at {}", data_dir.display());
-                (
-                    Some(VectorBackend::from_local_arc_with_limit(
-                        Arc::clone(&engine),
-                        config.vector_config().limits.default_max_points,
-                    )),
-                    Some(engine),
-                )
-            }
-            #[cfg(feature = "vector-qdrant")]
-            linkrs_config::VectorEngineKind::Qdrant => {
-                let client_config =
-                    linkrs_sync::backend::qdrant_client_config(&config.vector_config().qdrant);
-                let manager = VectorManager::new(client_config).await.map_err(|error| {
-                    linkrs_core::DBError::validation(format!("Vector subsystem: {error}"))
-                })?;
-                info!("VectorManager initialized");
-                (
-                    Some(
-                        VectorBackend::qdrant_with_defaults(
-                            Arc::new(manager),
-                            linkrs_sync::vector_defaults::CollectionDefaults::from_qdrant(
-                                &config.vector_config().qdrant.collection,
-                                config.vector_config().limits.default_max_points,
-                            ),
-                        )
-                        .map_err(|error| {
-                            linkrs_core::DBError::validation(format!("Vector subsystem: {error}"))
-                        })?,
-                    ),
-                    None,
-                )
-            }
+    let vector_backend: Option<VectorBackend> = {
+        // The local engine takes its directory from the resolved deployment
+        // default when `[vector.local].data_dir` is unset.
+        let mut engine_config = config.vector_config().clone();
+        if engine_config.local.data_dir.is_none() {
+            engine_config.local.data_dir = Some(config.vector_data_dir());
         }
-    } else {
-        (None, None)
+        let backend = VectorBackend::from_config(&engine_config)
+            .await
+            .map_err(|error| {
+                linkrs_core::DBError::validation(format!("Vector subsystem: {error}"))
+            })?;
+        if let Some(backend) = backend.as_ref() {
+            info!(
+                "Vector backend initialized: {} ({})",
+                backend.engine_name(),
+                engine_config
+                    .local
+                    .data_dir
+                    .as_ref()
+                    .map(|dir| dir.display().to_string())
+                    .unwrap_or_default()
+            );
+        }
+        backend
     };
-    #[cfg(not(feature = "vector"))]
-    let _vector_backend = (None::<()>, None::<()>);
+    #[cfg(feature = "vector")]
+    let local_engine_handle = vector_backend
+        .as_ref()
+        .and_then(|backend| backend.as_local());
 
     // Forward local vector engine metrics into the shared StatsManager.
     #[cfg(feature = "vector")]

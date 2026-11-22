@@ -468,6 +468,7 @@ fn factorization_disabled_vs_enabled_semantics() {
             }],
             subqueries: Vec::new(),
             has_folded_expressions: false,
+            emit_rowless: false,
             output_var: None,
             col_names: vec!["a".to_string()],
             column_types: vec![],

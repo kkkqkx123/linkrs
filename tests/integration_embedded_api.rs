@@ -274,6 +274,48 @@ fn test_session_text_transaction_commands() {
     assert_eq!(value, Some(&linkrs::core::Value::BigInt(1)));
 }
 
+/// A `count(p)` planned outside a transaction may use a metadata-based plan
+/// that reads committed tables only. Repeating it first makes sure that plan
+/// is cached; the write transaction below must still see its staged rows, so
+/// the cached plain-read plan must not be reused inside the transaction.
+#[test]
+fn test_transaction_count_sees_staged_rows_after_plain_count_is_cached() {
+    let test_db = create_test_database();
+    let db = &test_db.db;
+    let mut session = db.session().expect("创建会话失败");
+
+    session
+        .create_space("count_cache_space", SpaceConfig::default())
+        .expect("create space failed");
+    session
+        .use_space("count_cache_space")
+        .expect("use space failed");
+    session
+        .execute("CREATE TAG IF NOT EXISTS item(name STRING)")
+        .expect("CREATE TAG failed");
+
+    let count_query = "MATCH (n:item) RETURN count(n) AS c";
+    // Prime the plan cache with the plain-read (metadata-count) plan.
+    for _ in 0..3 {
+        let result = session.execute(count_query).expect("plain count failed");
+        let value = result.rows().first().expect("count row").get("c");
+        assert_eq!(value, Some(&linkrs::core::Value::BigInt(0)));
+    }
+
+    session.execute("BEGIN").expect("BEGIN failed");
+    session
+        .execute("INSERT VERTEX item(name) VALUES 'a':('a')")
+        .expect("insert failed");
+    let result = session.execute(count_query).expect("in-txn count failed");
+    let value = result.rows().first().expect("count row").get("c");
+    assert_eq!(
+        value,
+        Some(&linkrs::core::Value::BigInt(1)),
+        "count inside a write transaction must see staged rows, not the cached plain-read metadata count"
+    );
+    session.execute("ROLLBACK").expect("ROLLBACK failed");
+}
+
 #[test]
 fn test_session_execute() {
     let test_db = create_test_database();
@@ -702,6 +744,8 @@ fn test_query_result_empty() {
         },
         linkrs::api::api_core::ExecutionMetadata {
             execution_time_ms: 0,
+            compile_time_us: 0,
+            execute_time_us: 0,
             rows_scanned: 0,
             rows_returned: 0,
             cache_hit: false,
@@ -722,6 +766,8 @@ fn test_query_result_columns() {
         linkrs::query::executor::base::ExecutionResult::DataSet { data },
         linkrs::api::api_core::ExecutionMetadata {
             execution_time_ms: 0,
+            compile_time_us: 0,
+            execute_time_us: 0,
             rows_scanned: 0,
             rows_returned: 0,
             cache_hit: false,
@@ -741,6 +787,8 @@ fn test_query_result_metadata() {
         linkrs::query::executor::base::ExecutionResult::DataSet { data },
         linkrs::api::api_core::ExecutionMetadata {
             execution_time_ms: 100,
+            compile_time_us: 0,
+            execute_time_us: 0,
             rows_scanned: 100,
             rows_returned: 10,
             cache_hit: false,
@@ -761,6 +809,8 @@ fn test_query_result_iterator() {
         linkrs::query::executor::base::ExecutionResult::DataSet { data },
         linkrs::api::api_core::ExecutionMetadata {
             execution_time_ms: 0,
+            compile_time_us: 0,
+            execute_time_us: 0,
             rows_scanned: 0,
             rows_returned: 1,
             cache_hit: false,
@@ -782,6 +832,8 @@ fn test_query_result_into_iterator() {
         linkrs::query::executor::base::ExecutionResult::DataSet { data },
         linkrs::api::api_core::ExecutionMetadata {
             execution_time_ms: 0,
+            compile_time_us: 0,
+            execute_time_us: 0,
             rows_scanned: 0,
             rows_returned: 1,
             cache_hit: false,

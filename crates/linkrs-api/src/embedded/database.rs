@@ -4,8 +4,6 @@
 
 use crate::api_core::{CoreError, CoreResult, QueryApi, SchemaApi, SpaceConfig};
 use crate::embedded::config::DatabaseConfig;
-#[cfg(feature = "vector")]
-use crate::embedded::config::EmbeddedVectorEngine;
 use crate::embedded::result::QueryResult;
 use crate::embedded::session::{GraphDatabaseInner, Session};
 use linkrs_config::fulltext::FulltextConfig;
@@ -27,81 +25,32 @@ use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
-#[cfg(feature = "vector-qdrant")]
-use vector_client::{VectorClientConfig, VectorManager};
 
 #[cfg(test)]
 use linkrs_storage::MockStorage;
 
-/// Create a VectorManager from the default configuration.
-///
-/// Uses the provided runtime handle to block on async VectorManager initialization.
-#[cfg(feature = "vector-qdrant")]
-fn create_vector_manager(
-    vector_config: &VectorClientConfig,
-    runtime: &tokio::runtime::Handle,
-) -> CoreResult<Arc<VectorManager>> {
-    let vector_manager = Arc::new(
-        runtime
-            .block_on(VectorManager::new(vector_config.clone()))
-            .map_err(|e| {
-                CoreError::Internal(format!("Failed to initialize vector manager: {}", e))
-            })?,
-    );
-    Ok(vector_manager)
-}
-
-/// Derive the default local vector data directory from the database file path
-/// (`<db_file>_vector` next to the database).
-#[cfg(feature = "vector")]
-fn default_local_vector_dir(db_path: &Path) -> std::path::PathBuf {
-    let mut name = db_path
-        .file_name()
-        .map(|name| name.to_os_string())
-        .unwrap_or_default();
-    name.push("_vector");
-    db_path.with_file_name(name)
-}
-
 /// Build the vector backend from the embedded database configuration.
 ///
-/// Returns `Ok(None)` only for explicit disablement (master switch off, a
-/// disabled Qdrant client config, or an in-memory database without an explicit
-/// local directory); engine construction failures are hard errors.
+/// Returns `Ok(None)` only for explicit disablement (master switch off, or an
+/// in-memory database without an explicit local directory); a contradictory
+/// engine selection and engine construction failures are hard errors.
 #[cfg(feature = "vector")]
 fn create_vector_backend(
     config: &DatabaseConfig,
     #[cfg_attr(not(feature = "vector-qdrant"), allow(unused_variables))]
     runtime: &tokio::runtime::Handle,
 ) -> CoreResult<Option<VectorBackend>> {
-    use std::path::PathBuf;
-
-    if !config.vector.enabled {
+    // Which engine to build, and whether to build one at all, is decided by
+    // the shared assembler; this path only translates the embedded path rules
+    // into the configuration it reads.
+    let Some(engine_config) = config.vector.to_engine_config(config.path()) else {
         return Ok(None);
-    }
-    match &config.vector.engine {
-        EmbeddedVectorEngine::Local => {
-            let data_dir: PathBuf = match (&config.vector.local_data_dir, config.path()) {
-                (Some(dir), _) => dir.clone(),
-                (None, Some(path)) => default_local_vector_dir(path),
-                // In-memory databases have no on-disk home; vectors stay off
-                // unless an explicit directory is configured.
-                (None, None) => return Ok(None),
-            };
-            let engine = simvec::LocalVectorEngine::open(&data_dir).map_err(|e| {
-                CoreError::Internal(format!("Failed to initialize local vector engine: {}", e))
-            })?;
-            Ok(Some(VectorBackend::local(engine)))
-        }
-        #[cfg(feature = "vector-qdrant")]
-        EmbeddedVectorEngine::Qdrant(client_config) => {
-            if !client_config.enabled {
-                return Ok(None);
-            }
-            let manager = create_vector_manager(client_config, runtime)?;
-            Ok(Some(VectorBackend::qdrant(manager)?))
-        }
-    }
+    };
+    runtime
+        .block_on(VectorBackend::from_config(&engine_config))
+        .map_err(|error| {
+            CoreError::Internal(format!("Failed to initialize vector backend: {error}"))
+        })
 }
 
 /// Build the vector sync coordinator, or `None` when the vector

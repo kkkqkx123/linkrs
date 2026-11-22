@@ -79,13 +79,17 @@ impl ZeroInputNode for CreateFulltextIndexNode {}
 pub struct DropFulltextIndexNode {
     pub index_name: String,
     pub if_exists: bool,
+    /// Space the statement runs in; the runtime catalog lookup is scoped to
+    /// it because index names are only unique inside one space.
+    pub space_id: u64,
 }
 
 impl DropFulltextIndexNode {
-    pub fn new(index_name: String, if_exists: bool) -> Self {
+    pub fn new(index_name: String, if_exists: bool, space_id: u64) -> Self {
         Self {
             index_name,
             if_exists,
+            space_id,
         }
     }
 }
@@ -130,13 +134,17 @@ impl ZeroInputNode for DropFulltextIndexNode {}
 pub struct AlterFulltextIndexNode {
     pub index_name: String,
     pub actions: Vec<AlterIndexAction>,
+    /// Space the statement runs in; the runtime catalog lookup is scoped to
+    /// it because index names are only unique inside one space.
+    pub space_id: u64,
 }
 
 impl AlterFulltextIndexNode {
-    pub fn new(index_name: String, actions: Vec<AlterIndexAction>) -> Self {
+    pub fn new(index_name: String, actions: Vec<AlterIndexAction>, space_id: u64) -> Self {
         Self {
             index_name,
             actions,
+            space_id,
         }
     }
 }
@@ -235,11 +243,17 @@ impl ZeroInputNode for ShowFulltextIndexNode {}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DescribeFulltextIndexNode {
     pub index_name: String,
+    /// Space the statement runs in; the runtime catalog lookup is scoped to
+    /// it because index names are only unique inside one space.
+    pub space_id: u64,
 }
 
 impl DescribeFulltextIndexNode {
-    pub fn new(index_name: String) -> Self {
-        Self { index_name }
+    pub fn new(index_name: String, space_id: u64) -> Self {
+        Self {
+            index_name,
+            space_id,
+        }
     }
 }
 

@@ -114,17 +114,19 @@ impl VectorDdlPlanner {
             ));
         }
         let space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());
+        let space_id = qctx.space_id().unwrap_or(0);
         let metadata = metadata.or(self.metadata_context.as_deref());
         match stmt {
             Stmt::CreateVectorIndex(create) => {
-                let space_id = qctx.space_id().unwrap_or(0);
                 self.transform_create_vector_index(create, &space_name, space_id, metadata)
             }
             Stmt::DropVectorIndex(drop) => {
                 self.transform_drop_vector_index(drop, &space_name, metadata)
             }
-            Stmt::ShowVectorIndex(show) => self.transform_show_vector_index(show, &space_name),
-            Stmt::DescribeVectorIndex(describe) => self.transform_describe_vector_index(describe),
+            Stmt::ShowVectorIndex(show) => self.transform_show_vector_index(show, space_id),
+            Stmt::DescribeVectorIndex(describe) => {
+                self.transform_describe_vector_index(describe, space_id)
+            }
             _ => Err(PlannerError::PlanGenerationFailed(
                 "Not a vector DDL statement".to_string(),
             )),
@@ -220,7 +222,15 @@ impl VectorDdlPlanner {
                 index_metadata.tag_name.clone(),
                 index_metadata.field_name.clone(),
             ),
-            None => node,
+            None => {
+                // With schema metadata in hand an unknown name is a missing
+                // index, which is a planning error; only `IF EXISTS` degrades
+                // it to a `not_exists` status row.
+                if metadata.is_some() && !drop.if_exists {
+                    return Err(PlannerError::IndexNotFound(drop.index_name.clone()));
+                }
+                node
+            }
         };
 
         Ok(SubPlan::new(Some(node.into_enum()), None))
@@ -230,15 +240,14 @@ impl VectorDdlPlanner {
     fn transform_show_vector_index(
         &self,
         show: &ShowVectorIndex,
-        space_name: &str,
+        space_id: u64,
     ) -> Result<SubPlan, PlannerError> {
-        let from_schema = if show.from_schema.is_none() {
-            Some(space_name.to_string())
-        } else {
-            show.from_schema.clone()
-        };
-
-        let node = ShowVectorIndexNode::new(show.pattern.clone(), from_schema);
+        // `FROM <schema>` filters by tag name; scoping the listing to the
+        // current space is a separate dimension, carried by `space_id`.
+        // Substituting the space name for the schema filtered every entry
+        // out, because a space name is never a tag name.
+        let node =
+            ShowVectorIndexNode::new(show.pattern.clone(), show.from_schema.clone(), space_id);
         Ok(SubPlan::new(Some(node.into_enum()), None))
     }
 
@@ -246,8 +255,9 @@ impl VectorDdlPlanner {
     fn transform_describe_vector_index(
         &self,
         describe: &DescribeVectorIndex,
+        space_id: u64,
     ) -> Result<SubPlan, PlannerError> {
-        let node = DescribeVectorIndexNode::new(describe.index_name.clone());
+        let node = DescribeVectorIndexNode::new(describe.index_name.clone(), space_id);
         Ok(SubPlan::new(Some(node.into_enum()), None))
     }
 }

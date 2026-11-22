@@ -521,6 +521,21 @@ impl Default for QdrantConfig {
     }
 }
 
+/// The engine a [`VectorConfig`] resolves to once both switches are applied.
+///
+/// This is the only place that answers "is there a vector backend, and which
+/// one"; assembly and enablement checks both read it so they cannot disagree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VectorSelection {
+    /// `[vector].enabled = false`: the subsystem is deliberately off.
+    Off,
+    /// Built-in in-process engine.
+    Local,
+    /// Remote Qdrant service.
+    #[cfg(feature = "vector-qdrant")]
+    Qdrant,
+}
+
 /// Vector search configuration
 #[derive(Deserialize, Serialize, Clone)]
 #[serde(deny_unknown_fields)]
@@ -602,6 +617,35 @@ impl Default for VectorConfig {
             embedding_query_preprocessor: None,
             #[cfg(feature = "rerank")]
             rerank: None,
+        }
+    }
+}
+
+impl VectorConfig {
+    /// Resolve which engine to assemble, or report why the selection is
+    /// unusable.
+    ///
+    /// `engine = "qdrant"` with `[vector.qdrant].enabled = false` is a
+    /// contradiction rather than a disabled subsystem: the operator picked an
+    /// engine and then switched off its only parameter block. Reporting it as
+    /// [`VectorSelection::Off`] would disable vector search without a word, so
+    /// it is an error instead.
+    pub fn selection(&self) -> Result<VectorSelection, String> {
+        if !self.enabled {
+            return Ok(VectorSelection::Off);
+        }
+        match self.engine {
+            VectorEngineKind::Local => Ok(VectorSelection::Local),
+            #[cfg(feature = "vector-qdrant")]
+            VectorEngineKind::Qdrant => {
+                if !self.qdrant.enabled {
+                    return Err(
+                        "vector.engine = \"qdrant\" requires vector.qdrant.enabled = true"
+                            .to_string(),
+                    );
+                }
+                Ok(VectorSelection::Qdrant)
+            }
         }
     }
 }

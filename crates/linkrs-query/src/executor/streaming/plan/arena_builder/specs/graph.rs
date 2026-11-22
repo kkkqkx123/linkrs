@@ -154,15 +154,10 @@ pub(in crate::executor::streaming::plan::arena_builder) fn metadata_count_below(
     // keep the normal plan. Plain autocommit statements cannot stage
     // anything the scan would see: the statement itself is a pure read,
     // and earlier statements are already committed.
-    match reader.operation_context() {
-        None => {}
-        Some(context) => {
-            if !context.read_only
-                && !(context.auto_commit && context.auto_commit_group_start.is_none())
-            {
-                return None;
-            }
-        }
+    // The same predicate feeds the plan-cache key, so a plain-read plan
+    // carrying this optimization is never reused in a write context.
+    if crate::context::staged_writes_visible(reader.operation_context().as_deref()) {
+        return None;
     }
     let space = exec_ctx.space_name.clone().unwrap_or_default();
     let mut current = agg.input();

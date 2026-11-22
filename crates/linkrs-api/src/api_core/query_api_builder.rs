@@ -19,7 +19,7 @@ use linkrs_query::query_manager::QueryManager;
 use linkrs_query::OptimizerEngine;
 use linkrs_storage::StorageClient;
 #[cfg(feature = "vector")]
-use linkrs_sync::backend::VectorBackend;
+use linkrs_sync::vector_sync::VectorSyncCoordinator;
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -211,21 +211,20 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
         self.pipeline_manager.plan_cache().len()
     }
 
-    /// Create a new QueryApi instance with an existing shared VectorBackend
+    /// Create a new QueryApi instance around an existing vector coordinator.
+    ///
+    /// The coordinator is supplied by the caller rather than built here: the
+    /// same instance has to serve the statement pipeline and the standalone
+    /// vector API, otherwise the two would hold separate index registries and
+    /// report different catalogs for the same database.
     #[cfg(feature = "vector")]
-    pub async fn with_vector_backend(
+    pub fn with_vector_coordinator(
         storage: Arc<RwLock<S>>,
         stats_manager: Arc<StatsManager>,
-        backend: VectorBackend,
+        vector_coordinator: Arc<VectorSyncCoordinator>,
         schema_manager: Option<Arc<SchemaManager>>,
-    ) -> CoreResult<Self> {
+    ) -> Self {
         let optimizer_engine = Arc::new(OptimizerEngine::default());
-
-        // Create a VectorSyncCoordinator with the shared backend (no embedding service for query-only use)
-        let handle = tokio::runtime::Handle::current();
-        let vector_coordinator = Arc::new(
-            linkrs_sync::vector_sync::VectorSyncCoordinator::new_without_embedding(backend, handle),
-        );
 
         // Create pipeline manager with vector coordinator and optional schema manager
         let mut pipeline_manager =
@@ -239,6 +238,6 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
             pipeline_manager = pipeline_manager.with_vector_coordinator(vector_coordinator);
         }
 
-        Ok(Self { pipeline_manager })
+        Self { pipeline_manager }
     }
 }

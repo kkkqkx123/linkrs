@@ -618,8 +618,8 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         }
         // Prefer the sync-manager-hosted vector coordinator so the query
         // plan and the HTTP/gRPC vector APIs share one source of truth.
-        // A `with_vector_backend` coordinator installed earlier stays only
-        // as a fallback when the sync manager has none.
+        // A coordinator installed directly on the pipeline stays only as a
+        // fallback when the sync manager has none.
         #[cfg(feature = "vector")]
         if let Some(coordinator) = sync_manager.vector_coordinator() {
             self.vector_coordinator = Some(coordinator.clone());
@@ -748,6 +748,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         &self,
         space_name: Option<String>,
         param_type_signature: Option<u64>,
+        in_write_context: bool,
     ) -> crate::cache::PlanCacheContext {
         let planning_config = self.dml_planning_config();
         crate::cache::PlanCacheContext {
@@ -763,6 +764,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             param_type_signature,
             optimizer_version: planning_config.optimizer_version,
             planning_config_hash: planning_config.config_hash,
+            in_write_context,
         }
     }
 
@@ -773,11 +775,12 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         normalized_text: String,
         space_name: Option<String>,
         parameters: &std::collections::HashMap<String, linkrs_core::Value>,
+        in_write_context: bool,
     ) -> DmlPlanMemoKey {
         let param_sig = self.memo_param_signature(&normalized_text, parameters);
         DmlPlanMemoKey::from_context(
             normalized_text,
-            self.plan_cache_context(space_name, param_sig),
+            self.plan_cache_context(space_name, param_sig, in_write_context),
         )
     }
 

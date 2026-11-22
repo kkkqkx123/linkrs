@@ -217,81 +217,67 @@ impl<
                     // This constructor has no error channel (it returns the
                     // service directly), so an unusable vector subsystem can
                     // only fail fast. The assembly itself is shared with
-                    // `startup.rs` so both paths apply identical tuning.
-                    let engine = linkrs_sync::vector_defaults::assemble_local_engine(
-                        config.vector_config(),
-                        config.vector_data_dir(),
-                    )
-                    .unwrap_or_else(|error| panic!("Vector subsystem unavailable: {error}"));
-                    linkrs_sync::backend::VectorBackend::from_local_arc_with_limit(
-                        engine,
-                        config.vector_config().limits.default_max_points,
-                    )
+                    // `startup.rs` and the embedded factory so all paths apply
+                    // identical tuning and engine selection.
+                    let mut engine_config = config.vector_config().clone();
+                    if engine_config.local.data_dir.is_none() {
+                        engine_config.local.data_dir = Some(config.vector_data_dir());
+                    }
+                    linkrs_sync::backend::VectorBackend::from_config(&engine_config)
+                        .await
+                        .unwrap_or_else(|error| panic!("Vector subsystem unavailable: {error}"))
+                        .unwrap_or_else(|| {
+                            panic!("Vector subsystem is enabled but its engine resolved to none")
+                        })
                 }
             };
 
-            match QueryApi::with_vector_backend(
+            // One coordinator serves both the statement pipeline and the
+            // standalone vector API: two of them would keep separate index
+            // registries, so `CREATE VECTOR INDEX` through SQL and `SHOW`
+            // through the API would disagree about the same catalog.
+            let coordinator = Arc::new(
+                linkrs_sync::vector_sync::VectorSyncCoordinator::new_without_embedding(
+                    backend.clone(),
+                    tokio::runtime::Handle::current(),
+                ),
+            );
+
+            let mut api = QueryApi::with_vector_coordinator(
                 Arc::new(RwLock::new((*storage).clone())),
                 stats_manager.clone(),
-                backend.clone(),
+                Arc::clone(&coordinator),
                 schema_manager.clone(),
-            )
-            .await
-            {
-                Ok(mut api) => {
-                    api = api
-                        .with_statistics_settings(
-                            config.common.optimizer.statistics_sample_limit,
-                            config.common.optimizer.statistics_min_epoch_delta,
-                        )
-                        .with_default_cost_profile_label(format!("{cost_profile:?}"))
-                        .with_space_cost_profiles(
-                            &config.common.optimizer.space_cost_profiles,
-                            &runtime,
-                        )
-                        .with_password_history_depth(
-                            config.server.security.password_policy.history_size,
-                        );
-                    api.install_shared_scheduler(shared_scheduler.clone(), query_registry.clone());
-                    api.install_query_manager(Arc::clone(&query_manager));
-                    if let Some(sync_manager) = storage.get_sync_manager() {
-                        api = api.with_sync_manager(sync_manager);
-                    }
-                    // The standalone VectorApi needs the sync manager that
-                    // hosts the vector coordinator; without it the HTTP/gRPC
-                    // vector endpoints cannot list indexes, so it is left
-                    // unconfigured and those endpoints report unavailability
-                    // instead of silently serving empty results.
-                    let vector_api = storage.get_sync_manager().and_then(|sync_manager| {
-                        sync_manager
-                            .vector_coordinator()
-                            .cloned()
-                            .map(|coordinator| {
-                                Arc::new(VectorApi::new(backend, coordinator, sync_manager))
-                            })
-                    });
-                    (Arc::new(RwLock::new(api)), vector_api)
-                }
-                Err(e) => {
-                    warn!(
-                        "Failed to initialize vector search, falling back to basic QueryApi: {}",
-                        e
-                    );
-                    let mut api = Self::build_query_api(
-                        &storage,
-                        &stats_manager,
-                        schema_manager.as_ref(),
-                        optimizer_engine.clone(),
-                        &config.common.optimizer,
-                        cost_profile,
-                        &runtime,
-                        config.server.security.password_policy.history_size,
-                    );
-                    api.install_shared_scheduler(shared_scheduler.clone(), query_registry.clone());
-                    api.install_query_manager(Arc::clone(&query_manager));
-                    (Arc::new(RwLock::new(api)), None)
-                }
+            );
+            api = api
+                .with_statistics_settings(
+                    config.common.optimizer.statistics_sample_limit,
+                    config.common.optimizer.statistics_min_epoch_delta,
+                )
+                .with_default_cost_profile_label(format!("{cost_profile:?}"))
+                .with_space_cost_profiles(&config.common.optimizer.space_cost_profiles, &runtime)
+                .with_password_history_depth(config.server.security.password_policy.history_size);
+            api.install_shared_scheduler(shared_scheduler.clone(), query_registry.clone());
+            api.install_query_manager(Arc::clone(&query_manager));
+            if let Some(sync_manager) = storage.get_sync_manager() {
+                api = api.with_sync_manager(sync_manager);
             }
+            // The vector API writes through a sync manager. A
+            // service assembled with a storage that carries one (the
+            // production path) reuses it; a directly constructed
+            // service hosts the coordinator in a private manager so
+            // the catalog API is not silently absent.
+            let sync_manager = storage
+                .get_sync_manager()
+                .filter(|manager| manager.vector_coordinator().is_some())
+                .unwrap_or_else(|| {
+                    Arc::new(
+                        linkrs_sync::SyncManager::new_without_fulltext()
+                            .with_vector_coordinator(Arc::clone(&coordinator)),
+                    )
+                });
+            let vector_api = Some(Arc::new(VectorApi::new(backend, coordinator, sync_manager)));
+            (Arc::new(RwLock::new(api)), vector_api)
         } else {
             let mut api = Self::build_query_api(
                 &storage,

@@ -133,3 +133,50 @@ fn test_fulltext_search_unknown_index_is_error_not_empty() {
         .query("SEARCH INDEX idx_missing MATCH 'database'")
         .assert_error();
 }
+
+#[cfg(feature = "fulltext")]
+#[test]
+fn test_fulltext_management_is_scoped_to_the_current_space() {
+    use linkrs_core::Value;
+
+    let scenario = TestScenario::new()
+        .expect("scenario")
+        .with_fulltext_indexes()
+        .setup_space("ft_scope_a")
+        .exec_ddl("CREATE TAG article(title STRING, content STRING)")
+        .assert_success()
+        .exec_ddl("CREATE FULLTEXT INDEX idx_scope_a ON article(content)")
+        .assert_success()
+        // The same tag and field in a second space: index names are only
+        // unique inside one space, so every management statement has to name
+        // the space as well.
+        .setup_space("ft_scope_b")
+        .exec_ddl("CREATE TAG article(title STRING, content STRING)")
+        .assert_success()
+        .exec_ddl("CREATE FULLTEXT INDEX idx_scope_b ON article(content)")
+        .assert_success()
+        .query("SHOW FULLTEXT INDEX")
+        .assert_success()
+        .assert_result_count(1)
+        .assert_result_contains(vec![Value::string("idx_scope_b")]);
+
+    // A name that only exists in the other space is not a found index.
+    let scenario = scenario
+        .query("DESCRIBE FULLTEXT INDEX idx_scope_a")
+        .assert_success()
+        .assert_result_contains(vec![Value::string("not-found")]);
+
+    // Dropping must not reach into the other space.
+    let scenario = scenario
+        .query("DROP FULLTEXT INDEX idx_scope_a")
+        .assert_error()
+        .setup_space("ft_scope_a")
+        .query("SHOW FULLTEXT INDEX")
+        .assert_success()
+        .assert_result_count(1)
+        .assert_result_contains(vec![Value::string("idx_scope_a")]);
+    scenario
+        .query("DESCRIBE FULLTEXT INDEX idx_scope_a")
+        .assert_success()
+        .assert_result_contains(vec![Value::string("idx_scope_a")]);
+}

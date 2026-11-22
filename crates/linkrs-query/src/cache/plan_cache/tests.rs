@@ -27,9 +27,14 @@ fn cache_key_covers_all_compatibility_dimensions() {
         param_type_signature: Some(3),
         optimizer_version: 4,
         planning_config_hash: 5,
+        in_write_context: false,
     };
     let key = PlanCacheKey::from_query_with_context("MATCH (n) RETURN n", base.clone());
     for changed in [
+        PlanCacheContext {
+            in_write_context: true,
+            ..base.clone()
+        },
         PlanCacheContext {
             optimizer_version: 7,
             ..base.clone()
@@ -258,6 +263,7 @@ fn partitioned_plan_hit_respects_compatibility_context() {
         param_type_signature: Some(99),
         optimizer_version: 2,
         planning_config_hash: 3,
+        in_write_context: false,
     };
     // The put path derives the param signature from the param positions;
     // use the same positions so the keys line up.

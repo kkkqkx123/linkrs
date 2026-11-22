@@ -209,7 +209,17 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         // built from the shared plan-cache identity context. The partition
         // fingerprint is not computable before binding; memo hits use the
         // single checked exit before being served.
-        let cache_context = self.plan_cache_context(space_name.clone(), param_signature);
+        // Include the write context so a plan compiled outside a transaction
+        // (which may use metadata counts) is not reused inside one, where
+        // staged rows are invisible to those counts.
+        let in_write_context = crate::context::staged_writes_visible(
+            request.operation_context.as_ref(),
+        );
+        let cache_context = self.plan_cache_context(
+            space_name.clone(),
+            param_signature,
+            in_write_context,
+        );
         let dml_memo_key = if dml_shape_cacheable {
             Some(super::DmlPlanMemoKey::from_context(
                 query_text.to_string(),

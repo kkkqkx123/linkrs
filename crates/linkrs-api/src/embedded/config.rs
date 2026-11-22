@@ -5,7 +5,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-pub use linkrs_config::{ParallelConfig, SyncMode};
+pub use linkrs_config::{ParallelConfig, SyncMode, VectorEngineKind};
 
 /// Database configuration
 ///
@@ -58,41 +58,90 @@ pub struct DatabaseConfig {
     pub parallel: ParallelConfig,
 }
 
-/// Which vector engine the embedded database should use.
-#[derive(Debug, Clone, Default)]
-pub enum EmbeddedVectorEngine {
-    /// Built-in disk-backed local engine (default).
-    #[default]
-    Local,
-    /// Remote Qdrant service; requires the `vector-qdrant` feature.
-    #[cfg(feature = "vector-qdrant")]
-    Qdrant(Box<vector_client::VectorClientConfig>),
-}
-
 /// Vector subsystem configuration for the embedded database.
 ///
 /// Defaults to the local engine with a data directory derived from the
 /// database path (`<db_file>_vector`). In-memory databases have no on-disk
 /// home, so their vectors stay disabled unless an explicit directory is set.
+///
+/// This is a thin front over [`linkrs_config::VectorConfig`]: it names the
+/// same engine enum and the same Qdrant parameters the server reads from
+/// TOML, and hands the resolved form to the one assembler both paths share.
 #[derive(Debug, Clone)]
 pub struct VectorConfig {
     /// Master switch for the vector subsystem.
     pub enabled: bool,
     /// Engine selection.
-    pub engine: EmbeddedVectorEngine,
+    pub engine: VectorEngineKind,
     /// Explicit storage directory for the local engine;
     /// derived from the database path when unset.
     pub local_data_dir: Option<PathBuf>,
+    /// Parameters for the remote engine. Only read when
+    /// [`Self::engine`] is [`VectorEngineKind::Qdrant`], where it also
+    /// carries the engine's own enable switch.
+    #[cfg(feature = "vector-qdrant")]
+    pub qdrant: linkrs_config::QdrantConfig,
 }
 
 impl Default for VectorConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            engine: EmbeddedVectorEngine::Local,
+            engine: VectorEngineKind::Local,
             local_data_dir: None,
+            #[cfg(feature = "vector-qdrant")]
+            qdrant: linkrs_config::QdrantConfig::default(),
         }
     }
+}
+
+impl VectorConfig {
+    /// Resolve the shared engine configuration this surface describes.
+    ///
+    /// `None` means the vector subsystem is deliberately off: the master
+    /// switch is off, or an in-memory database has no directory to put an
+    /// engine in. A contradictory engine selection is *not* folded into
+    /// `None` here — it stays in the configuration so the assembler can report
+    /// it instead of silently serving a database without vector search.
+    pub(crate) fn to_engine_config(
+        &self,
+        db_path: Option<&Path>,
+    ) -> Option<linkrs_config::VectorConfig> {
+        if !self.enabled {
+            return None;
+        }
+        let mut engine_config = linkrs_config::VectorConfig {
+            enabled: true,
+            engine: self.engine,
+            ..linkrs_config::VectorConfig::default()
+        };
+        match self.engine {
+            VectorEngineKind::Local => {
+                let data_dir = match (&self.local_data_dir, db_path) {
+                    (Some(dir), _) => dir.clone(),
+                    (None, Some(path)) => default_local_vector_dir(path),
+                    // In-memory databases have no on-disk home; vectors stay
+                    // off unless an explicit directory is configured.
+                    (None, None) => return None,
+                };
+                engine_config.local.data_dir = Some(data_dir);
+            }
+            #[cfg(feature = "vector-qdrant")]
+            VectorEngineKind::Qdrant => engine_config.qdrant = self.qdrant.clone(),
+        }
+        Some(engine_config)
+    }
+}
+
+/// Derive the default local vector data directory from the database file path
+/// (`<db_file>_vector` next to the database).
+fn default_local_vector_dir(db_path: &Path) -> PathBuf {
+    let mut name = db_path
+        .file_name()
+        .map(|name| name.to_os_string())
+        .unwrap_or_default();
+    name.push("_vector");
+    db_path.with_file_name(name)
 }
 
 impl DatabaseConfig {
@@ -210,9 +259,16 @@ impl DatabaseConfig {
     }
 
     /// Select the remote Qdrant engine; requires the `vector-qdrant` feature.
+    ///
+    /// The engine's own `enabled` switch is forced on: selecting the engine
+    /// here *is* the enablement, and the embedded surface has no
+    /// `[vector.qdrant]` section where a half-configured engine could linger.
+    /// Use [`Self::with_vector_enabled`] to turn the subsystem off.
     #[cfg(feature = "vector-qdrant")]
-    pub fn with_vector_qdrant(mut self, config: vector_client::VectorClientConfig) -> Self {
-        self.vector.engine = EmbeddedVectorEngine::Qdrant(Box::new(config));
+    pub fn with_vector_qdrant(mut self, mut config: linkrs_config::QdrantConfig) -> Self {
+        config.enabled = true;
+        self.vector.engine = VectorEngineKind::Qdrant;
+        self.vector.qdrant = config;
         self
     }
 

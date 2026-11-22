@@ -15,6 +15,11 @@ use linkrs::storage::{GraphStorage, PropertyGraphConfig};
 use linkrs::sync::vector_sync::{DistanceMetric, PointId, SearchOptions, VectorPoint};
 use linkrs_server::GraphService;
 
+/// Payload discriminator of the `(item, vec)` index inside the space-level
+/// collection. The coordinator filters on the length-prefixed form
+/// `tag_len_tag_field_len_field`, so a bare `item_vec` matches nothing.
+const GROUP_ID: &str = "4_item_3_vec";
+
 fn point(id: i64, vector: Vec<f32>, group_id: &str) -> VectorPoint {
     let mut payload = HashMap::new();
     payload.insert(
@@ -55,9 +60,9 @@ async fn local_vector_engine_startup_e2e() {
     {
         let backend = vector_api.backend();
         for p in [
-            point(1, vec![1.0, 0.0, 0.0], "item_vec"),
-            point(2, vec![0.0, 1.0, 0.0], "item_vec"),
-            point(3, vec![0.0, 0.0, 1.0], "item_vec"),
+            point(1, vec![1.0, 0.0, 0.0], GROUP_ID),
+            point(2, vec![0.0, 1.0, 0.0], GROUP_ID),
+            point(3, vec![0.0, 0.0, 1.0], GROUP_ID),
         ] {
             backend
                 .upsert(&collection, p)
@@ -138,9 +143,9 @@ async fn local_vector_engine_restart_consistency_e2e() {
         {
             let backend = vector_api.backend();
             for p in [
-                point(1, vec![1.0, 0.0], "item_vec"),
-                point(2, vec![0.0, 1.0], "item_vec"),
-                point(3, vec![1.0, 1.0], "item_vec"),
+                point(1, vec![1.0, 0.0], GROUP_ID),
+                point(2, vec![0.0, 1.0], GROUP_ID),
+                point(3, vec![1.0, 1.0], GROUP_ID),
             ] {
                 backend
                     .upsert(&collection2, p)

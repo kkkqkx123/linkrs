@@ -20,10 +20,14 @@ pub enum FulltextManageCommand {
     Drop {
         index_name: String,
         if_exists: bool,
+        /// Space the statement runs in; index names are only unique inside
+        /// one space, so an unscoped drop could destroy a foreign catalog.
+        space_id: u64,
     },
     Alter {
         index_name: String,
         actions: Vec<AlterIndexAction>,
+        space_id: u64,
     },
     Show {
         pattern: Option<String>,
@@ -32,6 +36,7 @@ pub enum FulltextManageCommand {
     },
     Describe {
         index_name: String,
+        space_id: u64,
     },
 }
 

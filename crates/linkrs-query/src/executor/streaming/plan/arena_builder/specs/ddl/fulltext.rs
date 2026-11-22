@@ -21,10 +21,12 @@ pub(crate) fn fulltext_manage_to_command(
         Drop(n) => FulltextManageCommand::Drop {
             index_name: n.index_name.clone(),
             if_exists: n.if_exists,
+            space_id: n.space_id,
         },
         Alter(n) => FulltextManageCommand::Alter {
             index_name: n.index_name.clone(),
             actions: n.actions.clone(),
+            space_id: n.space_id,
         },
         Show(n) => FulltextManageCommand::Show {
             pattern: n.pattern.clone(),
@@ -33,6 +35,7 @@ pub(crate) fn fulltext_manage_to_command(
         },
         Describe(n) => FulltextManageCommand::Describe {
             index_name: n.index_name.clone(),
+            space_id: n.space_id,
         },
     }
 }

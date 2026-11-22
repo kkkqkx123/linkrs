@@ -262,13 +262,17 @@ impl MemoryEstimatable for DropVectorIndexNode {
 pub struct ShowVectorIndexNode {
     pub pattern: Option<String>,
     pub from_schema: Option<String>,
+    /// Space the statement runs in: the listing is space-scoped, while
+    /// `from_schema` filters by tag name.
+    pub space_id: u64,
 }
 
 impl ShowVectorIndexNode {
-    pub fn new(pattern: Option<String>, from_schema: Option<String>) -> Self {
+    pub fn new(pattern: Option<String>, from_schema: Option<String>, space_id: u64) -> Self {
         Self {
             pattern,
             from_schema,
+            space_id,
         }
     }
 }
@@ -312,11 +316,17 @@ impl ZeroInputNode for ShowVectorIndexNode {}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DescribeVectorIndexNode {
     pub index_name: String,
+    /// Space the statement runs in; the runtime catalog lookup is scoped to
+    /// it because index names are only unique inside one space.
+    pub space_id: u64,
 }
 
 impl DescribeVectorIndexNode {
-    pub fn new(index_name: String) -> Self {
-        Self { index_name }
+    pub fn new(index_name: String, space_id: u64) -> Self {
+        Self {
+            index_name,
+            space_id,
+        }
     }
 }
 

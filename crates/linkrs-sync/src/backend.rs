@@ -900,11 +900,9 @@ impl VectorEngineHandle for QdrantEngineHandle {
         .await;
         match result {
             Ok(()) => Ok(()),
-            Err(CircuitBreakerError::CircuitOpen) => Err(
-                VectorCoordinatorError::Vector(VectorError::EngineUnavailable(
-                    "qdrant write circuit breaker is open".to_string(),
-                )),
-            ),
+            Err(CircuitBreakerError::CircuitOpen) => Err(VectorCoordinatorError::Vector(
+                VectorError::EngineUnavailable("qdrant write circuit breaker is open".to_string()),
+            )),
             Err(CircuitBreakerError::OperationFailed(error)) => Err(error),
         }
     }
@@ -1364,73 +1362,64 @@ impl VectorBackend {
         self.engine.engine_name()
     }
 
-    /// Build the engine selected by `config`.
+    /// Assemble the vector backend described by `config`.
     ///
-    /// Only handles the local engine synchronously. For async Qdrant
-    /// construction, use [`Self::from_config_async`].
-    pub fn from_config(config: &linkrs_config::VectorConfig) -> VectorCoordinatorResult<Self> {
-        match config.engine {
-            linkrs_config::VectorEngineKind::Local => {
-                let data_dir = config
-                    .local
-                    .data_dir
-                    .clone()
-                    .unwrap_or_else(|| std::path::PathBuf::from("vector"));
+    /// This is the single place that turns a `[vector]` configuration into an
+    /// engine: every entry point (server startup, the `GraphService` factory,
+    /// the embedded database) calls it, so a new knob or engine cannot be
+    /// wired into one path and missed in another.
+    ///
+    /// `Ok(None)` means the subsystem is deliberately off
+    /// ([`linkrs_config::VectorSelection::Off`]); a contradictory selection —
+    /// `engine = "qdrant"` with `[vector.qdrant].enabled = false` — is an
+    /// error, because the operator asked for an engine and then switched off
+    /// its only parameter block.
+    ///
+    /// The local engine needs a concrete directory: `[vector.local].data_dir`
+    /// must already be resolved by the caller, since where the default lives
+    /// is a deployment concern (`<storage_path>/vector` for the server, a
+    /// sibling of the database file when embedded).
+    pub async fn from_config(
+        config: &linkrs_config::VectorConfig,
+    ) -> VectorCoordinatorResult<Option<Self>> {
+        use linkrs_config::VectorSelection;
+
+        match config
+            .selection()
+            .map_err(|reason| VectorCoordinatorError::Vector(VectorError::ConfigError(reason)))?
+        {
+            VectorSelection::Off => Ok(None),
+            VectorSelection::Local => {
+                let data_dir = config.local.data_dir.clone().ok_or_else(|| {
+                    VectorCoordinatorError::Vector(VectorError::ConfigError(
+                        "the local vector engine needs a resolved [vector.local].data_dir"
+                            .to_string(),
+                    ))
+                })?;
                 let engine = crate::vector_defaults::assemble_local_engine(config, data_dir)
                     .map_err(|e| VectorCoordinatorError::Vector(VectorError::Internal(e)))?;
-                Ok(Self::from_local_arc_with_limit(
+                Ok(Some(Self::from_local_arc_with_limit(
                     engine,
                     config.limits.default_max_points,
-                ))
-            }
-            #[cfg(feature = "vector-qdrant")]
-            linkrs_config::VectorEngineKind::Qdrant => {
-                Err(VectorCoordinatorError::Vector(VectorError::ConfigError(
-                    "Qdrant engine requires async construction; use from_config_async".to_string(),
                 )))
             }
-        }
-    }
-
-    /// Async variant that also handles the Qdrant backend.
-    #[cfg(feature = "vector-qdrant")]
-    pub async fn from_config_async(
-        config: &linkrs_config::VectorConfig,
-    ) -> VectorCoordinatorResult<Self> {
-        match config.engine {
-            linkrs_config::VectorEngineKind::Local => Self::from_config(config),
-            linkrs_config::VectorEngineKind::Qdrant => {
-                // `is_vector_enabled` requires both switches; constructing a
-                // backend from a disabled Qdrant client would hand the caller
-                // an engine that rejects every operation.
-                if !config.qdrant.enabled {
-                    return Err(VectorCoordinatorError::Vector(VectorError::ConfigError(
-                        "vector.engine = \"qdrant\" requires vector.qdrant.enabled = true"
-                            .to_string(),
-                    )));
-                }
+            #[cfg(feature = "vector-qdrant")]
+            VectorSelection::Qdrant => {
                 let client_config = qdrant_client_config(&config.qdrant);
                 let manager = Arc::new(
                     VectorManager::new(client_config)
                         .await
                         .map_err(|e| VectorCoordinatorError::Vector(VectorError::from(e)))?,
                 );
-                Self::qdrant_with_defaults(
+                Ok(Some(Self::qdrant_with_defaults(
                     manager,
                     CollectionDefaults::from_qdrant(
                         &config.qdrant.collection,
                         config.limits.default_max_points,
                     ),
-                )
+                )?))
             }
         }
-    }
-
-    #[cfg(not(feature = "vector-qdrant"))]
-    pub async fn from_config_async(
-        config: &linkrs_config::VectorConfig,
-    ) -> VectorCoordinatorResult<Self> {
-        Self::from_config(config)
     }
 
     /// Engine health status.

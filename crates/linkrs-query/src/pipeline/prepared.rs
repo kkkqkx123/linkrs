@@ -258,10 +258,14 @@ impl<S: QueryStorage + 'static> crate::pipeline::QueryPipelineManager<S> {
             let space_name = query_context
                 .space_name()
                 .or_else(|| query_context.request_context().space_name.clone());
+            let in_write_context = crate::context::staged_writes_visible(
+                query_context.request_context().operation_context.as_ref(),
+            );
             let key = self.dml_memo_key_for(
                 effective_query.clone(),
                 space_name,
                 &query_context.request_context().parameters,
+                in_write_context,
             );
             self.find_dml_plan(&key).is_some()
         } else {
@@ -286,7 +290,10 @@ impl<S: QueryStorage + 'static> crate::pipeline::QueryPipelineManager<S> {
                 &effective_query,
                 &query_context.request_context().parameters,
             );
-            let cache_context = self.plan_cache_context(space_name, param_sig);
+            let in_write_context = crate::context::staged_writes_visible(
+                query_context.request_context().operation_context.as_ref(),
+            );
+            let cache_context = self.plan_cache_context(space_name, param_sig, in_write_context);
             let schema_version = Some(
                 self.schema_generation
                     .load(std::sync::atomic::Ordering::Relaxed),

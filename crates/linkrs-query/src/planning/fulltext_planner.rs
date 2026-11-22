@@ -128,10 +128,10 @@ impl FulltextSearchPlanner {
             Stmt::CreateFulltextIndex(create) => {
                 self.transform_create_ast(create, space_name, space_id, metadata)
             }
-            Stmt::DropFulltextIndex(drop) => self.transform_drop(drop),
-            Stmt::AlterFulltextIndex(alter) => self.transform_alter(alter),
+            Stmt::DropFulltextIndex(drop) => self.transform_drop(drop, space_id),
+            Stmt::AlterFulltextIndex(alter) => self.transform_alter(alter, space_id),
             Stmt::ShowFulltextIndex(show) => self.transform_show(show, space_id),
-            Stmt::DescribeFulltextIndex(describe) => self.transform_describe(describe),
+            Stmt::DescribeFulltextIndex(describe) => self.transform_describe(describe, space_id),
             Stmt::Search(search) => self.transform_search(search, metadata),
             Stmt::LookupFulltext(lookup) => self.transform_lookup(lookup, metadata),
             Stmt::MatchFulltext(matched) => self.transform_match(matched, space_id, metadata),
@@ -215,12 +215,20 @@ impl FulltextSearchPlanner {
         Ok(SubPlan::new(Some(node.into_enum()), None))
     }
 
-    fn transform_drop(&self, drop: &DropFulltextIndex) -> Result<SubPlan, PlannerError> {
-        let node = DropFulltextIndexNode::new(drop.index_name.clone(), drop.if_exists);
+    fn transform_drop(
+        &self,
+        drop: &DropFulltextIndex,
+        space_id: u64,
+    ) -> Result<SubPlan, PlannerError> {
+        let node = DropFulltextIndexNode::new(drop.index_name.clone(), drop.if_exists, space_id);
         Ok(SubPlan::new(Some(node.into_enum()), None))
     }
 
-    fn transform_alter(&self, alter: &AlterFulltextIndex) -> Result<SubPlan, PlannerError> {
+    fn transform_alter(
+        &self,
+        alter: &AlterFulltextIndex,
+        space_id: u64,
+    ) -> Result<SubPlan, PlannerError> {
         // Rebuilding online needs the sync driver and a primary-storage scan,
         // neither of which the DDL operator owns; reject before any feature
         // gate so the guidance is identical in every build.
@@ -233,7 +241,8 @@ impl FulltextSearchPlanner {
                 Self::FULLTEXT_REBUILD_UNAVAILABLE.to_string(),
             ));
         }
-        let node = AlterFulltextIndexNode::new(alter.index_name.clone(), alter.actions.clone());
+        let node =
+            AlterFulltextIndexNode::new(alter.index_name.clone(), alter.actions.clone(), space_id);
         Ok(SubPlan::new(Some(node.into_enum()), None))
     }
 
@@ -246,15 +255,17 @@ impl FulltextSearchPlanner {
         // current space is a separate dimension, carried by `space_id`.
         // Conflating the two made the default `SHOW FULLTEXT INDEX` filter on
         // a tag that never exists and return nothing.
-        let node = ShowFulltextIndexNode::new(show.pattern.clone(), show.from_schema.clone(), space_id);
+        let node =
+            ShowFulltextIndexNode::new(show.pattern.clone(), show.from_schema.clone(), space_id);
         Ok(SubPlan::new(Some(node.into_enum()), None))
     }
 
     fn transform_describe(
         &self,
         describe: &DescribeFulltextIndex,
+        space_id: u64,
     ) -> Result<SubPlan, PlannerError> {
-        let node = DescribeFulltextIndexNode::new(describe.index_name.clone());
+        let node = DescribeFulltextIndexNode::new(describe.index_name.clone(), space_id);
         Ok(SubPlan::new(Some(node.into_enum()), None))
     }
 
@@ -705,7 +716,7 @@ mod tests {
         };
 
         assert!(matches!(
-            planner.transform_alter(&alter),
+            planner.transform_alter(&alter, 1),
             Err(PlannerError::UnsupportedOperation(message))
                 if message == FulltextSearchPlanner::FULLTEXT_REBUILD_UNAVAILABLE
         ));
@@ -714,7 +725,7 @@ mod tests {
             actions: vec![AlterIndexAction::Optimize],
             ..alter
         };
-        assert!(planner.transform_alter(&optimize).is_ok());
+        assert!(planner.transform_alter(&optimize, 1).is_ok());
     }
 
     #[test]

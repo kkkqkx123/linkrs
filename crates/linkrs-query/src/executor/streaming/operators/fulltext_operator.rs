@@ -6,7 +6,7 @@ use crate::executor::streaming::chunk::DataChunk;
 use crate::executor::streaming::executor::StreamingExecutor;
 #[cfg(feature = "fulltext")]
 use crate::executor::streaming::operators::ddl_operator::make_single_row;
-use crate::executor::streaming::operators::index_manage::{manage_result, matches_show_filter};
+use crate::executor::streaming::operators::index_manage::{manage_result, ShowFilter};
 use crate::executor::streaming::operators::source_operator::OperatorConfig;
 use crate::executor::streaming::operators::spec::FulltextManageCommand;
 use crate::executor::streaming::runtime::ExecutionRuntime;
@@ -454,12 +454,16 @@ impl FulltextOperator {
                         Drop {
                             index_name,
                             if_exists,
+                            space_id,
                         } => {
                             if let Some(manager) = fulltext_manager {
                                 let matching: Vec<_> = manager
                                     .list_indexes()
                                     .into_iter()
-                                    .filter(|metadata| metadata.index_name == *index_name)
+                                    .filter(|metadata| {
+                                        metadata.space_id == *space_id
+                                            && metadata.index_name == *index_name
+                                    })
                                     .collect();
                                 if matching.is_empty() && !*if_exists {
                                     return Err(QueryError::execution(format!(
@@ -489,12 +493,16 @@ impl FulltextOperator {
                                 ));
                             }
                         }
-                        Describe { index_name } => {
+                        Describe {
+                            index_name,
+                            space_id,
+                        } => {
                             if let Some(manager) = fulltext_manager {
-                                if let Some(meta) = manager
-                                    .list_indexes()
-                                    .into_iter()
-                                    .find(|metadata| metadata.index_name == *index_name)
+                                if let Some(meta) =
+                                    manager.list_indexes().into_iter().find(|metadata| {
+                                        metadata.space_id == *space_id
+                                            && metadata.index_name == *index_name
+                                    })
                                 {
                                     let schema = Arc::new(Schema::new(vec![
                                         ColumnInfo {
@@ -548,17 +556,20 @@ impl FulltextOperator {
                             space_id,
                         } => {
                             if let Some(manager) = fulltext_manager {
+                                let filter = ShowFilter::new(
+                                    pattern.as_deref(),
+                                    from_schema.as_deref(),
+                                    *space_id,
+                                );
                                 let indexes: Vec<_> = manager
                                     .list_indexes()
                                     .into_iter()
                                     .filter(|metadata| {
-                                        metadata.space_id == *space_id
-                                            && matches_show_filter(
-                                                pattern.as_deref(),
-                                                from_schema.as_deref(),
-                                                Some(metadata.index_name.as_str()),
-                                                &metadata.tag_name,
-                                            )
+                                        filter.matches(
+                                            Some(metadata.index_name.as_str()),
+                                            &metadata.tag_name,
+                                            metadata.space_id,
+                                        )
                                     })
                                     .collect();
                                 let schema = Arc::new(Schema::new(vec![
@@ -605,13 +616,17 @@ impl FulltextOperator {
                         Alter {
                             index_name,
                             actions,
+                            space_id,
                         } => {
                             use crate::parser::ast::fulltext::AlterIndexAction;
                             if let Some(manager) = fulltext_manager {
                                 let matching: Vec<_> = manager
                                     .list_indexes()
                                     .into_iter()
-                                    .filter(|metadata| metadata.index_name == *index_name)
+                                    .filter(|metadata| {
+                                        metadata.space_id == *space_id
+                                            && metadata.index_name == *index_name
+                                    })
                                     .collect();
                                 if matching.is_empty() {
                                     return Err(QueryError::execution(format!(

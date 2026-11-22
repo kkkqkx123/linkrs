@@ -39,9 +39,11 @@ fn point(
     extra_payload: Option<HashMap<String, serde_json::Value>>,
 ) -> VectorPoint {
     let mut payload = HashMap::new();
+    // The coordinator filters on the length-prefixed group id
+    // (`tag_len_tag_field_len_field`), not on a bare `tag_field`.
     payload.insert(
         "group_id".to_string(),
-        serde_json::Value::String("item_vec".to_string()),
+        serde_json::Value::String("4_item_3_vec".to_string()),
     );
     if let Some(extra) = extra_payload {
         for (k, v) in extra {
@@ -296,6 +298,77 @@ async fn vector_show_index_lists_catalog_entry() {
     assert!(
         flat.iter().any(|cell| cell.contains("idx_item_vec")),
         "catalog must contain idx_item_vec, got {flat:?}"
+    );
+}
+
+/// `SHOW VECTOR INDEX` is scoped to the space the statement runs in.
+///
+/// Two spaces may hold indexes built on the same tag and field, so a listing
+/// that ignores the space mixes catalogs that never see each other. The
+/// unfiltered form used to substitute the space *name* for the `FROM
+/// <schema>` tag filter, which no tag can match, and returned nothing at all.
+#[tokio::test]
+async fn vector_show_index_is_scoped_to_the_current_space() {
+    let env = setup_env().await;
+
+    for sql in [
+        "CREATE SPACE vec_other (vid_type=STRING)",
+        "USE vec_other",
+        "CREATE TAG item(name: STRING, vec: VECTOR(3))",
+        "CREATE VECTOR INDEX idx_other_vec ON item(vec) WITH (vector_size=3, distance='cosine')",
+    ] {
+        env.exec(sql)
+            .await
+            .unwrap_or_else(|error| panic!("setup statement '{sql}' failed: {error}"));
+    }
+
+    let listed = |rows: &Vec<Vec<linkrs::core::Value>>| -> Vec<String> {
+        rows.iter()
+            .flatten()
+            .map(|value| format!("{value:?}"))
+            .collect()
+    };
+
+    let rows = env
+        .exec("SHOW VECTOR INDEX")
+        .await
+        .expect("SHOW VECTOR INDEX should succeed");
+    let flat = listed(&rows);
+    assert!(
+        flat.iter().any(|cell| cell.contains("idx_other_vec")),
+        "the current space's own index must be listed, got {flat:?}"
+    );
+    assert!(
+        !flat.iter().any(|cell| cell.contains("idx_item_vec")),
+        "another space's index must not be listed, got {flat:?}"
+    );
+
+    env.exec("USE vec_e2e").await.expect("switch back");
+    let rows = env
+        .exec("SHOW VECTOR INDEX")
+        .await
+        .expect("SHOW VECTOR INDEX should succeed");
+    let flat = listed(&rows);
+    assert!(
+        flat.iter().any(|cell| cell.contains("idx_item_vec")),
+        "the default form must list the current space's index, got {flat:?}"
+    );
+    assert!(
+        !flat.iter().any(|cell| cell.contains("idx_other_vec")),
+        "another space's index must not be listed, got {flat:?}"
+    );
+
+    // `DESCRIBE` resolves the name inside the current space for the same
+    // reason: a name that only exists elsewhere is not a found index.
+    let rows = env
+        .exec("DESCRIBE VECTOR INDEX idx_other_vec")
+        .await
+        .expect("DESCRIBE VECTOR INDEX should succeed");
+    let flat = listed(&rows);
+    assert!(
+        flat.iter()
+            .any(|cell| cell.contains("not-found") || cell.contains("idx_other_vec")),
+        "describe of a foreign index is reported, got {flat:?}"
     );
 }
 

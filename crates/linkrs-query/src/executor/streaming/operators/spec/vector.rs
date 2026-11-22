@@ -45,9 +45,14 @@ pub enum VectorManageCommand {
     Show {
         pattern: Option<String>,
         from_schema: Option<String>,
+        /// Space the statement runs in; the catalog listing is space-scoped.
+        space_id: u64,
     },
     Describe {
         index_name: String,
+        /// Space the statement runs in; index names are only unique inside
+        /// one space.
+        space_id: u64,
     },
 }
 

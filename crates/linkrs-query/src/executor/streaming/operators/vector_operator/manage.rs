@@ -8,7 +8,7 @@ use crate::executor::streaming::executor::StreamingExecutor;
 #[cfg(feature = "vector")]
 use crate::executor::streaming::operators::ddl_operator::make_single_row;
 use crate::executor::streaming::operators::index_manage::{
-    manage_result, matches_show_filter, unresolved_drop, IndexKind,
+    manage_result, unresolved_drop, IndexKind, ShowFilter,
 };
 use crate::executor::streaming::operators::spec::VectorManageCommand;
 use linkrs_core::error::QueryError;
@@ -230,20 +230,21 @@ pub(crate) fn handle(
                 VectorManageCommand::Show {
                     pattern,
                     from_schema,
+                    space_id,
                 } => {
                     #[cfg(feature = "vector")]
                     {
                         if let Some(coordinator) = vector_coordinator {
+                            let filter = ShowFilter::new(
+                                pattern.as_deref(),
+                                from_schema.as_deref(),
+                                *space_id,
+                            );
                             let indexes: Vec<_> = coordinator
                                 .list_indexes()
                                 .into_iter()
                                 .filter(|m| {
-                                    matches_show_filter(
-                                        pattern.as_deref(),
-                                        from_schema.as_deref(),
-                                        m.index_name.as_deref(),
-                                        &m.tag_name,
-                                    )
+                                    filter.matches(m.index_name.as_deref(), &m.tag_name, m.space_id)
                                 })
                                 .collect();
                             let schema = Arc::new(Schema::new(vec![
@@ -291,18 +292,21 @@ pub(crate) fn handle(
                     }
                     #[cfg(not(feature = "vector"))]
                     {
-                        let _ = (pattern, from_schema);
+                        let _ = (pattern, from_schema, space_id);
                         Err(QueryError::feature_disabled("vector", "SHOW VECTOR INDEX"))
                     }
                 }
-                VectorManageCommand::Describe { index_name } => {
+                VectorManageCommand::Describe {
+                    index_name,
+                    space_id,
+                } => {
                     #[cfg(feature = "vector")]
                     {
                         if let Some(coordinator) = vector_coordinator {
-                            let found = coordinator
-                                .list_indexes()
-                                .into_iter()
-                                .find(|m| m.index_name.as_deref() == Some(index_name.as_str()));
+                            let found = coordinator.list_indexes().into_iter().find(|m| {
+                                m.space_id == *space_id
+                                    && m.index_name.as_deref() == Some(index_name.as_str())
+                            });
                             match found {
                                 Some(m) => {
                                     let vector_count = coordinator
@@ -358,7 +362,7 @@ pub(crate) fn handle(
                     }
                     #[cfg(not(feature = "vector"))]
                     {
-                        let _ = index_name;
+                        let _ = (index_name, space_id);
                         Err(QueryError::feature_disabled(
                             "vector",
                             "DESCRIBE VECTOR INDEX",
