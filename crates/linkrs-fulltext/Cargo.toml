@@ -5,7 +5,6 @@ edition.workspace = true
 description = "Full-text search engine based on BM25 and Tantivy"
 license.workspace = true
 repository.workspace = true
-homepage.workspace = true
 autobenches = false
 
 [dependencies]

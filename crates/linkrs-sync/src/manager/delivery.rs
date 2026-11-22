@@ -943,6 +943,12 @@ impl super::SyncManager {
                 return false;
             }
         }
+        #[cfg(feature = "fulltext")]
+        if let Some(coordinator) = self.sync_coordinator.as_ref() {
+            if !coordinator.is_local() {
+                return false;
+            }
+        }
         true
     }
 
@@ -961,6 +967,12 @@ impl super::SyncManager {
         #[cfg(feature = "vector")]
         if let Some(coordinator) = self.vector_coordinator.as_ref() {
             if !coordinator.backend().is_local() {
+                return false;
+            }
+        }
+        #[cfg(feature = "fulltext")]
+        if let Some(coordinator) = self.sync_coordinator.as_ref() {
+            if !coordinator.is_local() {
                 return false;
             }
         }

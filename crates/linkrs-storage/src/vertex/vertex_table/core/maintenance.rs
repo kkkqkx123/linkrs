@@ -61,11 +61,6 @@ impl VertexTable {
         self.columns.mark_column_unavailable(name, reason);
     }
 
-    /// Clear unavailable marks after a repaired baseline load.
-    pub fn clear_unavailable_columns(&self) {
-        self.columns.clear_unavailable_columns();
-    }
-
     pub fn total_count(&self) -> usize {
         self.id_indexer.len()
     }

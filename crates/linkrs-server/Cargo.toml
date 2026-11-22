@@ -5,7 +5,6 @@ edition.workspace = true
 description = "Linkrs network service layer (HTTP/gRPC)"
 license.workspace = true
 repository.workspace = true
-homepage.workspace = true
 
 [build-dependencies]
 tonic-build = { workspace = true, optional = true }

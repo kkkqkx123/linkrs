@@ -52,7 +52,6 @@ rust-version = "1.97"
 authors = ["Linkrs Contributors"]
 license = "Apache-2.0"
 repository = "https://github.com/kkkqkx123/linkrs"
-homepage = "https://github.com/kkkqkx123/linkrs"
 
 [workspace.dependencies]
 # serialization
@@ -191,7 +190,6 @@ description = "A lightweight single-node graph database implemented in Rust"
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-homepage.workspace = true
 autobenches = false
 
 [lib]

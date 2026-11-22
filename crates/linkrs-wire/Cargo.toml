@@ -5,7 +5,6 @@ edition.workspace = true
 description = "Wire contract DTOs shared between linkrs-api and linkrs-cli"
 license.workspace = true
 repository.workspace = true
-homepage.workspace = true
 
 [dependencies]
 serde.workspace = true

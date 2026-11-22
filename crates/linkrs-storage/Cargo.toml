@@ -5,7 +5,6 @@ edition.workspace = true
 description = "Storage engine with CSR and memory-mapped containers"
 license.workspace = true
 repository.workspace = true
-homepage.workspace = true
 autobenches = false
 
 [features]

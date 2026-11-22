@@ -5,7 +5,6 @@ edition.workspace = true
 description = "Synchronization primitives for Linkrs"
 license.workspace = true
 repository.workspace = true
-homepage.workspace = true
 
 [features]
 # Built-in local vector engine. Enables the `vector_sync` module and

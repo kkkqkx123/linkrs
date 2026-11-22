@@ -20,6 +20,15 @@ fn props(name: &str) -> Vec<(std::sync::Arc<str>, Value)> {
     vec![("name".into(), Value::from(name))]
 }
 
+// Test-only helper: drop column-unavailable marks so a retry after a
+// simulated failed commit starts from a clean slate. Production clears
+// these marks only on a full baseline load, which is outside this scope.
+fn clear_unavailable_columns(table: &ShardedVertexTable) {
+    for shard in table.shards.iter() {
+        shard.read().columns.clear_unavailable_columns();
+    }
+}
+
 #[test]
 fn scoped_insert_is_self_consistent_and_older_snapshots_miss() {
     let table = ShardedVertexTable::with_config(7, "scoped".into(), test_schema(), 4);
@@ -390,7 +399,7 @@ fn grouped_apply_failure_aborts_every_pending_row() {
     assert_eq!(table.lookup_pk("b", ts), PkLookup::Missing);
     assert_eq!(table.approximate_total_count(), 0);
 
-    table.shards[0].read().clear_unavailable_columns();
+    clear_unavailable_columns(&table);
     let mut retry = WriteScope::new(ts);
     table
         .insert_with_scope("a", &props("a"), ts, &mut retry)

@@ -63,9 +63,9 @@ pub struct VectorIndexManager {
 /// Registry file name inside the attached work directory.
 const REGISTRY_FILE_NAME: &str = "vector_metadata.json";
 
-/// On-disk form of one logical index. The physical collection name is not
-/// stored: it is derived from the location and the active granularity, so a
-/// granularity change never leaves a stale name behind.
+/// On-disk form of one logical index. Physical routing state is stored so a
+/// published remote collection keeps serving after a restart; older files
+/// that only carry the derived fields still load through the defaults.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct PersistedLogicalIndex {
     space_id: u64,
@@ -74,6 +74,14 @@ struct PersistedLogicalIndex {
     config: CollectionConfig,
     created_at: chrono::DateTime<chrono::Utc>,
     index_name: Option<String>,
+    #[serde(default)]
+    collection_name: Option<String>,
+    #[serde(default)]
+    live_name: Option<String>,
+    #[serde(default)]
+    collection_override: Option<String>,
+    #[serde(default)]
+    promote_backup: Option<String>,
 }
 
 /// Scratch rebuild collection invisible to the query path.
@@ -159,13 +167,26 @@ impl VectorIndexManager {
         let entries: Vec<PersistedLogicalIndex> = self
             .logical_indexes
             .iter()
-            .map(|entry| PersistedLogicalIndex {
-                space_id: entry.key().space_id,
-                tag_name: entry.key().tag_name.clone(),
-                field_name: entry.key().field_name.clone(),
-                config: entry.value().config.clone(),
-                created_at: entry.value().created_at,
-                index_name: entry.value().index_name.clone(),
+            .map(|entry| {
+                let live = self.live_collection_name(entry.key());
+                PersistedLogicalIndex {
+                    space_id: entry.key().space_id,
+                    tag_name: entry.key().tag_name.clone(),
+                    field_name: entry.key().field_name.clone(),
+                    config: entry.value().config.clone(),
+                    created_at: entry.value().created_at,
+                    index_name: entry.value().index_name.clone(),
+                    collection_name: Some(entry.value().name.clone()),
+                    live_name: Some(live.clone()),
+                    collection_override: self
+                        .collection_overrides
+                        .get(entry.key())
+                        .map(|target| target.value().clone()),
+                    promote_backup: self
+                        .promote_backups
+                        .get(&live)
+                        .map(|backup| backup.value().clone()),
+                }
             })
             .collect();
         let content = match serde_json::to_string_pretty(&entries) {
@@ -219,7 +240,21 @@ impl VectorIndexManager {
         for entry in entries {
             let location =
                 VectorIndexLocation::new(entry.space_id, &entry.tag_name, &entry.field_name);
-            let collection_name = self.collection_name_for(&location);
+            let remap = entry.collection_override.clone();
+            if let Some(target) = remap.as_ref() {
+                self.collection_overrides
+                    .insert(location.clone(), target.clone());
+            }
+            if let Some(backup) = entry.promote_backup.as_ref() {
+                let live = entry
+                    .live_name
+                    .clone()
+                    .unwrap_or_else(|| self.live_collection_name(&location));
+                self.promote_backups.insert(live, backup.clone());
+            }
+            let collection_name = remap
+                .or(entry.collection_name)
+                .unwrap_or_else(|| self.collection_name_for(&location));
             self.logical_indexes.insert(
                 location,
                 IndexMetadata {
@@ -322,13 +357,6 @@ impl VectorIndexManager {
     /// physical isolation, no group filter needed.
     pub fn group_id_for(&self, loc: &VectorIndexLocation) -> Option<String> {
         loc.group_id_with(self.granularity())
-    }
-
-    /// Vector rebuilds publish by renaming a local directory or by remapping
-    /// the remote collection pointer, so both backends support rebuilding a
-    /// live index.
-    pub fn supports_online_rebuild(&self) -> bool {
-        true
     }
 
     // ── Index lifecycle ───────────────────────────────────────────────
@@ -903,6 +931,7 @@ impl VectorIndexManager {
     /// publish remap) or clear it back to the derived live name.
     pub fn set_collection_override(&self, loc: &VectorIndexLocation, target: String) {
         self.collection_overrides.insert(loc.clone(), target);
+        self.save_logical_indexes();
     }
 
     /// Point the stored logical registration at another physical collection
@@ -912,11 +941,13 @@ impl VectorIndexManager {
         if let Some(mut meta) = self.logical_indexes.get_mut(loc) {
             meta.name = target;
         }
+        self.save_logical_indexes();
     }
 
     /// Clear a publish remap override.
     pub fn clear_collection_override(&self, loc: &VectorIndexLocation) {
         self.collection_overrides.remove(loc);
+        self.save_logical_indexes();
     }
 
     /// Retained pre-publish collection for one derived live name, if any.
@@ -970,6 +1001,7 @@ impl VectorIndexManager {
             let backup = format!("{}{}", temp.live_name, backup_suffix);
             self.promote_backups
                 .insert(temp.live_name.clone(), backup.clone());
+            self.save_logical_indexes();
             self.temp_collections.remove(&(
                 loc.space_id,
                 loc.tag_name.clone(),
@@ -1198,6 +1230,7 @@ impl VectorIndexManager {
             meta.name = backup.clone();
         }
         self.collection_overrides.insert(loc, backup.clone());
+        self.save_logical_indexes();
         Ok(backup)
     }
 
@@ -1484,8 +1517,40 @@ mod registry_tests {
         assert_eq!(indexes[0].space_id, 1);
         assert_eq!(indexes[0].tag_name, "user");
         assert_eq!(indexes[0].field_name, "embedding");
-        // The collection name is derived, not persisted.
+        // A freshly created index still resolves to its derived name.
         assert_eq!(indexes[0].collection_name, "space_vec_1");
+    }
+
+    #[tokio::test]
+    async fn publish_routing_state_survives_reopen() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        {
+            let manager = manager(directory.path());
+            manager
+                .create_vector_index(2, "user", "embedding", 4, DistanceMetric::Cosine)
+                .await
+                .expect("create index");
+            let location = VectorIndexLocation::new(2, "user", "embedding");
+            manager.set_collection_override(&location, "space_vec_2.rebuild-9".to_string());
+            manager.promote_backups.insert(
+                "space_vec_2".to_string(),
+                "space_vec_2.old-8".to_string(),
+            );
+            manager.save_logical_indexes();
+        }
+
+        let reopened = manager(directory.path());
+        let location = VectorIndexLocation::new(2, "user", "embedding");
+        assert_eq!(
+            reopened.collection_name_for(&location),
+            "space_vec_2.rebuild-9",
+            "a published remote pointer must keep serving after a reopen"
+        );
+        assert_eq!(
+            reopened.promote_backup_for("space_vec_2").as_deref(),
+            Some("space_vec_2.old-8"),
+            "the retained promote backup must survive a reopen"
+        );
     }
 
     #[tokio::test]

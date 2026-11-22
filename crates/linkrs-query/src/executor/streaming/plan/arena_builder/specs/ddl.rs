@@ -6,11 +6,11 @@ mod sink;
 mod user;
 mod vector;
 
-pub use fulltext::*;
-pub use schema::*;
-pub use sink::*;
-pub use user::*;
-pub use vector::*;
+pub(in crate::executor::streaming::plan::arena_builder) use fulltext::*;
+pub(in crate::executor::streaming::plan::arena_builder) use schema::*;
+pub(in crate::executor::streaming::plan::arena_builder) use sink::*;
+pub(in crate::executor::streaming::plan::arena_builder) use user::*;
+pub(in crate::executor::streaming::plan::arena_builder) use vector::*;
 
 #[cfg(test)]
 mod tests {

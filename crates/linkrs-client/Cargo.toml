@@ -5,7 +5,6 @@ edition.workspace = true
 description = "HTTP client and session state for Linkrs"
 license.workspace = true
 repository.workspace = true
-homepage.workspace = true
 
 [build-dependencies]
 tonic-build = { workspace = true, optional = true }

@@ -196,7 +196,7 @@ pub trait StorageReader: Send + Sync + std::fmt::Debug {
         &self,
         space: &str,
         node_ids: &[VertexId],
-        handles: Option<&[Option<(u32, LabelId)>]>,
+        _handles: Option<&[Option<(u32, LabelId)>]>,
         direction: EdgeDirection,
         edge_types: &[String],
     ) -> Result<Vec<Vec<EdgeTopology>>, StorageError> {

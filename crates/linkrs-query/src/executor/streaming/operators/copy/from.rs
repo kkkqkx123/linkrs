@@ -358,11 +358,11 @@ fn collect_properties(mapping: &ColumnMapping, rec: &[String]) -> HashMap<Arc<st
     props
 }
 
-/// Thread-local memoization of endpoint string parsing. Parsing is a pure
-/// function of the cell text, so cached values never go stale; the bound
-/// keeps long-lived import processes from accumulating distinct ids without
-/// limit. Thread-local rather than shared so the parallel record build below
-/// pays no locking.
+// Thread-local memoization of endpoint string parsing. Parsing is a pure
+// function of the cell text, so cached values never go stale; the bound
+// keeps long-lived import processes from accumulating distinct ids without
+// limit. Thread-local rather than shared so the parallel record build below
+// pays no locking.
 thread_local! {
     static VID_PARSE_CACHE: RefCell<HashMap<String, VertexId>> =
         RefCell::new(HashMap::new());

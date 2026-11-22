@@ -111,6 +111,13 @@ impl FulltextIndexManager {
         }
     }
 
+    /// Whether this manager serves indexes in-process rather than through a
+    /// remote cluster. Delivery fast paths require every target to be local.
+    #[cfg(feature = "fulltext")]
+    pub fn is_local(&self) -> bool {
+        self.config.backend == FulltextBackendKind::Local
+    }
+
     /// Whether this backend can publish a rebuilt index without stopping
     /// writes. The local backend renames a scratch directory into place; the ES
     /// backend would need an alias swap, which is not implemented, so callers

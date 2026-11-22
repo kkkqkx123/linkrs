@@ -5,7 +5,6 @@ edition.workspace = true
 description = "Central observability primitives: StatsManager, latency histograms, error and slow-query statistics"
 license.workspace = true
 repository.workspace = true
-homepage.workspace = true
 
 [dependencies]
 serde = { workspace = true, features = ["rc"] }

@@ -2,9 +2,8 @@ use serde_json::{json, Value};
 
 use crate::error::VectorClientError;
 use crate::types::{
-    CollectionConfig, CompressionRatio, DistanceMetric, HnswConfig, IndexConfig, OptimizersHints,
-    PayloadSchemaType, QuantizationConfig, QuantizationType, StorageHints, WalHints,
-    DEFAULT_WITH_PAYLOAD,
+    CollectionConfig, CompressionRatio, DistanceMetric, HnswConfig, IndexConfig, PayloadSchemaType,
+    QuantizationConfig, QuantizationType, DEFAULT_WITH_PAYLOAD,
 };
 
 /// Translate a shared metric into Qdrant's REST spelling.
@@ -368,6 +367,7 @@ pub fn build_search_batch_body(searches: Vec<Value>) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::{OptimizersHints, StorageHints, WalHints};
 
     #[test]
     fn test_distance_to_qdrant() {

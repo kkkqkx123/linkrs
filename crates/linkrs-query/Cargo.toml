@@ -5,7 +5,6 @@ edition.workspace = true
 description = "Query engine, parser, and executor for Linkrs"
 license.workspace = true
 repository.workspace = true
-homepage.workspace = true
 autobenches = false
 
 [dependencies]

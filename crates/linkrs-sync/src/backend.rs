@@ -27,6 +27,7 @@ use vector_client::VectorManager;
 use super::circuit_breaker::{
     with_circuit_breaker, CircuitBreaker, CircuitBreakerConfig, CircuitBreakerError,
 };
+#[cfg(feature = "vector-qdrant")]
 use super::vector_defaults::CollectionDefaults;
 use super::vector_error::{VectorCoordinatorError, VectorCoordinatorResult, VectorError};
 
@@ -1777,20 +1778,6 @@ impl VectorBackend {
             .await
     }
 
-    /// Whether payload indexes are supported. Both the local and Qdrant
-    /// handles implement `create_payload_index`, so this holds for every
-    /// current backend. A future backend that cannot must expose the
-    /// capability on `VectorEngineHandle` instead of hard-coding it here.
-    pub fn supports_payload_index(&self) -> bool {
-        true
-    }
-
-    /// Whether a stream-shaped search/scroll surface is available. Both
-    /// handles provide it (the remote handle buffers a unary call into a
-    /// stream), so callers may rely on it regardless of backend.
-    pub fn supports_streaming(&self) -> bool {
-        true
-    }
 }
 
 #[cfg(all(test, feature = "vector-qdrant"))]

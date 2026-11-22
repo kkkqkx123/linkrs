@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use tracing::debug;
 
 use crate::backend::VectorBackend;
-use crate::vector_error::{VectorCoordinatorError, VectorCoordinatorResult};
+use crate::vector_error::VectorCoordinatorResult;
 use crate::VectorIndexManager;
 use linkrs_core::Value;
 

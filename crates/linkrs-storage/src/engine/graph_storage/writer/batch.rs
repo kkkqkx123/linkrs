@@ -218,7 +218,7 @@ pub(crate) fn batch_insert_edges(
 /// sequential loop this replaces.
 fn batch_insert_grouped(
     ctx: &GraphStorageContext,
-    space: &str,
+    _space: &str,
     space_id: u64,
     edges: &[Edge],
     resolved: &HashMap<String, ResolvedEdgeType>,

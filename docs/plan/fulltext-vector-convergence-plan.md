@@ -124,7 +124,7 @@ struct PersistedLogicalIndex {
 
 写点覆盖 `create_vector_index`、`create_index_with_config`、`register_logical_index`、`drop_vector_index`；写失败只告警，内存注册表继续服务（与 fulltext 元数据缓存的降级方式一致）。加载在 `attach_registry_directory` 内完成，因此 `list_indexes()`、重建恢复、管理端点在重启后与投递路径看到同一份索引集合。
 
-未持久化 `collection_overrides`（Qdrant publish 指针）与 `vector_count`：前者是既有遗留，重启后回落到派生名；后者是运行期统计，重启归零。
+`collection_overrides`（Qdrant publish 指针）与 `promote_backups` 已纳入注册表持久化，详见 `sync-backend-design-decisions.md` 阶段 4；`vector_count` 是运行期统计，重启归零。
 
 ## 4. 一致性与性能收敛
 
@@ -180,7 +180,7 @@ struct FulltextReceiverSlot {
 | `DisabledEngine` 与散落在搜索路径的 `is_disabled_engine()` 守卫 | `vector-client` 对外仍把它当作 feature 关闭时的占位实现；守卫是防御性的，删除会牵动十余个函数与错误类型，本次只清掉"禁用仍成功建索引"这一条会造成错误认知的语义 |
 | 查询层两套门面（`FulltextProvider` 包 manager，`VectorProvider` 包 coordinator） | 真正统一需要把与引擎无关的能力声明下沉到中立 crate，属于架构决策，需单独立项；本次只把能力查询做成同名方法，让上层的判定点先统一 |
 | ES 后端的在线重建（alias swap） | 需要 `linkrs_es_{index}_{gen}` + `_aliases` 切换，本次先在能力查询处显式拒绝 |
-| Qdrant `collection_overrides` 跨重启 | 重启后回落到派生 collection 名，属于既有遗留 |
+| Qdrant `collection_overrides` 跨重启 | 已由 `sync-backend-design-decisions.md` 阶段 4 落地：随注册表持久化，重采纳仅作 crash 窗口兜底 |
 | 读己之写（RYW） | 两侧都是 `let _ = ryw_config;`，需要语义设计而非收敛 |
 
 ## 7. 验证

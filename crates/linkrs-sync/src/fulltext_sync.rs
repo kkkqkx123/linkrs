@@ -29,6 +29,12 @@ impl FulltextSyncCoordinator {
         self
     }
 
+    /// Whether the fulltext backend runs in-process. Network-backed indexes
+    /// must stay on the durable outbox path.
+    pub fn is_local(&self) -> bool {
+        self.fulltext_manager.is_local()
+    }
+
     pub fn fulltext_manager(&self) -> &Arc<FulltextIndexManager> {
         &self.fulltext_manager
     }

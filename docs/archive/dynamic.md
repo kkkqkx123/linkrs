@@ -71,6 +71,14 @@
 - **分析**: 提交和回滚订阅者由统计、存储及后续扩展组件在运行时注册，闭包捕获的状态类型无法预先枚举。回调仅在事务终结后执行，不位于读写操作的逐记录热路径，动态分发开销可忽略。
 - **状态**: ✅ 保留
 
+#### 1.9 sync 层向量后端句柄
+
+- **文件**: `crates/linkrs-sync/src/backend.rs:40,1265`，`crates/linkrs-sync/src/metrics_handle.rs:28`
+- **代码**: `engine: Arc<dyn VectorEngineHandle>`
+- **分析**: `VectorBackend` 在构造时按配置选择进程内 Tantivy/simvec 引擎或远程 Qdrant 客户端，之后所有协调、投递、重建代码只面向 `VectorEngineHandle` trait。`MetricsEngineHandle` 是同一 trait 的装饰器，负责把索引与搜索操作计入统一的 `StatsManager`。后端差异通过 `is_in_process`、`supports_atomic_promote`、`owns_space_slice_reclaim` 这类能力查询表达，而不是在调用点按引擎名分支。
+- **边界**: trait 仍保留 `local_engine()` / `qdrant_manager()` 两个具体类型访问口，目前仅用于启动期指标采样，见 `docs/plan/sync-backend-design-decisions.md` 开放点。
+- **状态**: ✅ 保留 - 运行时选择后端的需求明确，且操作以 I/O 为主，虚调用开销可忽略
+
 ### 2. 存储层抽象
 
 #### 2.1 存储客户端
@@ -165,6 +173,13 @@
 - **分析**: 全文索引管理器需要支持多种搜索引擎实现（Bm25SearchEngine、InversearchEngine）。搜索引擎类型由配置决定，运行时动态创建。搜索操作是 I/O 密集型，虚函数调用开销相对于磁盘 I/O 可忽略不计。使用动态分发提供了良好的扩展性，添加新引擎只需实现 SearchEngine trait，无需修改现有代码。
 - **状态**: ✅ 保留
 
+#### 8.2 sync 层全文搜索引擎
+
+- **文件**: `crates/linkrs-fulltext/src/manager.rs:25`
+- **代码**: `engines: DashMap<IndexKey, Arc<dyn FulltextSearchEngine>>`
+- **分析**: `FulltextIndexManager` 按配置为每个逻辑索引构造本地 Tantivy 引擎或远程 Elasticsearch 引擎，两者都实现 `FulltextSearchEngine`。sync 层的投递与一致性栅栏面向 trait 工作，增量同步对后端透明；在线重建能力由管理器的 `supports_online_rebuild()` 显式声明，ES 当前在入口处拒绝。与 8.1 的关系：8.1 描述的是查询层门面，本节是全文管理器内部的引擎实例。
+- **状态**: ✅ 保留 - 运行时后端选择与 I/O 密集特性使动态分发合理
+
 ### 保留的 dyn 使用
 
 | 位置                                               | 使用方式       | 保留原因                         |
@@ -183,6 +198,8 @@
 | `Box<dyn FnOnce() + Send>`                         | 线程任务       | 闭包类型编译时无法确定           |
 | `Arc<dyn SearchEngine>`                            | 搜索引擎抽象   | I/O 密集型操作，扩展性优先       |
 | `Arc<dyn VectorEngine>`                            | 向量引擎抽象   | 运行时多态，支持多协议（gRPC/HTTP）和禁用状态 |
+| `Arc<dyn VectorEngineHandle>`                      | sync 向量后端抽象 | 运行时选择本地/远程后端，能力查询分流   |
+| `Arc<dyn FulltextSearchEngine>`                    | sync 全文引擎抽象 | 运行时选择 Tantivy/Elasticsearch   |
 | `Arc<dyn Fn(&TransactionEvent)>`                  | 事务生命周期回调 | 运行时注册提交和回滚订阅者       |
 
 ### 已优化的 dyn 使用
