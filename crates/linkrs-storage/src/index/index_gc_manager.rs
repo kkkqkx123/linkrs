@@ -225,9 +225,9 @@ impl IndexGcManager {
         if self.needs_compaction() {
             let compacted = self.run_compaction(safe_ts);
             if compacted > 0 {
-                tracing::info!(
-                    indexes_compacted = compacted,
-                    "Generational compaction completed"
+                log::info!(
+                    "Generational compaction completed: indexes_compacted={}",
+                    compacted
                 );
             }
         }
@@ -235,9 +235,9 @@ impl IndexGcManager {
         // Retire generations whose max_ts is past the safe timestamp
         let retired = self.index_manager.retire_generations(safe_ts);
         if retired > 0 {
-            tracing::info!(
-                generations_retired = retired,
-                "Generation retirement completed"
+            log::info!(
+                "Generation retirement completed: generations_retired={}",
+                retired
             );
         }
 
@@ -321,7 +321,7 @@ impl IndexGcManager {
                 Ok(true) => compacted += 1,
                 Ok(false) => {}
                 Err(e) => {
-                    tracing::warn!("Compaction failed for index {}: {}", identity.index_id, e);
+                    log::warn!("Compaction failed for index {}: {}", identity.index_id, e);
                 }
             }
         }
@@ -351,25 +351,25 @@ impl IndexGcManager {
         let interval = Duration::from_millis(self.config.interval_ms);
         let min_interval = Duration::from_millis(self.config.min_interval_between_gc_ms);
 
-        tracing::info!("Index GC background loop started");
+        log::info!("Index GC background loop started");
         let handle = self
             .pool
             .spawn_periodic(running, interval, min_interval, move || {
-                tracing::debug!("Index GC pass started");
+                log::debug!("Index GC pass started");
 
                 let executed = manager.maintenance.tick(|| {
                     if manager.needs_aggressive_gc() {
                         let removed = manager.run_aggressive_gc();
                         if removed > 0 {
-                            tracing::debug!(entries_removed = removed, "Aggressive GC completed");
+                            log::debug!("Aggressive GC completed: entries_removed={}", removed);
                         }
                         removed > 0
                     } else {
                         let stats = manager.run_gc_pass();
                         if !stats.is_empty() {
-                            tracing::debug!(
-                                vertex_removed = stats.vertex_entries_removed,
-                                "GC pass completed"
+                            log::debug!(
+                                "GC pass completed: vertex_removed={}",
+                                stats.vertex_entries_removed
                             );
                         }
                         !stats.is_empty()

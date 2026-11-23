@@ -18,7 +18,7 @@
 //! These helpers are the single source of truth for the conversions; both the
 //! gRPC and the HTTP engine must go through them.
 
-use tracing::warn;
+use log::warn;
 
 use crate::types::DistanceMetric;
 
@@ -62,8 +62,8 @@ pub fn outbound_score_threshold(metric: Option<DistanceMetric>, threshold: f32) 
         Some(DistanceMetric::Euclid) => {
             if threshold > 1.0 {
                 warn!(
-                    threshold,
-                    "Euclid similarity threshold exceeds the maximum score of 1.0; clamping to exact-match distance"
+                    "Euclid similarity threshold {} exceeds the maximum score of 1.0; clamping to exact-match distance",
+                    threshold
                 );
             }
             euclid_score_threshold_to_distance_threshold(threshold)

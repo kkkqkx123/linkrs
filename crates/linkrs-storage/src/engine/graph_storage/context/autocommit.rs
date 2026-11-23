@@ -380,8 +380,9 @@ impl AutoCommitBatchWindow {
     /// plus one table-log sweep; sub-Sync levels skip both fsyncs and only
     /// publish the in-memory barriers, trading crash durability for speed.
     pub fn finalize_group(&self, durability: DurabilityLevel) -> StorageResult<()> {
-        // Segment timers are opt-in so production commits pay no clock reads.
-        let segment_timing = std::env::var_os("LINKRS_COMMIT_SEGMENTS").is_some();
+        // Segment timers are gated by the debug log level so production
+        // commits pay no clock reads unless diagnostics are enabled.
+        let segment_timing = log::log_enabled!(log::Level::Debug);
         let mut apply_us = 0u128;
         let mut wal_us = 0u128;
         let mut sync_us = 0u128;
@@ -480,7 +481,7 @@ impl AutoCommitBatchWindow {
             timestamp_us += start.elapsed().as_micros();
         }
         if segment_timing {
-            eprintln!(
+            log::debug!(
                 "COMMIT segments: statements={} apply={:.1}ms wal={:.1}ms sync={:.1}ms timestamp={:.1}ms",
                 self.statement_count.load(Ordering::SeqCst),
                 apply_us as f64 / 1000.0,

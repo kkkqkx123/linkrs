@@ -129,6 +129,38 @@ pub fn init(config: &Config) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// Initialize logging for a client-side binary (CLI, shell, migration tool).
+///
+/// Client tools keep stdout reserved for user-facing results, so diagnostics
+/// go to a dedicated file under `~/.linkrs/logs/` with an `app_name` prefix
+/// and warnings/errors are duplicated to stderr. The level defaults to
+/// `warn` and can be overridden with `RUST_LOG`.
+///
+/// Using a separate basename keeps client diagnostics out of the server log.
+/// Writes are synchronous so short-lived processes never lose a record on exit;
+/// callers can still invoke [`shutdown`], which is a no-op for this mode.
+pub fn init_client(app_name: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let level = std::env::var("RUST_LOG").unwrap_or_else(|_| "warn".to_string());
+    let directory = dirs::home_dir()
+        .ok_or("Could not resolve home directory for client logs")?
+        .join(".linkrs")
+        .join("logs");
+    std::fs::create_dir_all(&directory)?;
+
+    let format = log_format;
+    let logger = Logger::try_with_str(&level)?
+        .log_to_file(FileSpec::default().basename(app_name).directory(&directory))
+        .format_for_files(format)
+        .duplicate_to_stderr(Duplicate::Warn)
+        .format_for_stderr(format)
+        .write_mode(WriteMode::Direct)
+        .append();
+
+    let handle = logger.start()?;
+    *LOGGER_HANDLE.lock() = Some(handle);
+    Ok(())
+}
+
 /// Flush and shutdown logging system
 ///
 /// Call before program exit to ensure all async logs are written to file

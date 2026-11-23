@@ -21,7 +21,6 @@ serde_json.workspace = true
 thiserror.workspace = true
 async-trait.workspace = true
 log.workspace = true
-tracing.workspace = true
 tokio.workspace = true
 parking_lot.workspace = true
 vector-client = { version = "0.1.0", path = "../vector-client", optional = true }

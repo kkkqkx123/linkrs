@@ -11,7 +11,7 @@ use std::sync::Arc;
 use dashmap::DashMap;
 use linkrs_core::index_events::{RebuildPhase, RebuildProgress};
 use serde::{Deserialize, Serialize};
-use tracing::debug;
+use log::debug;
 
 use crate::backend::VectorBackend;
 use crate::vector_error::VectorCoordinatorResult;

@@ -197,9 +197,9 @@ fn run_import(
         bulk_session.as_ref().is_some_and(|session| session.active()),
     );
 
-    // Phase timing for import diagnosis: enabled only through the
-    // environment gate so default runs stay byte-identical on output.
-    let phases_on = std::env::var_os("LINKRS_COPY_PHASES").is_some();
+    // Phase timing for import diagnosis is gated by the debug log level, so
+    // default runs stay byte-identical on output and pay no clock reads.
+    let phases_on = log::log_enabled!(log::Level::Debug);
     let result = (|| -> Result<(u64, u128, u128), QueryError> {
         let mut total: u64 = 0;
         let mut skipped = 0u64;
@@ -266,7 +266,7 @@ fn run_import(
                 })?;
             }
             if phases_on {
-                eprintln!(
+                log::debug!(
                     "COPY phases '{}': read={:.1}ms write={:.1}ms commit={:.1}ms checkpoint={:.1}ms rows={total}",
                     file_paths.join(", "),
                     read_us as f64 / 1000.0,

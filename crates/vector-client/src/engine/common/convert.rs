@@ -1,6 +1,6 @@
 //! Shared request-parameter extraction for both Qdrant transports.
 
-use tracing::warn;
+use log::warn;
 
 use crate::types::*;
 
@@ -20,8 +20,8 @@ pub fn extract_search_params(query: &SearchQuery) -> ExtractedSearchParams {
     let hnsw_ef = query.hnsw_ef();
     if query.nprobe.is_some() && hnsw_ef.is_none() {
         warn!(
-            nprobe = ?query.nprobe,
-            "SearchQuery.nprobe is IVF-only and ignored by remote HNSW backends; set SearchMode::KNN.ef_search instead"
+            "SearchQuery.nprobe ({:?}) is IVF-only and ignored by remote HNSW backends; set SearchMode::KNN.ef_search instead",
+            query.nprobe
         );
     }
     ExtractedSearchParams {

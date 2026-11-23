@@ -21,7 +21,7 @@ use tonic::metadata::Ascii;
 use tonic::metadata::MetadataValue;
 use tonic::transport::Channel;
 use tonic::Request;
-use tracing::{debug, info, warn};
+use log::{debug, info, warn};
 
 use super::RemoteVectorEngine;
 use crate::config::VectorClientConfig;

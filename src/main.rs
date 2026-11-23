@@ -39,9 +39,6 @@ mod server_main {
                 grpc_port,
                 log_level,
             } => {
-                println!("Starting Linkrs service");
-                println!("Process ID: {}", std::process::id());
-
                 // Load configuration, retaining the file path for
                 // config-write endpoints only when the file exists.
                 let (cfg, config_path) = match config {
@@ -95,6 +92,7 @@ mod server_main {
                 if let Err(e) = logging::init(&cfg) {
                     eprintln!("Failed to initialize logging system: {}", e);
                 }
+                log::info!("Starting Linkrs service (pid {})", std::process::id());
 
                 // On Windows the process may have been started by the Service
                 // Control Manager; hand over to it, otherwise continue below
@@ -128,14 +126,12 @@ mod server_main {
                 result
             }
             Cli::Query { query } => {
-                println!("Executing query: {}", query);
-                println!("Process ID: {}", std::process::id());
-
                 // Use default configuration to initialize logging
                 let cfg = Config::default();
                 if let Err(e) = logging::init(&cfg) {
                     eprintln!("Failed to initialize logging system: {}", e);
                 }
+                log::info!("Executing query: {} (pid {})", query, std::process::id());
 
                 // Execute query directly using tokio runtime
                 let rt = match tokio::runtime::Runtime::new() {

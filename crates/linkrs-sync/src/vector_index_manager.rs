@@ -11,7 +11,7 @@
 use std::collections::HashMap;
 
 use dashmap::DashMap;
-use tracing::info;
+use log::info;
 
 use crate::backend::VectorBackend;
 use crate::vector_error::{VectorCoordinatorError, VectorCoordinatorResult, VectorError};
@@ -145,7 +145,7 @@ impl VectorIndexManager {
     pub fn attach_registry_directory(&self, directory: impl Into<std::path::PathBuf>) {
         let directory: std::path::PathBuf = directory.into();
         if let Err(error) = std::fs::create_dir_all(&directory) {
-            tracing::warn!(
+            log::warn!(
                 "Failed to create vector registry directory '{}': {}",
                 directory.display(),
                 error
@@ -192,7 +192,7 @@ impl VectorIndexManager {
         let content = match serde_json::to_string_pretty(&entries) {
             Ok(content) => content,
             Err(error) => {
-                tracing::warn!("Failed to serialize vector index registry: {}", error);
+                log::warn!("Failed to serialize vector index registry: {}", error);
                 return;
             }
         };
@@ -201,7 +201,7 @@ impl VectorIndexManager {
         if let Err(error) =
             std::fs::write(&temporary, content).and_then(|_| std::fs::rename(&temporary, path))
         {
-            tracing::warn!(
+            log::warn!(
                 "Failed to persist vector index registry '{}': {}",
                 path.display(),
                 error
@@ -218,7 +218,7 @@ impl VectorIndexManager {
             Ok(content) => content,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
             Err(error) => {
-                tracing::warn!(
+                log::warn!(
                     "Failed to read vector index registry '{}': {}",
                     path.display(),
                     error
@@ -229,7 +229,7 @@ impl VectorIndexManager {
         let entries: Vec<PersistedLogicalIndex> = match serde_json::from_str(&content) {
             Ok(entries) => entries,
             Err(error) => {
-                tracing::warn!(
+                log::warn!(
                     "Failed to parse vector index registry '{}': {}",
                     path.display(),
                     error
@@ -405,7 +405,7 @@ impl VectorIndexManager {
                     .create_payload_index(&collection_name, "group_id", PayloadSchemaType::Keyword)
                     .await
                 {
-                    tracing::warn!(
+                    log::warn!(
                         "Failed to create payload index for group_id in collection '{}': {}",
                         collection_name,
                         e
@@ -490,7 +490,7 @@ impl VectorIndexManager {
                     .create_payload_index(&collection_name, "group_id", PayloadSchemaType::Keyword)
                     .await
                 {
-                    tracing::warn!(
+                    log::warn!(
                         "Failed to create payload index for group_id in collection '{}': {}",
                         collection_name,
                         e
@@ -563,7 +563,7 @@ impl VectorIndexManager {
                     continue;
                 }
                 if let Err(error) = self.backend.delete_collection(&name).await {
-                    tracing::error!(
+                    log::error!(
                         "Failed to reclaim vector collection '{}' (field granularity): {}",
                         name,
                         error
@@ -578,7 +578,7 @@ impl VectorIndexManager {
             {
                 if self.backend.index_exists(&backup) {
                     if let Err(error) = self.backend.delete_collection(&backup).await {
-                        tracing::error!(
+                        log::error!(
                             "Failed to reclaim vector promote backup '{}': {}",
                             backup,
                             error
@@ -594,7 +594,7 @@ impl VectorIndexManager {
                 .count();
             if remaining_siblings == 0 {
                 if let Err(error) = self.backend.delete_collection(&live_name).await {
-                    tracing::error!(
+                    log::error!(
                         "Failed to reclaim vector collection '{}': {}",
                         live_name,
                         error
@@ -611,7 +611,7 @@ impl VectorIndexManager {
                     )
                     .await
                 {
-                    tracing::error!(
+                    log::error!(
                         "Failed to purge dropped vector group from collection '{}': {}",
                         live,
                         error
@@ -741,7 +741,7 @@ impl VectorIndexManager {
                 .create_payload_index(&collection_name, "group_id", PayloadSchemaType::Keyword)
                 .await
             {
-                tracing::warn!(
+                log::warn!(
                     "Failed to ensure payload index for group_id in collection '{}': {}",
                     collection_name,
                     error
@@ -806,7 +806,7 @@ impl VectorIndexManager {
                 .create_payload_index(&temp, "group_id", PayloadSchemaType::Keyword)
                 .await
             {
-                tracing::warn!(
+                log::warn!(
                     "Failed to create payload index for group_id in temp collection '{}': {}",
                     temp,
                     error
@@ -917,7 +917,7 @@ impl VectorIndexManager {
         for key in keys {
             if let Some((_, temp)) = self.temp_collections.remove(&key) {
                 if let Err(error) = self.backend.drop_temp_collection(&temp.temp_name).await {
-                    tracing::warn!(
+                    log::warn!(
                         "Failed to discard rebuild temp '{}': {}",
                         temp.temp_name,
                         error
@@ -1026,7 +1026,7 @@ impl VectorIndexManager {
                 if let Some((_, older)) = self.promote_backups.remove(&temp.live_name) {
                     if older != previous && self.backend.index_exists(&older) {
                         if let Err(error) = self.backend.delete_collection(&older).await {
-                            tracing::warn!(
+                            log::warn!(
                                 "Failed to prune superseded promote backup '{}': {}",
                                 older,
                                 error
@@ -1090,7 +1090,7 @@ impl VectorIndexManager {
             .create_payload_index(&backup, "group_id", PayloadSchemaType::Keyword)
             .await
         {
-            tracing::warn!(
+            log::warn!(
                 "Failed to create payload index for group_id in slice backup '{}': {}",
                 backup,
                 error
@@ -1118,14 +1118,14 @@ impl VectorIndexManager {
         {
             Ok(copied) => copied,
             Err(error) => {
-                tracing::warn!(
+                log::warn!(
                     "Space-granularity publish copy failed; restoring slice '{group_id}' from backup: {error}"
                 );
                 if let Err(restore) = self
                     .copy_group_slice(&backup, &temp.live_name, &group_id, batch)
                     .await
                 {
-                    tracing::warn!(
+                    log::warn!(
                         "Failed to restore space-granularity slice '{group_id}' from backup '{}': {}",
                         backup,
                         restore

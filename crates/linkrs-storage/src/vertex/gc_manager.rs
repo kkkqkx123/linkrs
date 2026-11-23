@@ -378,16 +378,16 @@ impl VertexGcManager {
         let interval = Duration::from_millis(self.config.interval_ms);
         let min_interval = Duration::from_millis(self.config.min_interval_between_gc_ms);
 
-        tracing::info!("Vertex GC background loop started");
+        log::info!("Vertex GC background loop started");
         let handle = self
             .pool
             .spawn_periodic(running, interval, min_interval, move || {
-                tracing::debug!("Vertex GC pass started");
+                log::debug!("Vertex GC pass started");
 
                 let executed = manager.maintenance.tick(|| manager.run_gc_pass() > 0);
                 if let Some(removed_progress) = executed {
                     if removed_progress {
-                        tracing::debug!("Vertex GC pass completed");
+                        log::debug!("Vertex GC pass completed");
                     }
                     manager.stats.fetch_add(1, Ordering::Release);
                 }

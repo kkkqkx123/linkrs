@@ -34,6 +34,11 @@ struct Args {
 }
 
 fn main() {
+    // Diagnostics use a dedicated client log; stdout stays reserved for results.
+    if let Err(e) = linkrs_config::logging::init_client("linkrs-shell") {
+        eprintln!("{}: client logging unavailable: {}", "WARNING".yellow().bold(), e);
+    }
+
     let args = Args::parse();
     let read_only = args.readonly
         || std::env::var("LINKRS_READONLY")

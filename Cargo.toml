@@ -63,10 +63,12 @@ utoipa = "5.5"
 thiserror = "2.0.17"
 anyhow = "1.0"
 
-# logging / tracing
+# logging
 log = "0.4.29"
-tracing = "0.1"
 flexi_logger = { version = "0.31", features = ["async"] }
+# Retained for vendored llm-suite sub-crates that inherit `tracing` from this
+# workspace; linkrs production code uses `log` exclusively.
+tracing = "0.1"
 
 # concurrency
 parking_lot = "0.12"
@@ -221,8 +223,8 @@ linkrs-api = { version = "0.1.0", path = "crates/linkrs-api" }
 linkrs-server = { version = "0.1.0", path = "crates/linkrs-server" }
 linkrs-migration = { version = "0.1.0", path = "crates/linkrs-migration" }
 clap.workspace = true
+log.workspace = true
 flexi_logger.workspace = true
-tracing.workspace = true
 tokio.workspace = true
 parking_lot.workspace = true
 tempfile.workspace = true

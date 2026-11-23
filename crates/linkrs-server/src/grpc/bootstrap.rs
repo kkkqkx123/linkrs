@@ -35,7 +35,7 @@ pub async fn run_server<
 ) -> Result<(), Box<dyn std::error::Error>> {
     let service = LinkrsService::new(app_state.clone(), config.clone());
 
-    tracing::info!("Linkrs gRPC service listening on {}", addr);
+    log::info!("Linkrs gRPC service listening on {}", addr);
 
     let grpc_cfg = config.grpc().clone();
     if grpc_cfg.tls.enabled {
@@ -97,7 +97,7 @@ pub async fn run_server_with_grpc_service<
     service: LinkrsService<S>,
     addr: SocketAddr,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    tracing::info!("Linkrs gRPC service listening on {}", addr);
+    log::info!("Linkrs gRPC service listening on {}", addr);
 
     Server::builder()
         .add_service(LinkrsServiceServer::new(service))

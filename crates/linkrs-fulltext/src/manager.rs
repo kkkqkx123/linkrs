@@ -170,9 +170,9 @@ impl FulltextIndexManager {
             if let Ok(loaded) = self.load_metadata_from_file() {
                 for metadata in loaded {
                     if self.restore_index_from_metadata(&metadata).is_ok() {
-                        tracing::debug!(
-                            index_id = %metadata.index_id,
-                            "Restored index from metadata"
+                        log::debug!(
+                            "Restored index {} from metadata",
+                            metadata.index_id
                         );
                     }
                 }
@@ -198,7 +198,7 @@ impl FulltextIndexManager {
         let entries = match std::fs::read_dir(&self.base_path) {
             Ok(entries) => entries,
             Err(e) => {
-                tracing::warn!("Failed to read base path: {}", e);
+                log::warn!("Failed to read base path: {}", e);
                 return Ok(());
             }
         };
@@ -223,7 +223,7 @@ impl FulltextIndexManager {
 
         if !self.metadata.is_empty() {
             if let Err(e) = self.save_metadata_to_file() {
-                tracing::warn!("Failed to save metadata cache: {}", e);
+                log::warn!("Failed to save metadata cache: {}", e);
             }
         }
 
@@ -312,7 +312,7 @@ impl FulltextIndexManager {
         });
         if let Ok(content) = serde_json::to_string_pretty(&value) {
             if let Err(e) = std::fs::write(path.join(INDEX_KEY_FILE_NAME), content) {
-                tracing::warn!("Failed to write fulltext key sidecar: {}", e);
+                log::warn!("Failed to write fulltext key sidecar: {}", e);
             }
         }
     }
@@ -542,7 +542,7 @@ impl FulltextIndexManager {
             self.metadata.insert(key, metadata);
 
             if let Err(e) = self.save_metadata_to_file() {
-                tracing::warn!("Failed to save metadata after creating index: {}", e);
+                log::warn!("Failed to save metadata after creating index: {}", e);
             }
 
             self.emit_index_event(IndexEvent::FulltextBuildCompleted {
@@ -630,7 +630,7 @@ impl FulltextIndexManager {
         self.metadata.remove(&key);
 
         if let Err(e) = self.save_metadata_to_file() {
-            tracing::warn!("Failed to save metadata after dropping index: {}", e);
+            log::warn!("Failed to save metadata after dropping index: {}", e);
         }
 
         let index_id = key.to_index_id();
@@ -837,7 +837,7 @@ impl FulltextIndexManager {
                 "Refusing to clear fulltext index without explicit confirmation: retry with force = true".to_string(),
             ));
         }
-        tracing::warn!(
+        log::warn!(
             "Clearing fulltext index explicitly confirmed: space {} tag {} field {}",
             space_id,
             tag_name,
@@ -878,11 +878,11 @@ impl FulltextIndexManager {
         }
 
         self.save_metadata_to_file().map_err(|e| {
-            tracing::warn!("Failed to save metadata after clearing index: {}", e);
+            log::warn!("Failed to save metadata after clearing index: {}", e);
             e
         })?;
 
-        tracing::info!(
+        log::info!(
             "Cleared index {}.{}.{} - emptied and marked consistent",
             space_id,
             tag_name,
@@ -1001,7 +1001,7 @@ impl FulltextIndexManager {
         let index_id = key.to_index_id();
         let temp_dir = self.rebuild_temp_dir(&live_path, &index_id, generation);
         if temp_dir.exists() {
-            tracing::warn!(
+            log::warn!(
                 "Removing leftover rebuild scratch directory {} from a previous attempt",
                 temp_dir.display()
             );
@@ -1019,7 +1019,7 @@ impl FulltextIndexManager {
             metadata.last_updated = chrono::Utc::now();
         }
         self.save_metadata_to_file().map_err(|e| {
-            tracing::warn!("Failed to save metadata after starting rebuild: {}", e);
+            log::warn!("Failed to save metadata after starting rebuild: {}", e);
             e
         })?;
 
@@ -1078,7 +1078,7 @@ impl FulltextIndexManager {
             metadata.last_updated = chrono::Utc::now();
         }
         self.save_metadata_to_file().map_err(|e| {
-            tracing::warn!("Failed to save metadata after publishing rebuild: {}", e);
+            log::warn!("Failed to save metadata after publishing rebuild: {}", e);
             e
         })?;
 
@@ -1098,7 +1098,7 @@ impl FulltextIndexManager {
                 // Async filesystem call: publish runs under the publish
                 // fence, so blocking the executor here would stall delivery.
                 if tokio::fs::rename(&previous_path, &backup).await.is_err() {
-                    tracing::error!(
+                    log::error!(
                         "Published rebuild for {} but failed to retain previous directory {} as backup {}: reverse recovery unavailable until the next successful rebuild",
                         index_id,
                         previous_path,
@@ -1164,7 +1164,7 @@ impl FulltextIndexManager {
                 continue;
             }
             if let Err(e) = tokio::fs::remove_dir_all(&backup).await {
-                tracing::warn!("Failed to prune rebuild backup {}: {}", backup.display(), e);
+                log::warn!("Failed to prune rebuild backup {}: {}", backup.display(), e);
             }
         }
     }
@@ -1216,7 +1216,7 @@ impl FulltextIndexManager {
                     .as_millis()
             ));
             if tokio::fs::rename(&live_path, &suspect).await.is_err() {
-                tracing::warn!(
+                log::warn!(
                     "Restoring backup for {} but failed to move aside suspect directory {}",
                     index_id,
                     live_path.display()
@@ -1232,9 +1232,9 @@ impl FulltextIndexManager {
             metadata.last_updated = chrono::Utc::now();
         }
         if let Err(e) = self.save_metadata_to_file() {
-            tracing::warn!("Failed to save metadata after restoring backup: {}", e);
+            log::warn!("Failed to save metadata after restoring backup: {}", e);
         }
-        tracing::warn!(
+        log::warn!(
             "Restored index {} from rebuild backup {}; marked Error pending a fresh rebuild",
             index_id,
             backup.display()
@@ -1265,7 +1265,7 @@ impl FulltextIndexManager {
                 && std::path::Path::new(&metadata.storage_path) != temp_dir.as_path()
             {
                 if let Err(e) = tokio::fs::remove_dir_all(&temp_dir).await {
-                    tracing::warn!(
+                    log::warn!(
                         "Failed to remove rebuild scratch directory {}: {}",
                         temp_dir.display(),
                         e
@@ -1278,7 +1278,7 @@ impl FulltextIndexManager {
             metadata.last_updated = chrono::Utc::now();
         }
         if let Err(e) = self.save_metadata_to_file() {
-            tracing::warn!("Failed to save metadata after discarding rebuild: {}", e);
+            log::warn!("Failed to save metadata after discarding rebuild: {}", e);
         }
         self.set_rebuild_phase(space_id, tag_name, field_name, RebuildPhase::Failed);
         self.emit_index_event(IndexEvent::FulltextRebuildFailed {
@@ -1330,12 +1330,12 @@ impl FulltextIndexManager {
                 let path_string = path.to_string_lossy().to_string();
                 if name.contains(".rebuild-") {
                     if !referenced.contains(&path_string) {
-                        tracing::warn!(
+                        log::warn!(
                             "Removing stale rebuild scratch directory {}",
                             path.display()
                         );
                         if let Err(e) = std::fs::remove_dir_all(&path) {
-                            tracing::warn!(
+                            log::warn!(
                                 "Failed to remove stale rebuild directory {}: {}",
                                 path.display(),
                                 e
@@ -1354,19 +1354,19 @@ impl FulltextIndexManager {
                     }) {
                         // Metadata points at a missing live directory whose
                         // backup survived: heal the interrupted rename.
-                        tracing::warn!(
+                        log::warn!(
                             "Healing interrupted rebuild publish: restoring {} from backup",
                             candidate.display()
                         );
                         if let Err(e) = std::fs::rename(&path, &candidate) {
-                            tracing::warn!(
+                            log::warn!(
                                 "Failed to restore rebuild backup {}: {}",
                                 path.display(),
                                 e
                             );
                         }
                     } else if let Err(e) = std::fs::remove_dir_all(&path) {
-                        tracing::warn!(
+                        log::warn!(
                             "Failed to remove orphaned rebuild backup {}: {}",
                             path.display(),
                             e
@@ -1401,7 +1401,7 @@ impl FulltextIndexManager {
                     });
                     for old in backups.into_iter().skip(1) {
                         if let Err(e) = std::fs::remove_dir_all(&old) {
-                            tracing::warn!(
+                            log::warn!(
                                 "Failed to prune superseded rebuild backup {}: {}",
                                 old.display(),
                                 e
@@ -1414,7 +1414,7 @@ impl FulltextIndexManager {
 
         for mut entry in self.metadata.iter_mut() {
             if entry.value().status == IndexStatus::Rebuilding {
-                tracing::warn!(
+                log::warn!(
                     "Index {} was interrupted mid-rebuild; marking Error (previous data still served)",
                     entry.value().index_id
                 );
@@ -1423,7 +1423,7 @@ impl FulltextIndexManager {
             }
         }
         if let Err(e) = self.save_metadata_to_file() {
-            tracing::warn!("Failed to save metadata after rebuild cleanup: {}", e);
+            log::warn!("Failed to save metadata after rebuild cleanup: {}", e);
         }
     }
 
@@ -1448,7 +1448,7 @@ impl FulltextIndexManager {
         }
 
         if let Err(e) = self.save_metadata_to_file() {
-            tracing::warn!("Failed to save metadata after optimizing index: {}", e);
+            log::warn!("Failed to save metadata after optimizing index: {}", e);
         }
 
         Ok(())
@@ -1496,7 +1496,7 @@ impl FulltextIndexManager {
         }
 
         if let Err(e) = self.save_metadata_to_file() {
-            tracing::warn!(
+            log::warn!(
                 "Failed to save metadata after dropping space indexes: {}",
                 e
             );

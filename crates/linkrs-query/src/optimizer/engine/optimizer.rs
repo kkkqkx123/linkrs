@@ -27,11 +27,10 @@ impl OptimizerEngine {
         space: Option<&str>,
         layout: &PartitioningLayoutInfo,
     ) -> OptimizeResult<ExecutionPlan> {
-        // Opt-stage timing gate for cold-planning diagnosis. Default off;
-        // set LINKRS_OPT_STAGES=1 to print per-stage times to stderr.
-        // The marks below stay aligned with the stage order so a single
-        // probe run attributes the whole optimize budget.
-        let stage_timing = std::env::var("LINKRS_OPT_STAGES").is_ok();
+        // Opt-stage timing marks are gated by the debug log level, so normal
+        // runs pay no clock reads. The marks stay aligned with the stage order
+        // to attribute the whole optimize budget in one run.
+        let stage_timing = log::log_enabled!(log::Level::Debug);
         let mut stage_start = stage_timing.then(std::time::Instant::now);
         let mut current_plan = plan;
 
@@ -131,14 +130,14 @@ impl OptimizerEngine {
         Ok(current_plan)
     }
 
-    /// Emit one opt-stage timing mark when the `LINKRS_OPT_STAGES` gate is
-    /// set, then re-arm the clock for the next stage. Silent otherwise.
+    /// Emit one opt-stage timing mark at debug level when enabled, then
+    /// re-arm the clock for the next stage. Silent otherwise.
     fn mark_opt_stage(name: &str, start: &mut Option<std::time::Instant>, enabled: bool) {
         if !enabled {
             return;
         }
         if let Some(s) = start.take() {
-            eprintln!("OPT_STAGE {name} took {:?}", s.elapsed());
+            log::debug!("OPT_STAGE {} took {:?}", name, s.elapsed());
         }
         *start = enabled.then(std::time::Instant::now);
     }

@@ -276,11 +276,11 @@ impl HttpClient {
                     if !response.status().is_success() {
                         let status = response.status();
                         let body = response.text().await.unwrap_or_default();
-                        eprintln!("Warning: Logout failed ({}): {}", status, body);
+                        log::warn!("Logout failed ({}): {}", status, body);
                     }
                 }
                 Err(e) => {
-                    eprintln!("Warning: Failed to contact server during logout: {}", e);
+                    log::warn!("Failed to contact server during logout: {}", e);
                 }
             }
         }

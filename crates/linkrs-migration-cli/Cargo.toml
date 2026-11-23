@@ -18,5 +18,6 @@ anyhow.workspace = true
 log.workspace = true
 
 linkrs-core = { version = "0.1.0", path = "../linkrs-core" }
+linkrs-config = { version = "0.1.0", path = "../linkrs-config" }
 linkrs-storage = { version = "0.1.0", path = "../linkrs-storage" }
 linkrs-migration = { version = "0.1.0", path = "../linkrs-migration" }

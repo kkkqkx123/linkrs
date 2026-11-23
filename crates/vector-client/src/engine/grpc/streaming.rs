@@ -4,7 +4,7 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::metadata::Ascii;
 use tonic::metadata::MetadataValue;
-use tracing::{debug, error};
+use log::{debug, error};
 
 use crate::engine::grpc::convert::scored_point_from_proto;
 use crate::engine::grpc::proto;

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use dashmap::{DashMap, DashSet};
-use tracing::{debug, info, warn};
+use log::{debug, info, warn};
 
 use crate::config::VectorClientConfig;
 use crate::engine::{create_engine as build_engine, DisabledEngine, RemoteVectorEngine};

@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 use std::collections::HashMap;
 use tokio::sync::RwLock;
-use tracing::{debug, info, warn};
+use log::{debug, info, warn};
 
 use super::RemoteVectorEngine;
 use crate::config::VectorClientConfig;

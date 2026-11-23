@@ -88,7 +88,7 @@ impl super::SyncManager {
                     let retry_interval = std::time::Duration::from_secs(5);
                     while manager.running.load(std::sync::atomic::Ordering::SeqCst) {
                         if let Err(error) = manager.retry_outbox_sync() {
-                            tracing::warn!("Outbox delivery attempt failed: {}", error);
+                            log::warn!("Outbox delivery attempt failed: {}", error);
                         }
                         tokio::time::sleep(retry_interval).await;
                     }

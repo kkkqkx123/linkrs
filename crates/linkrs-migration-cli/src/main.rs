@@ -150,6 +150,11 @@ fn open_storage(path: &std::path::Path) -> anyhow::Result<GraphStorage> {
 }
 
 fn main() -> anyhow::Result<()> {
+    // Diagnostics use a dedicated client log; stdout stays reserved for results.
+    if let Err(e) = linkrs_config::logging::init_client("linkrs-migration") {
+        eprintln!("WARNING: client logging unavailable: {}", e);
+    }
+
     let cli = Cli::parse();
     match cli.command {
         Commands::Plan {

@@ -6,8 +6,8 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
+use log::{debug, warn};
 use parking_lot::RwLock;
-use tracing::{debug, warn};
 
 /// Circuit breaker state
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -153,8 +153,8 @@ impl CircuitBreaker {
                 if let Some(opened_at) = state.opened_at {
                     if opened_at.elapsed() >= self.config.recovery_timeout {
                         debug!(
-                            circuit_breaker = %self.name,
-                            "Circuit breaker transitioning to half-open"
+                            "Circuit breaker {} transitioning to half-open",
+                            self.name
                         );
                         state.state = CircuitState::HalfOpen;
                         state.success_count = 0;
@@ -163,8 +163,8 @@ impl CircuitBreaker {
                 }
                 self.total_rejected.fetch_add(1, Ordering::Relaxed);
                 debug!(
-                    circuit_breaker = %self.name,
-                    "Request rejected - circuit is open"
+                    "Request rejected - circuit {} is open",
+                    self.name
                 );
                 false
             }
@@ -186,9 +186,8 @@ impl CircuitBreaker {
                 state.success_count += 1;
                 if state.success_count >= self.config.success_threshold {
                     debug!(
-                        circuit_breaker = %self.name,
-                        success_count = state.success_count,
-                        "Circuit breaker closing after successful recovery"
+                        "Circuit breaker {} closing after {} successful recoveries",
+                        self.name, state.success_count
                     );
                     state.state = CircuitState::Closed;
                     state.failure_count = 0;
@@ -220,10 +219,8 @@ impl CircuitBreaker {
 
                 if state.failure_count >= self.config.failure_threshold {
                     warn!(
-                        circuit_breaker = %self.name,
-                        failure_count = state.failure_count,
-                        threshold = self.config.failure_threshold,
-                        "Circuit breaker opening due to failures"
+                        "Circuit breaker {} opening after {} failures (threshold {})",
+                        self.name, state.failure_count, self.config.failure_threshold
                     );
                     state.state = CircuitState::Open;
                     state.opened_at = Some(now);
@@ -231,8 +228,8 @@ impl CircuitBreaker {
             }
             CircuitState::HalfOpen => {
                 warn!(
-                    circuit_breaker = %self.name,
-                    "Circuit breaker reopening due to failure in half-open state"
+                    "Circuit breaker {} reopening due to failure in half-open state",
+                    self.name
                 );
                 state.state = CircuitState::Open;
                 state.opened_at = Some(Instant::now());
@@ -275,7 +272,7 @@ impl CircuitBreaker {
         state.success_count = 0;
         state.last_failure_time = None;
         state.opened_at = None;
-        debug!(circuit_breaker = %self.name, "Circuit breaker reset");
+        debug!("Circuit breaker {} reset", self.name);
     }
 
     /// Force open the circuit breaker
@@ -283,7 +280,7 @@ impl CircuitBreaker {
         let mut state = self.state.write();
         state.state = CircuitState::Open;
         state.opened_at = Some(Instant::now());
-        warn!(circuit_breaker = %self.name, "Circuit breaker manually tripped");
+        warn!("Circuit breaker {} manually tripped", self.name);
     }
 }
 

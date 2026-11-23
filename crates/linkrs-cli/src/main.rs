@@ -11,6 +11,11 @@ use linkrs_cli::utils::error::Result;
 
 #[tokio::main]
 async fn main() {
+    // Diagnostics use a dedicated client log; stdout stays reserved for results.
+    if let Err(e) = linkrs_config::logging::init_client("linkrs-cli") {
+        eprintln!("WARNING: client logging unavailable: {}", e);
+    }
+
     let cli = Cli::parse();
 
     if let Err(e) = run(cli).await {

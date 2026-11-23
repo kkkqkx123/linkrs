@@ -338,7 +338,7 @@ impl EsSearchEngine {
                     return Err(err);
                 }
                 Err(err) => {
-                    tracing::warn!(error = %err, url = %url, "elasticsearch transport error");
+                    log::warn!("elasticsearch transport error: url={}, error={}", url, err);
                     self.breaker.lock().record_failure();
                     if attempt < self.config.max_retries {
                         attempt += 1;

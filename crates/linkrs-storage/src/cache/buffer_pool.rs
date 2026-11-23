@@ -398,7 +398,7 @@ impl<K: Hash + Eq + Clone + Send + Sync, T: Clone + Send + Sync> BufferPool<K, T
         for (id, cached) in writebacks {
             if cached.dirty.load(Ordering::Acquire) {
                 if let Err(e) = writer(id, &cached.item) {
-                    tracing::warn!("Failed to write back key during eviction: {e}");
+                    log::warn!("Failed to write back key during eviction: {e}");
                 }
             }
         }

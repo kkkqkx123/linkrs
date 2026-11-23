@@ -2230,7 +2230,6 @@ dependencies = [
  "tokio-test",
  "toml",
  "tower 0.5.3",
- "tracing",
  "vector-client",
  "winapi",
 ]
@@ -2257,7 +2256,6 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tokio",
- "tracing",
  "vector-client",
 ]
 
@@ -2269,6 +2267,7 @@ dependencies = [
  "futures",
  "linkrs-core",
  "linkrs-wire",
+ "log",
  "prost",
  "reqwest",
  "rustls",
@@ -2349,7 +2348,6 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tokio",
- "tracing",
 ]
 
 [[package]]
@@ -2396,6 +2394,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "linkrs-config",
  "linkrs-core",
  "linkrs-migration",
  "linkrs-storage",
@@ -2484,7 +2483,6 @@ dependencies = [
  "tonic-build",
  "tower 0.5.3",
  "tower-http",
- "tracing",
  "utoipa",
  "uuid",
  "vector-client",
@@ -2519,7 +2517,6 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror",
- "tracing",
  "uuid",
  "zstd 0.14.2",
 ]
@@ -2551,7 +2548,6 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tokio",
- "tracing",
  "uuid",
  "vector-client",
 ]
@@ -2601,6 +2597,7 @@ dependencies = [
  "dirs",
  "futures",
  "linkrs-client",
+ "linkrs-config",
  "linkrs-core",
  "linkrs-grammar",
  "linkrs-wire",
@@ -2624,6 +2621,7 @@ dependencies = [
  "clap",
  "colored",
  "linkrs-api",
+ "linkrs-config",
  "linkrs-core",
  "linkrs-storage",
  "linkrs_cli",
@@ -5272,6 +5270,7 @@ dependencies = [
  "dashmap",
  "futures",
  "llm-suite-embedding",
+ "log",
  "prost",
  "prost-types",
  "reqwest",
@@ -5285,7 +5284,6 @@ dependencies = [
  "tokio-test",
  "tonic",
  "tonic-build",
- "tracing",
  "url",
 ]
 

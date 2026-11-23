@@ -59,7 +59,7 @@ fn build_vectors_json(
             vectors["hnsw_config"] = build_hnsw_json(hnsw);
         }
         other => {
-            tracing::warn!(
+            log::warn!(
                 "Index tier {:?} not supported by Qdrant, using HNSW with config",
                 other.index_type()
             );

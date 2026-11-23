@@ -42,7 +42,6 @@ uuid.workspace = true
 rand.workspace = true
 vector-client = { version = "0.1.0", path = "../vector-client", features = ["qdrant-grpc", "qdrant-http"], optional = true }
 simvec = { version = "0.1.0", path = "../simvec", optional = true }
-tracing.workspace = true
 tokio.workspace = true
 futures.workspace = true
 async-trait.workspace = true

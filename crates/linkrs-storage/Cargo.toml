@@ -35,7 +35,6 @@ bitvec.workspace = true
 dec.workspace = true
 rayon.workspace = true
 rand.workspace = true
-tracing.workspace = true
 arc-swap.workspace = true
 
 [dev-dependencies]

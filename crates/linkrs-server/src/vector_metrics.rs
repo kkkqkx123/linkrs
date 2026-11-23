@@ -249,7 +249,7 @@ impl QdrantTelemetrySampler {
         let cur = match self.fetch_telemetry() {
             Ok(snap) => snap,
             Err(e) => {
-                tracing::debug!("failed to fetch Qdrant telemetry: {}", e);
+                log::debug!("failed to fetch Qdrant telemetry: {}", e);
                 return;
             }
         };

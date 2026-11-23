@@ -22,7 +22,6 @@ jieba-rs = { version = "0.10", optional = true }
 tantivy-tokenizer-api = { version = "0.7", optional = true }
 dashmap.workspace = true
 async-trait.workspace = true
-tracing.workspace = true
 tokio = { workspace = true, features = ["fs"] }
 reqwest = { workspace = true, optional = true }
 

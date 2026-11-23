@@ -353,7 +353,7 @@ impl VectorEngineHandle for LocalEngineHandle {
             || config.vectors_on_disk.is_some()
             || config.storage_hints.is_some()
         {
-            tracing::warn!(
+            log::warn!(
                 "local vector engine ignores remote-only collection layout fields \
                  (shard_number/replication_factor/write_consistency_factor/vectors_on_disk/\
                  storage_hints); storage layout is governed by [vector.local.storage]"

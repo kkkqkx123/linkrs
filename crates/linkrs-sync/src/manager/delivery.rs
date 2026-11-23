@@ -162,11 +162,9 @@ async fn handle_delivery_error(
         VectorErrorKind::Auth => {
             let pause_until = now.saturating_add(60_000);
             auth_paused_until_ms.store(pause_until, std::sync::atomic::Ordering::Relaxed);
-            tracing::error!(
-                target = target,
-                error = %error,
-                pause_until,
-                "auth failure: pausing outbox delivery"
+            log::error!(
+                "auth failure for target {}: pausing outbox delivery until {}: {}",
+                target, pause_until, error
             );
             outbox
                 .retry(event, now.saturating_add(60_000), error)
@@ -221,10 +219,9 @@ impl super::SyncManager {
             .auth_paused_until_ms
             .load(std::sync::atomic::Ordering::Relaxed);
         if paused_until > now_for_pause {
-            tracing::warn!(
-                paused_until,
-                now = now_for_pause,
-                "outbox delivery paused due to auth failure"
+            log::warn!(
+                "outbox delivery paused due to auth failure: paused_until={}, now={}",
+                paused_until, now_for_pause
             );
             return Ok(0);
         }

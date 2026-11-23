@@ -315,7 +315,7 @@ impl SlowQueryLogger {
                 if current_size + bytes.len() as u64 > config.max_file_size_mb * 1024 * 1024 {
                     // Perform log rotation
                     if let Err(e) = Self::rotate_logs(&config) {
-                        eprintln!("Failed to rotate slow query log: {}", e);
+                        log::error!("Failed to rotate slow query log: {}", e);
                     }
 
                     // Reopen new file
@@ -332,7 +332,7 @@ impl SlowQueryLogger {
 
                 // Write log entry
                 if let Err(e) = writer.write_all(bytes) {
-                    eprintln!("Failed to write slow query log: {}", e);
+                    log::error!("Failed to write slow query log: {}", e);
                 }
 
                 lines_written += 1;

@@ -344,7 +344,7 @@ impl BatchProcessor for FulltextBatchProcessor {
             loop {
                 ticker.tick().await;
                 if let Err(e) = processor.commit_timeout().await {
-                    tracing::error!("Background batch commit failed: {:?}", e);
+                    log::error!("Background batch commit failed: {:?}", e);
                 }
             }
         });

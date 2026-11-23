@@ -348,7 +348,7 @@ impl SyncManager {
             .create_temp_collection(space_id, tag_name, field_name, generation)
             .await
             .map_err(|error| SyncError::PersistenceError(error.to_string()))?;
-        tracing::info!(
+        log::info!(
             "Vector rebuild temp created (live untouched): space {} tag {} field {} generation {} temp {}",
             space_id,
             tag_name,
@@ -584,7 +584,7 @@ impl SyncManager {
             .await
             .map_err(|error| SyncError::PersistenceError(error.to_string()))?;
         if outcome.copied_points > 0 {
-            tracing::info!(
+            log::info!(
                 "Vector rebuild slice copy-on-publish: space {} tag {} field {} generation {} copied {} points",
                 space_id,
                 tag_name,
@@ -594,7 +594,7 @@ impl SyncManager {
             );
         }
         if let Some(backup) = &outcome.backup {
-            tracing::info!(
+            log::info!(
                 "Vector rebuild publish retained backup: space {} tag {} field {} generation {} backup {}",
                 space_id,
                 tag_name,
@@ -847,20 +847,20 @@ impl SyncManager {
                     .promote_temp_collection(&live, &temp, &suffix)
                     .await
                 {
-                    Ok(()) => tracing::warn!(
+                    Ok(()) => log::warn!(
                         "Healed interrupted vector publish: promoted temp {} to live {}",
                         temp,
                         live
                     ),
                     Err(error) => {
-                        tracing::warn!(
+                        log::warn!(
                             "Failed to heal interrupted vector publish for {}: {}; restoring newest backup",
                             live,
                             error
                         );
                         if let Ok(restored) = manager.backend().restore_promote_backup(&live).await
                         {
-                            tracing::warn!(
+                            log::warn!(
                                 "Restored vector live {} from backup {}",
                                 live,
                                 restored
@@ -869,7 +869,7 @@ impl SyncManager {
                     }
                 }
             } else if let Ok(restored) = manager.backend().restore_promote_backup(&live).await {
-                tracing::warn!("Restored vector live {} from backup {}", live, restored);
+                log::warn!("Restored vector live {} from backup {}", live, restored);
             }
         }
     }
@@ -911,7 +911,7 @@ impl SyncManager {
             let loc = VectorIndexLocation::new(index.space_id, &index.tag_name, &index.field_name);
             manager.set_logical_collection_name(&loc, temp.clone());
             manager.set_collection_override(&loc, temp.clone());
-            tracing::warn!(
+            log::warn!(
                 "Re-adopted published vector temp {} for {}.{}.{}",
                 temp,
                 index.space_id,
@@ -951,9 +951,9 @@ impl SyncManager {
                 }
             }
             if let Err(error) = manager.drop_temp_by_name(&name).await {
-                tracing::warn!("Failed to drop orphan vector temp {}: {}", name, error);
+                log::warn!("Failed to drop orphan vector temp {}: {}", name, error);
             } else {
-                tracing::warn!("Dropped orphan vector temp {}", name);
+                log::warn!("Dropped orphan vector temp {}", name);
             }
         }
     }
@@ -975,9 +975,9 @@ impl SyncManager {
             backups.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| b.1.cmp(&a.1)));
             for (_, name) in backups.into_iter().skip(1) {
                 if let Err(error) = manager.backend().delete_collection(&name).await {
-                    tracing::warn!("Failed to prune vector promote backup {}: {}", name, error);
+                    log::warn!("Failed to prune vector promote backup {}: {}", name, error);
                 } else {
-                    tracing::warn!(
+                    log::warn!(
                         "Pruned superseded vector promote backup {} of {}",
                         name,
                         live
