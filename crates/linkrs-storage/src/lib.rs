@@ -34,8 +34,8 @@ mod threshold_registry;
 pub use batch_ops::AutoCommitBatchOps;
 pub use batch_ops::AutoCommitGroupOps;
 pub use client::{
-    CatalogStore, EdgeTopology, GraphStore, PurgeTarget, QueryStorage,
-    StorageAdmin, StorageAuthOps, StorageClient, StorageCommitOps, StorageGcOps,
+    CatalogStore, EdgeTopology, FrontierDegrees, GraphStore, PackedEdgeTopology, PurgeTarget,
+    QueryStorage, StorageAdmin, StorageAuthOps, StorageClient, StorageCommitOps, StorageGcOps,
     StorageMaintenance, StorageOperationContext, StorageOperationContextOps, StoragePersistenceOps,
     StorageReader, StorageRecoveryOps, StorageSchemaContextOps, StorageSchemaOps,
     StorageSnapshotOps, StorageStats, StorageSyncContextOps, StorageTtlPurgeOps, StorageWriter,

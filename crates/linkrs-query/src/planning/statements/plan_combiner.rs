@@ -104,13 +104,14 @@ pub(crate) fn wrap_logical_filter(
 pub(crate) fn wrap_logical_dedup(
     input: LogicalNodeEnum,
     col_names: Vec<String>,
+    column_types: Vec<linkrs_core::DataType>,
 ) -> LogicalNodeEnum {
     LogicalNodeEnum::Dedup(LogicalDedupNode {
         id: next_node_id(),
         input: Some(Box::new(input)),
         output_var: None,
         col_names,
-        column_types: vec![],
+        column_types,
     })
 }
 

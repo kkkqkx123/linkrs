@@ -350,20 +350,24 @@ Linkrs 使用 TOML 格式的配置文件，默认配置文件为 `config.toml`�
 
 ## 8. 并行执行配置 [parallel]
 
-查询内并行分区开关，默认关闭（行为与关闭时完全一致）。
+查询内并行分区采用总开关关闭、按形状灰度放行。`enabled` 保持 false；只有 `allow_ordered_parallel_expand` 默认打开，放行已证明等价的 rowless 单跳分组计数与有序去重，纯计数和通用聚合仍走串行。
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| enabled | bool | false | 是否启用查询内并行分区 |
-| workers | usize | 1 | 共享调度器的工作线程数（>0） |
+| enabled | bool | false | 查询内并行分区总开关 |
+| workers | usize | 8 | 共享调度器的工作线程数（>0） |
 | min_rows_per_partition | u64 | 100000 | 每个分区的最小行数（低于阈值拒绝分区） |
-| max_partitions | usize | 1 | 单个扫描的最大分区数 |
+| max_partitions | usize | 8 | 单个扫描的最大分区数 |
 | max_buffered_chunks | usize | 10 | 每个分区 worker 的最大缓冲块数（背压） |
 | vertex_id_start | Option\<i64\> | null | 可选顶点 ID 范围下界（与 end 同时设置才生效） |
 | vertex_id_end | Option\<i64\> | null | 可选顶点 ID 范围上界（开区间） |
-| allow_pure_count_chain | bool | false | 总开关关闭时仍放行纯计数链 |
+| allow_pure_count_chain | bool | false | 总开关关闭时仍放行纯计数链；默认关闭以保持微查询串行 |
 | allow_global_aggregate | bool | false | 总开关关闭时仍放行其他聚合根形状 |
-| allow_ordered_parallel_expand | bool | false | 总开关关闭时仅放行单行展开的 rowless 计数、分组计数与有序去重 |
+| allow_ordered_parallel_expand | bool | true | 放行 rowless 单跳展开的分组计数与有序去重 |
+| allow_parallel_count_frontier | bool | false | 放行计数前沿分区；收益未稳定，保持关闭 |
+| allow_partition_metadata_count | bool | false | 放行分区元数据计数；缺少 shard-local 存储证明，保持关闭 |
+
+生产默认只改变执行形状，不改变查询数值。回滚时将 `allow_ordered_parallel_expand` 设回 false、`workers` 与 `max_partitions` 设回 1 即可；无需数据迁移。
 
 ---
 
@@ -823,6 +827,9 @@ port = 9669
 
 [parallel]
 enabled = false
+workers = 8
+max_partitions = 8
+allow_ordered_parallel_expand = true
 
 [vector]
 enabled = true

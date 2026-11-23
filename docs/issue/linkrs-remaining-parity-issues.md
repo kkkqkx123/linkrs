@@ -1,7 +1,7 @@
 # Linkrs 剩余对齐问题清单
 
-**日期**：2026-11-18  
-**状态**：本文件是 Linkrs 与 Neug / Ladybug 对齐剩余任务的单一真相源。历史方案与旧问题清单已删除，不再作为判断依据。分阶段修改方案见 `docs/plan/linkrs-remaining-parity-implementation-plan.md`，该方案不重新定义问题。
+**日期**：2026-11-18，最新状态回填 2026-11-23  
+**状态**：本文件是 Linkrs 与 Neug / Ladybug 对齐剩余任务的单一真相源。历史方案与旧问题清单已删除，不再作为判断依据。分阶段修改方案见 `docs/plan/linkrs-remaining-parity-implementation-plan.md`，该方案不重新定义问题。当前状态与最新落地回测以第 35、37 节为准，阶段一、二的实施见 `docs/plan/stage1-stage2-current-gap-remediation.md`。
 
 ## 0. 范围与判定口径
 
@@ -565,3 +565,58 @@ devs release 编译通过；local topk 3/3、typed group 5/5、并行分区 27/2
 - 新增跨 generation 有序、newest 优先、cursor offset/limit 与规则守卫测试。
 
 实现缺陷修复不改变改进项立项结论。验证：query lib 2313 passed、storage lib 1412 passed、gate 全绿；固定门 `distinct_limit` 93.22 / 93.56 ms，`group_by_count` 99.41 / 98.79 ms，`actual=10`、结果逐值一致、`spill_rows=0`，库体积约 38.7 MB。指标目录：`perf-data/parity/results/2026-11-18/implementation-defects/`。
+
+## 35. 当前状态核对（2026-11-23）
+
+依据 `perf-data/parity/results/2026-11-23/observability-plan-proof/final-optimized/round1.log`、`round2.log`、`explain1/`，以及 `perf-ab/` 四组 A/B 日志。口径仍为 LSQB sf0.1、warmup 1 + run 5、绑核 16-31、并行门 `--parallel-workers 16 --max-partitions 10 --require-parallel-explain`；对手数据沿用第 1 节的三方原始 JSON，`distinct_limit` 使用修正 `ORDER BY` 后的 Ladybug 数值。口径不同，只用于量级判断。
+
+| 原阶段 | 原始问题 | 当前固定门 | 对手 | 当前判定 |
+|---|---|---|---|---|
+| 阶段一 | `group_by_count` 1.31–1.50 秒，`distinct_limit` 约 1.11 秒 | 119 / 103 ms，137 / 89 ms | Ladybug 7.10 / 3.755 ms，Neug 13.76 / 28.70 ms | 秒级瓶颈消除；剩余百毫秒级差距未闭环 |
+| 阶段二 | `join_two_hop` 35–49 ms，`variable_path_count` 1.10–1.35 秒 | 5.9 / 6.2 ms，6.5 / 6.3 ms | Ladybug 2.42 / 457.68 ms，Neug 24.09 / 117.40 ms | 基本闭环；两跳相对 Ladybug 仍约 2.5 倍 |
+| 阶段三 | `aggregate_filtered_count` 2.67 ms，微扫描秒级隐患 | 1.21 / 1.17 ms；`filter_id_range` 1.83 / 1.77 ms，`filter_or` 1.63 / 1.61 ms，`order_limit` 1.32 / 1.27 ms | Ladybug 1.02 / 0.974 / 1.517 / 0.880 ms | 过滤聚合已闭环；微扫描仍有 1.2–1.9 倍差距，完整谓词替换未放行 |
+
+逐用例证据与判定：
+
+1. `EXPLAIN ANALYZE` 中 `group_by_count` 的 `typed_group_hits=110`、`typed_group_fallbacks=0`，`distinct_limit` 的 10 个分区均显示 `local_topk:pushed`，说明阶段一的两条 typed 快路径确实生效，不是缓存偶然命中。两轮 `actual=10`、`actual_partitions=10`、结果逐值一致、`spill_rows=0`。
+2. PROFILE 显示 10 个分区各扫描约 21.5k 行，`StorageScanVertices` 自耗时约 50–74 ms，`ExpandAll` 单分区约 25 ms；`Project` 已为 `rows: 0`，局部聚合、LocalTopK、最终交换均不再是主要成本。分区 `work_time` 约 0.93–1.06 秒、`wall_time` 约 100–112 ms、偏斜比约 1.06–1.28。阶段一的原始“聚合自身秒级”已转为“分区扫描与单跳展开百毫秒级”。
+3. 按第 26 节要求冻结的经济分区点为 10；四轮 A/B 中 16 分区因内存带宽和交换开销更慢，`perf-ab/four-way.log` 与 `isolate.log` 也未给出稳定的比较器/hash/顺序变体收益，不应据单轮波动继续调这些维度。
+4. 生产配置尚未受益：`config.toml:242-257` 与 `crates/linkrs-config/src/parallel.rs` 中 `enabled=false`、`workers=1`、`max_partitions=1`，`allow_ordered_parallel_expand=false`；benchmark 在 `src/bin/linkrs_parity_bench.rs:819` 显式请求有序并行。生产默认执行仍接近旧的串行量级。
+5. 编译中位数出现新变化：九条纯计数仍为 0.01 ms 级，但两条并行固定门升到约 2.0–3.1 ms。绝对量小于执行时间，但对短查询和 Neug 对照不利，需在执行链收敛后单独归因。
+6. `filter_count_pushed` 与 `filter_count_unpushed` 最新均约 1.7 ms，计划形状没有形成阶段三设想的快慢路径差异；完整谓词替换仍因 TTL、跨类型和 NULL 语义保持关闭，残余 `Filter` 继续保留。该结论不改变第 22、23 节的正确性决策。
+7. 资源口径已收敛：库体积约 42–44 MB、RSS 峰值约 320 MB、buffer pool 64 MB、`reclaim_failures=0`；与 Ladybug 35 MB / Neug 43 MB 同一量级。仍有差距的是 buffer 策略：Ladybug parity runner 使用约 90% 可用内存作为 buffer manager，大规模冷热差异尚未验证。
+8. 与参考源码的差距主要是执行形态：Ladybug `scan_rel_table.cpp` 的 `PackedChildSlices`、`packed_filtered_count.cpp` 与 `count_extend_chain.cpp` 直接按父区间累计；Neug `csr_view.h` 的 POD 邻居迭代器与按度数预取避免了当前 `expand_columnar.rs` 中逐边 `PendingEdge`、目的端去重和 typed 列重组。当前 `typed_group_count.rs` 仍是预扫描加两次哈希探测，LocalTopK 非 typed 回退探针约 1.53 秒而 typed 约 2.45 ms。
+
+当前结论：阶段二和阶段三的过滤聚合部分可以视为已解决；阶段一需要在不改变精确语义的前提下，转向“父批/孩子偏移 + 展开与局部状态融合”，并在通过后更新生产配置。后续方案见 `docs/plan/stage1-stage2-current-gap-remediation.md`。
+
+## 36. 后续方案入口
+
+`docs/plan/stage1-stage2-current-gap-remediation.md` 只针对阶段一、二给出当前实施顺序、落点、生产配置更新、护栏与验收，不重新定义本清单的问题。`docs/plan/remaining-bottleneck-microbench-and-design.md` 记录首轮回测后的剩余瓶颈归因、Rust 微基准与后续改进设计；`docs/plan/scan-visibility-and-decode-remediation.md` 给出扫描可见性枚举与属性解码的验证和改动顺序。阶段三的微扫描下推、阶段四至七的资源/分区/图算法/存储深水项仍按原方案和后续回填执行；如无新的三方证据，不因本轮阶段一、二调整而扩大放行范围。
+
+## 37. 阶段一、二收敛方案首轮回测（2026-11-23）
+
+按 `docs/plan/stage1-stage2-current-gap-remediation.md` 完成首轮代码与配置修改，devs release 构建通过。改动包括：扫描读取与展开读取自耗时进入 `ColumnarStats` / EXPLAIN / parity JSON；拓扑批量读取改为父批 + 孩子偏移的 packed 形态，rowless 单跳展开直接消费；`typed_group_count` 用一次 `entry` 累加替代预插入后的二次哈希；`RETURN DISTINCT` 与 `YIELD DISTINCT` 在计划期传播投影列类型；固定深度一加二的前沿度数合并为一次批量读取；生产默认放行走列展开灰度形状。
+
+验证结果：配置默认值 1/1、partitioning lib 49/49、typed group 8/8、local topk 10/10、`parallel_partition_execution` 27/27、DQL 324/324、storage lib 1415/1415 全绿。`linkrs-config` 的 lib 单测因 devs 离线缺少 `serial_test v3.5.0` 无法启动，因此 gate 改用 partitioning lib 中的默认值断言覆盖同一配置契约。
+
+计划期类型传播已接入 `RETURN/YIELD DISTINCT` 的逻辑与物理 Dedup 节点，但当前 LSQB 形状的 EXPLAIN 仍为 `local_topk:pushed:runtime`；运行时 typed 判定继续生效，不能把计划期证明记为已完成。
+
+固定门两轮（warmup 1 + run 5，绑核 16-31，`--parallel-workers 16 --max-partitions 10`，`actual=10`、`actual_partitions=10`、结果逐值一致、`spill_rows=0`）：
+
+| 用例 | 上轮两轮中位数 ms | 本轮两轮中位数 ms | 判定 |
+|---|---:|---:|---|
+| `group_by_count` | 103 / 119 | 96.01 / 94.66 | 无明显退化，未达 ≤40 ms 中间门 |
+| `distinct_limit` | 89 / 137 | 91.90 / 81.91 | 无明显退化，未达 ≤30 ms 中间门 |
+| `join_two_hop` | 5.94 / 6.19 | 6.24 / 10.31 | 无回归，未达 ≤4 ms 中间门 |
+| `variable_path_count` | 6.54 / 6.34 | 6.09 / 6.36 | 无回归，满足 ≤6 ms 量级 |
+| 九条纯计数 | 0.14–0.61 | 0.15–0.66 | 无实质回归 |
+
+生产默认配置单轮（不加 benchmark 并行参数）中 `group_by_count` 99.64 ms、`distinct_limit` 85.41 ms，EXPLAIN 为 `requested=8, actual=8`，九条纯计数仍为 0.15–0.66 ms。这说明生产默认从串行切换到窄形状灰度后确实获得收益；上轮量级约 280–290 ms 的默认执行不再是当前行为。
+
+新增自耗时字段给出了下一步方向：`group_by_count` 两轮 `scan_read_us=519581/423718`、`expand_read_us=168737/160310`；`distinct_limit` 为 `548506/552796` 与 `185000/183901`。墙钟约 90–100 ms 是 10 个分区的聚合，扫描读取与展开读取远超其余算子。packed 拓扑和 typed 状态调整没有在端到端上形成可测收益，但取消了查询层逐边对象路径并保持结果一致；`1..2` 前沿合并也未在 sf0.1 上体现收益。下一轮应直接优化扫描枚举/可见性与目的端属性读取，而不是继续改聚合、去重或拓扑 DTO。
+
+编译中位数仍为约 2.1–3.1 ms（九条纯计数 0.01 ms 级），未达本方案中间门；其来源尚未收敛，不能把当前并行形状当作短查询无成本。原始日志、逐用例 JSON、EXPLAIN 与 gate 日志在 `perf-data/parity/results/2026-11-23/stage1-stage2-final/`。
+
+结论：生产配置更新已生效且正确性门全绿；阶段一、二的性能中间门未达成，按方案不扩大放行面、不改近似语义，研究重点转入扫描与目的端读取。
+
+随后按 `docs/plan/remaining-bottleneck-microbench-and-design.md` 完成第二轮修改：packed 拓扑改为事件流 + 计数散射 + 紧凑边类型 ID，目的端 flat 需求改用属性列/存在性批量读取，两跳度数去掉每父容器。微基准中 packed 读取由 3985 us / 15.5 MB 降到 3280 us / 8.68 MB，目的端 `id` 读取由 1361 us 降到 1090 us；固定门中 `expand_read_us` 由约 160–210 ms 降到 110–135 ms，`join_two_hop` 为 5.78 / 5.94 ms，`variable_path_count` 为 5.77 / 5.45 ms。端到端 `group_by_count` 88.25 / 98.20 ms、`distinct_limit` 84.29 / 135.52 ms，仍未稳定跨越中间门；剩余主因是扫描自身的可见性枚举与属性解码。原计划中的 vid 哈希交换策略未改变目标查询的 EXPLAIN，已回退，不进入最终改动集合。完整结果见 `perf-data/parity/results/2026-11-23/stage1-stage2-remediation-final/`。

@@ -14,8 +14,9 @@ benches/                        # 根目录：仅保留共享数据与历史产�
 ├── README.md                   # 本文件
 └── BENCHMARK_REPORT.md         # 历史报告（迁移前 6 套件时代的快照，仅供查阅）
 
-crates/linkrs-storage/benches/  # 存储层（13 个）：GraphStorage 读写、CSR、
-                                # ingest 归因、提交竞争、WAL、恢复、分配计数
+crates/linkrs-storage/benches/  # 存储层（15 个）：GraphStorage 读写、CSR、
+                                # ingest 归因、提交竞争、WAL、恢复、分配计数、
+                                # 扫描分区归因、批量拓扑读取归因
 crates/linkrs-transaction/benches/ # 事务层（2 个）：事务操作/MVCC/认证、
                                    # 写写冲突
 crates/linkrs-query/benches/    # 查询层（6 个）：查询主基准、阶段拆分、

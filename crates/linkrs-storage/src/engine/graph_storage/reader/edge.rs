@@ -9,6 +9,7 @@ use crate::engine::graph_storage::ops::{
 };
 use crate::engine::params::EdgeOperationParams;
 use crate::EdgeTopology;
+use crate::{FrontierDegrees, PackedEdgeTopology};
 use linkrs_core::types::{EdgeTypeInfo, LabelId, Timestamp, VertexId};
 use linkrs_core::{Edge, EdgeDirection, StorageError, StorageResult, Value};
 
@@ -491,14 +492,14 @@ pub(crate) fn get_node_edges_projected_batch(
 /// shared topology identities. No property decode or `Edge` allocation is
 /// performed, which is the shape columnar expand needs when only endpoints
 /// and rank are consumed.
-pub(crate) fn get_node_edge_headers_batch(
+pub(crate) fn packed_node_edge_headers_batch(
     ctx: &GraphStorageContext,
     space: &str,
     src_ids: &[VertexId],
     handles: Option<&[Option<(u32, LabelId)>]>,
     direction: EdgeDirection,
     edge_types: &[String],
-) -> StorageResult<Vec<Vec<EdgeTopology>>> {
+) -> StorageResult<PackedEdgeTopology> {
     record_schema_read(ctx, space);
     let space_info = ctx
         .schema_manager()
@@ -510,22 +511,51 @@ pub(crate) fn get_node_edge_headers_batch(
         .collect::<Result<_, _>>()?;
     let edge_types_all = ctx.schema_manager().list_edge_types(space)?;
     if edge_types_all.is_empty() {
-        return Ok(vec![Vec::new(); normalized.len()]);
+        let mut empty = PackedEdgeTopology {
+            parents: normalized,
+            ..PackedEdgeTopology::default()
+        };
+        empty.child_offsets.resize(empty.parents.len() + 1, 0);
+        return Ok(empty);
     }
     let ts = ctx.get_read_timestamp();
     for id in &normalized {
         record_vertex_read(ctx, *id);
     }
-    let mut out: Vec<Vec<EdgeTopology>> = vec![Vec::new(); normalized.len()];
-    // A traversal batch reaches a small set of destinations many times.
-    // Translate each internal endpoint once per call instead of once per
-    // CSR slot, while keeping the CSR visit order unchanged.
-    let mut translated: HashMap<(LabelId, u32), VertexId> = HashMap::new();
 
-    for edge_info in &edge_types_all {
-        if !edge_types.is_empty() && !edge_types.contains(&edge_info.edge_type_name) {
-            continue;
-        }
+    let mut packed = PackedEdgeTopology {
+        parents: normalized.clone(),
+        ..PackedEdgeTopology::default()
+    };
+    let selected: Vec<&_> = edge_types_all
+        .iter()
+        .filter(|info| edge_types.is_empty() || edge_types.contains(&info.edge_type_name))
+        .collect();
+    for info in &selected {
+        packed.intern_edge_type(&Arc::from(info.edge_type_name.as_str()));
+    }
+
+    // One flat event per CSR slot, then a counting scatter into parent-major
+    // arrays. This keeps the CSR visit order without one Vec per parent and
+    // without an Arc clone per edge.
+    #[derive(Clone, Copy)]
+    enum Side {
+        Out,
+        In,
+    }
+    struct Event {
+        parent: usize,
+        far_label: LabelId,
+        endpoint: u32,
+        rank: i64,
+        type_id: u32,
+        side: Side,
+    }
+    let mut events: Vec<Event> = Vec::new();
+    let mut translated: HashMap<(LabelId, u32), VertexId> = HashMap::new();
+    let mut seen: HashSet<(usize, VertexId, VertexId, i64)> = HashSet::new();
+
+    for (type_id, edge_info) in selected.iter().enumerate() {
         let Some(src_label_id) = endpoint_label_id(ctx, space, &edge_info.src_tag_name)? else {
             continue;
         };
@@ -533,51 +563,35 @@ pub(crate) fn get_node_edge_headers_batch(
             continue;
         };
         let edge_label_id = edge_info.edge_type_id;
-        let edge_type: Arc<str> = Arc::from(edge_info.edge_type_name.as_str());
+        let type_id = type_id as u32;
         match direction {
             EdgeDirection::Out => {
                 let batches =
                     ctx.out_topology_batch(edge_label_id, src_label_id, &normalized, handles, ts);
-                for (index, hots) in batches.into_iter().enumerate() {
+                for (parent, hots) in batches.into_iter().enumerate() {
                     for (far_label, hot) in hots {
-                        let dst =
-                            *translated
-                                .entry((far_label, hot.endpoint))
-                                .or_insert_with(|| {
-                                    ctx.endpoint_to_external(
-                                        far_label,
-                                        VertexId::from_u32(hot.endpoint),
-                                        ts,
-                                    )
-                                });
-                        out[index].push(EdgeTopology {
-                            src: normalized[index],
-                            dst,
-                            edge_type: Arc::clone(&edge_type),
-                            ranking: hot.rank,
+                        events.push(Event {
+                            parent,
+                            far_label,
+                            endpoint: hot.endpoint,
+                            rank: hot.rank,
+                            type_id,
+                            side: Side::Out,
                         });
                     }
                 }
             }
             EdgeDirection::In => {
                 let batches = ctx.in_topology_batch(edge_label_id, dst_label_id, &normalized, ts);
-                for (index, hots) in batches.into_iter().enumerate() {
+                for (parent, hots) in batches.into_iter().enumerate() {
                     for (far_label, hot) in hots {
-                        let src =
-                            *translated
-                                .entry((far_label, hot.endpoint))
-                                .or_insert_with(|| {
-                                    ctx.endpoint_to_external(
-                                        far_label,
-                                        VertexId::from_u32(hot.endpoint),
-                                        ts,
-                                    )
-                                });
-                        out[index].push(EdgeTopology {
-                            src,
-                            dst: normalized[index],
-                            edge_type: Arc::clone(&edge_type),
-                            ranking: hot.rank,
+                        events.push(Event {
+                            parent,
+                            far_label,
+                            endpoint: hot.endpoint,
+                            rank: hot.rank,
+                            type_id,
+                            side: Side::In,
                         });
                     }
                 }
@@ -587,10 +601,9 @@ pub(crate) fn get_node_edge_headers_batch(
                     ctx.out_topology_batch(edge_label_id, src_label_id, &normalized, handles, ts);
                 let in_batches =
                     ctx.in_topology_batch(edge_label_id, dst_label_id, &normalized, ts);
-                for (index, (out_hots, in_hots)) in
+                for (parent, (out_hots, in_hots)) in
                     out_batches.into_iter().zip(in_batches).enumerate()
                 {
-                    let mut seen: HashSet<(VertexId, VertexId, i64)> = HashSet::new();
                     for (far_label, hot) in out_hots {
                         let dst =
                             *translated
@@ -602,15 +615,16 @@ pub(crate) fn get_node_edge_headers_batch(
                                         ts,
                                     )
                                 });
-                        let key = (normalized[index], dst, hot.rank);
-                        if !seen.insert(key) {
+                        if !seen.insert((parent, normalized[parent], dst, hot.rank)) {
                             continue;
                         }
-                        out[index].push(EdgeTopology {
-                            src: normalized[index],
-                            dst,
-                            edge_type: Arc::clone(&edge_type),
-                            ranking: hot.rank,
+                        events.push(Event {
+                            parent,
+                            far_label,
+                            endpoint: hot.endpoint,
+                            rank: hot.rank,
+                            type_id,
+                            side: Side::Out,
                         });
                     }
                     for (far_label, hot) in in_hots {
@@ -624,22 +638,71 @@ pub(crate) fn get_node_edge_headers_batch(
                                         ts,
                                     )
                                 });
-                        let key = (src, normalized[index], hot.rank);
-                        if !seen.insert(key) {
+                        if !seen.insert((parent, src, normalized[parent], hot.rank)) {
                             continue;
                         }
-                        out[index].push(EdgeTopology {
-                            src,
-                            dst: normalized[index],
-                            edge_type: Arc::clone(&edge_type),
-                            ranking: hot.rank,
+                        events.push(Event {
+                            parent,
+                            far_label,
+                            endpoint: hot.endpoint,
+                            rank: hot.rank,
+                            type_id,
+                            side: Side::In,
                         });
                     }
                 }
             }
         }
     }
-    Ok(out)
+
+    packed.child_offsets.push(0);
+    let mut counts = vec![0usize; normalized.len()];
+    for event in &events {
+        counts[event.parent] += 1;
+    }
+    for count in counts {
+        let last = *packed.child_offsets.last().expect("offsets start at zero");
+        packed.child_offsets.push(last + count);
+    }
+
+    let total = events.len();
+    packed.src = vec![VertexId::default(); total];
+    packed.dst = vec![VertexId::default(); total];
+    packed.edge_type_ids = vec![0u32; total];
+    packed.rankings = vec![0i64; total];
+    let mut cursors = packed.child_offsets[..normalized.len()].to_vec();
+    for event in events {
+        let far = *translated
+            .entry((event.far_label, event.endpoint))
+            .or_insert_with(|| {
+                ctx.endpoint_to_external(event.far_label, VertexId::from_u32(event.endpoint), ts)
+            });
+        let (src, dst) = match event.side {
+            Side::Out => (normalized[event.parent], far),
+            Side::In => (far, normalized[event.parent]),
+        };
+        let position = cursors[event.parent];
+        cursors[event.parent] = position + 1;
+        packed.src[position] = src;
+        packed.dst[position] = dst;
+        packed.edge_type_ids[position] = event.type_id;
+        packed.rankings[position] = event.rank;
+    }
+    Ok(packed)
+}
+
+pub(crate) fn get_node_edge_headers_batch(
+    ctx: &GraphStorageContext,
+    space: &str,
+    src_ids: &[VertexId],
+    handles: Option<&[Option<(u32, LabelId)>]>,
+    direction: EdgeDirection,
+    edge_types: &[String],
+) -> StorageResult<Vec<Vec<EdgeTopology>>> {
+    Ok(
+        packed_node_edge_headers_batch(ctx, space, src_ids, handles, direction, edge_types)?
+            .to_batches(),
+    )
 }
 
 /// Lightweight batch neighbor read used by de-materialized expand hops
@@ -794,13 +857,13 @@ pub(crate) fn out_degree_batch(
 /// visibility, but are not materialized into query rows. Other schemas fall
 /// back to the portable neighbor plus degree calls so their dedup rules stay
 /// unchanged.
-pub(crate) fn neighbor_degree_batch(
+pub(crate) fn frontier_degree_batch(
     ctx: &GraphStorageContext,
     space: &str,
     src_ids: &[VertexId],
     direction: EdgeDirection,
     edge_types: &[String],
-) -> StorageResult<Vec<usize>> {
+) -> StorageResult<FrontierDegrees> {
     record_schema_read(ctx, space);
     let edge_type_infos = ctx.schema_manager().list_edge_types(space)?;
     let ts = ctx.get_read_timestamp();
@@ -821,10 +884,16 @@ pub(crate) fn neighbor_degree_batch(
         record_vertex_read(ctx, *src_id);
     }
     if resolved.len() != 1 || matches!(direction, EdgeDirection::Both) {
-        return portable_neighbor_degree(ctx, space, src_ids, direction, edge_types);
+        return portable_frontier_degrees(ctx, space, src_ids, direction, edge_types);
     }
     let (edge_label, src_label, dst_label) = resolved[0];
-    let mut staged: Vec<Vec<(LabelId, u32)>> = vec![Vec::new(); src_ids.len()];
+    #[derive(Clone, Copy)]
+    struct NeighborEvent {
+        parent: usize,
+        label: LabelId,
+        endpoint: u32,
+    }
+    let mut events: Vec<NeighborEvent> = Vec::new();
     if direction == EdgeDirection::Out {
         ctx.visit_out_nbrs_batched(
             edge_label,
@@ -833,7 +902,11 @@ pub(crate) fn neighbor_degree_batch(
             src_ids,
             ts,
             |index, _, label, nbr| {
-                staged[index].push((label, nbr.endpoint));
+                events.push(NeighborEvent {
+                    parent: index,
+                    label,
+                    endpoint: nbr.endpoint,
+                });
             },
         );
     } else {
@@ -844,79 +917,104 @@ pub(crate) fn neighbor_degree_batch(
             src_ids,
             ts,
             |index, _, label, nbr| {
-                staged[index].push((label, nbr.endpoint));
+                events.push(NeighborEvent {
+                    parent: index,
+                    label,
+                    endpoint: nbr.endpoint,
+                });
             },
         );
+    }
+    let mut direct = vec![0usize; src_ids.len()];
+    for event in &events {
+        direct[event.parent] += 1;
     }
     let neighbor_label = if direction == EdgeDirection::Out {
         dst_label
     } else {
         src_label
     };
-    if staged
-        .iter()
-        .flatten()
-        .any(|(label, _)| *label != neighbor_label)
-    {
-        return portable_neighbor_degree(ctx, space, src_ids, direction, edge_types);
+    if events.iter().any(|event| event.label != neighbor_label) {
+        return portable_frontier_degrees(ctx, space, src_ids, direction, edge_types);
     }
+
+    // Counting scatter keeps parent-major order without one Vec per parent.
+    let mut offsets = Vec::with_capacity(src_ids.len() + 1);
+    offsets.push(0);
+    for count in &direct {
+        let last = *offsets.last().expect("offsets start at zero");
+        offsets.push(last + count);
+    }
+    let mut raw_endpoints = vec![0u32; events.len()];
+    let mut cursors = offsets[..src_ids.len()].to_vec();
+    for event in events {
+        let position = cursors[event.parent];
+        cursors[event.parent] = position + 1;
+        raw_endpoints[position] = event.endpoint;
+    }
+
     // Keep the portable path's dangling-neighbor visibility with one batched
     // resolution, then record the same read keys when a recorder is active.
-    let mut raw_offsets = Vec::with_capacity(src_ids.len() + 1);
-    let mut raw_endpoints = Vec::new();
-    for neighbors in &staged {
-        raw_offsets.push(raw_endpoints.len());
-        raw_endpoints.extend(neighbors.iter().map(|(_, endpoint)| *endpoint));
-    }
-    raw_offsets.push(raw_endpoints.len());
     let external = ctx.external_ids_by_internal_batch(neighbor_label, &raw_endpoints, ts);
     let recording = ctx.mutation_recorder().is_some();
-    let mut offsets = Vec::with_capacity(src_ids.len() + 1);
+    let mut visible_offsets = Vec::with_capacity(src_ids.len() + 1);
     let mut endpoints = Vec::with_capacity(raw_endpoints.len());
-    for (index, neighbors) in staged.iter().enumerate() {
-        offsets.push(endpoints.len());
-        let start = raw_offsets[index];
-        for (position, (_, endpoint)) in neighbors.iter().enumerate() {
-            if let Some(ext) = external[start + position] {
+    for pair in offsets.windows(2) {
+        visible_offsets.push(endpoints.len());
+        for position in pair[0]..pair[1] {
+            if let Some(ext) = external[position] {
                 if recording {
                     record_vertex_read(ctx, ext);
                 }
-                endpoints.push(*endpoint);
+                endpoints.push(raw_endpoints[position]);
             }
         }
     }
-    offsets.push(endpoints.len());
+    visible_offsets.push(endpoints.len());
+    let offsets = visible_offsets;
     let degrees = if direction == EdgeDirection::Out {
         ctx.count_out_nbrs_by_internal(edge_label, neighbor_label, &endpoints, ts)
     } else {
         ctx.count_in_nbrs_by_internal(edge_label, neighbor_label, &endpoints, ts)
     };
-    let mut totals = Vec::with_capacity(src_ids.len());
+    let mut two_hop = Vec::with_capacity(src_ids.len());
     for pair in offsets.windows(2) {
-        totals.push(degrees[pair[0]..pair[1]].iter().sum());
+        two_hop.push(degrees[pair[0]..pair[1]].iter().sum());
     }
-    Ok(totals)
+    Ok(FrontierDegrees { direct, two_hop })
 }
 
-fn portable_neighbor_degree(
+/// Two-hop tail degrees derived from the shared frontier staging.
+pub(crate) fn neighbor_degree_batch(
     ctx: &GraphStorageContext,
     space: &str,
     src_ids: &[VertexId],
     direction: EdgeDirection,
     edge_types: &[String],
 ) -> StorageResult<Vec<usize>> {
+    Ok(frontier_degree_batch(ctx, space, src_ids, direction, edge_types)?.two_hop)
+}
+
+fn portable_frontier_degrees(
+    ctx: &GraphStorageContext,
+    space: &str,
+    src_ids: &[VertexId],
+    direction: EdgeDirection,
+    edge_types: &[String],
+) -> StorageResult<FrontierDegrees> {
+    let direct = out_degree_batch(ctx, space, src_ids, direction, edge_types)?;
     let neighbors = neighbor_dst_ids_batch(ctx, space, src_ids, direction, edge_types)?;
     let lengths: Vec<usize> = neighbors.iter().map(Vec::len).collect();
     let flat: Vec<VertexId> = neighbors.into_iter().flatten().collect();
     let degrees = out_degree_batch(ctx, space, &flat, direction, edge_types)?;
-    let mut totals = Vec::with_capacity(src_ids.len());
+    let mut two_hop = Vec::with_capacity(src_ids.len());
     let mut offset = 0;
     for length in lengths {
         let sum: usize = degrees[offset..offset + length].iter().sum();
-        totals.push(sum);
+        two_hop.push(sum);
         offset += length;
     }
-    Ok(totals)
+    Ok(FrontierDegrees { direct, two_hop })
 }
 
 /// Stage hot-CSR neighbors for a whole seed batch, one edge type at a time.

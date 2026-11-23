@@ -56,6 +56,14 @@ name = "neighbor_batch_bench"
 harness = false
 
 [[bench]]
+name = "scan_division_bench"
+harness = false
+
+[[bench]]
+name = "topology_read_bench"
+harness = false
+
+[[bench]]
 name = "edge_property_tables_bench"
 harness = false
 

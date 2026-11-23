@@ -984,7 +984,10 @@ host = "0.0.0.0"
             .expect("Failed to write config file");
         let config = Config::load(temp_file.path()).expect("Failed to load config");
         assert!(!config.common.parallel.enabled);
-        assert_eq!(config.common.parallel.workers, 1);
+        assert_eq!(config.common.parallel.workers, 8);
+        assert_eq!(config.common.parallel.max_partitions, 8);
+        assert!(config.common.parallel.allow_ordered_parallel_expand);
+        assert!(!config.common.parallel.allow_pure_count_chain);
         assert!(config.common.parallel.vertex_id_range().is_none());
     }
 

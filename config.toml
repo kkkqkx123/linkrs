@@ -239,20 +239,22 @@ disabled_rules = []
 enabled_rules = []
 
 [parallel]
-# Whether to enable intra-query parallel partitioning (disabled by default; behavior is identical to when disabled)
+# Master switch stays off; gray-release flags admit only proven shapes.
 enabled = false
-# Number of worker threads for the shared scheduler
-workers = 1
+# Shared scheduler size. Eight is the conservative production starting point.
+workers = 8
 # Minimum rows per partition (partitioning is rejected below this threshold)
 min_rows_per_partition = 100000
-# Maximum number of partitions for a single scan
-max_partitions = 1
+# Maximum number of partitions for a single scan.
+max_partitions = 8
 # Maximum number of buffered chunks per partition worker (backpressure)
 max_buffered_chunks = 10
-# Gray-release switches: admit a single shape through the disabled master gate
+# Gray-release switches: admit a single shape through the disabled master gate.
+# Only the rowless single-hop expand chain feeding group-count or ordered
+# distinct is released; pure counts and general aggregates stay serial.
 allow_pure_count_chain = false
 allow_global_aggregate = false
-allow_ordered_parallel_expand = false
+allow_ordered_parallel_expand = true
 # Admit partitioned count-only expand frontiers
 allow_parallel_count_frontier = false
 # Requires shard-local storage evidence; inert until that proof exists

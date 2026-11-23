@@ -1,8 +1,8 @@
 //! Parallel query execution configuration
 //!
-//! Controls intra-query parallel partitioning (Part B E3). The defaults match
-//! `PartitioningConfig::default()` so an unconfigured server behaves exactly
-//! like today: partitioning disabled, single worker.
+//! Controls intra-query parallel partitioning. The master switch stays off,
+//! while the proven rowless single-hop shape is admitted through its narrow
+//! gray-release flag with a conservative worker budget.
 
 use serde::{Deserialize, Serialize};
 
@@ -28,16 +28,15 @@ pub struct ParallelConfig {
     /// Optional trusted upper bound (exclusive) of the vertex-id range.
     pub vertex_id_end: Option<i64>,
     /// Gray-release allowlist: admit pure-count chains through the disabled
-    /// gate without enabling partitioning globally. Defaults to false.
+    /// gate without enabling partitioning globally.
     #[serde(default)]
     pub allow_pure_count_chain: bool,
     /// Gray-release allowlist: admit other aggregate-rooted plans through
-    /// the disabled gate. Defaults to false.
+    /// the disabled gate.
     #[serde(default)]
     pub allow_global_aggregate: bool,
     /// Gray-release allowlist: admit the de-materialized single-hop expand
-    /// front end feeding count, group-count, or ordered distinct. Defaults to
-    /// false.
+    /// front end feeding count, group-count, or ordered distinct.
     #[serde(default)]
     pub allow_ordered_parallel_expand: bool,
     /// Gray-release allowlist: partition count-only expand frontiers whose
@@ -54,15 +53,15 @@ impl Default for ParallelConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            workers: 1,
+            workers: 8,
             min_rows_per_partition: 100_000,
-            max_partitions: 1,
+            max_partitions: 8,
             max_buffered_chunks: 10,
             vertex_id_start: None,
             vertex_id_end: None,
             allow_pure_count_chain: false,
             allow_global_aggregate: false,
-            allow_ordered_parallel_expand: false,
+            allow_ordered_parallel_expand: true,
             allow_parallel_count_frontier: false,
             allow_partition_metadata_count: false,
         }
@@ -107,11 +106,16 @@ mod tests {
     fn test_parallel_config_default() {
         let config = ParallelConfig::default();
         assert!(!config.enabled);
-        assert_eq!(config.workers, 1);
+        assert_eq!(config.workers, 8);
         assert_eq!(config.min_rows_per_partition, 100_000);
-        assert_eq!(config.max_partitions, 1);
+        assert_eq!(config.max_partitions, 8);
         assert_eq!(config.max_buffered_chunks, 10);
         assert!(config.vertex_id_range().is_none());
+        assert!(!config.enabled);
+        assert!(config.allow_ordered_parallel_expand);
+        assert!(!config.allow_pure_count_chain);
+        assert!(!config.allow_global_aggregate);
+        assert!(!config.allow_parallel_count_frontier);
     }
 
     #[test]

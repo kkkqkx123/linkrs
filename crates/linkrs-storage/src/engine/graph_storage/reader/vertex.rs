@@ -445,6 +445,204 @@ fn get_vertices_batch_impl(
     Ok(out)
 }
 
+/// Batch property-column reads without constructing entity values.
+///
+/// Used by expand hops whose destination demand is a flat property column:
+/// visibility and TTL still come from the same snapshot, but only the named
+/// properties are decoded. An empty property list performs existence-only
+/// reads and returns present vertices with an empty value vector.
+pub(crate) fn get_vertex_property_columns_batch(
+    ctx: &GraphStorageContext,
+    space: &str,
+    tag: &str,
+    ids: &[VertexId],
+    properties: &[std::sync::Arc<str>],
+) -> StorageResult<Vec<Option<Vec<Value>>>> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    record_schema_read(ctx, space);
+    let space_info = ctx
+        .schema_manager()
+        .get_space(space)?
+        .ok_or_else(|| StorageError::not_found(format!("Space {} not found", space)))?;
+    let tag_info = ctx
+        .schema_manager()
+        .get_tag(space, tag)?
+        .ok_or_else(|| StorageError::not_found(format!("Tag {} not found", tag)))?;
+    let label_id = tag_info.tag_id;
+    let ts = ctx.get_read_timestamp();
+    for id in ids {
+        record_vertex_read(ctx, *id);
+    }
+
+    let extract = |record: &crate::vertex::VertexRecord| {
+        properties
+            .iter()
+            .map(|name| {
+                record
+                    .properties
+                    .iter()
+                    .find(|(stored, _)| stored == name)
+                    .map(|(_, value)| value.clone())
+                    .unwrap_or(Value::Null(linkrs_core::NullType::Null))
+            })
+            .collect::<Vec<_>>()
+    };
+    let expired = |record: &crate::vertex::VertexRecord| {
+        crate::engine::graph_storage::ttl::record_expired_from_slice(
+            tag_info.ttl_duration,
+            tag_info.ttl_col.as_deref(),
+            &record.properties,
+        )
+    };
+
+    let staging = ctx.active_txn_staging();
+    let mut normalized: Vec<Option<VertexId>> = Vec::with_capacity(ids.len());
+    let mut keys: Vec<Option<crate::vertex::IdKey>> = Vec::with_capacity(ids.len());
+    for id in ids {
+        match VertexId::normalize_for_vid_type(&space_info.vid_type, *id) {
+            Ok(vid) => match route_vertex_id(&vid) {
+                Ok(_) => {
+                    let key = match vid.as_int64() {
+                        Some(i) => Some(crate::vertex::IdKey::Int(i)),
+                        None => vid
+                            .as_str()
+                            .map(|s| crate::vertex::IdKey::Text(s.to_string())),
+                    };
+                    normalized.push(Some(vid));
+                    keys.push(key);
+                }
+                Err(_) => {
+                    normalized.push(None);
+                    keys.push(None);
+                }
+            },
+            Err(_) => {
+                normalized.push(None);
+                keys.push(None);
+            }
+        }
+    }
+
+    let mut batchable: Vec<usize> = Vec::new();
+    let mut staged: Vec<usize> = Vec::new();
+    if let Some(buffer) = staging.as_ref() {
+        let buffer = buffer.lock();
+        for (idx, key) in keys.iter().enumerate() {
+            let Some(key) = key else { continue };
+            if normalized[idx].is_none() {
+                continue;
+            }
+            if buffer.has_pending_delete(label_id, key)
+                || buffer.pending_update(label_id, key).is_some()
+                || buffer.pending_property_deletes(label_id, key).is_some()
+                || buffer.pending_insert_row(label_id, key).is_some()
+            {
+                staged.push(idx);
+            } else {
+                batchable.push(idx);
+            }
+        }
+    } else {
+        for (idx, key) in keys.iter().enumerate() {
+            if normalized[idx].is_some() && key.is_some() {
+                batchable.push(idx);
+            }
+        }
+    }
+
+    let mut out: Vec<Option<Vec<Value>>> = vec![None; ids.len()];
+    if !batchable.is_empty() {
+        let guard = ctx.visibility_guard(ts);
+        let internal_ids: Vec<Option<u32>> = ctx
+            .data_store()
+            .with_vertex_tables(|tables| {
+                let table = tables.get(&label_id)?;
+                let mut resolved = Vec::with_capacity(batchable.len());
+                for idx in &batchable {
+                    let key = keys.get(*idx)?.as_ref()?;
+                    let internal = match key {
+                        crate::vertex::IdKey::Int(i) => table.get_internal_id_by_i64(*i, ts),
+                        crate::vertex::IdKey::Text(s) => table.get_internal_id(s, ts),
+                    };
+                    resolved.push(internal);
+                }
+                Some(resolved)
+            })
+            .unwrap_or_default();
+        if internal_ids.len() != batchable.len() {
+            staged.extend(batchable.iter().copied());
+            batchable.clear();
+        }
+        let mut positions = Vec::new();
+        let mut internals = Vec::new();
+        for (pos, internal) in batchable.iter().zip(internal_ids.iter()) {
+            if let Some(internal) = internal {
+                positions.push(*pos);
+                internals.push(*internal);
+            }
+        }
+        if !internals.is_empty() {
+            let records: Option<Vec<Option<crate::vertex::VertexRecord>>> =
+                ctx.data_store().with_vertex_tables(|tables| {
+                    let table = tables.get(&label_id)?;
+                    table
+                        .resolve_projected_batch(&internals, &guard, Some(properties))
+                        .ok()
+                });
+            if let Some(records) = records {
+                for (pos, record) in positions.into_iter().zip(records) {
+                    if let Some(record) = record {
+                        if !expired(&record) {
+                            out[pos] = Some(extract(&record));
+                        }
+                    }
+                }
+            } else {
+                staged.extend(batchable.iter().copied());
+                batchable.clear();
+            }
+        }
+    }
+
+    let mut seen: HashSet<usize> = batchable.iter().copied().collect();
+    let mut point_indices = Vec::with_capacity(staged.len());
+    for idx in staged {
+        if seen.insert(idx) {
+            point_indices.push(idx);
+        }
+    }
+    for (idx, vid) in normalized.iter().enumerate() {
+        if vid.is_none() {
+            continue;
+        }
+        if seen.insert(idx) {
+            point_indices.push(idx);
+        }
+    }
+    for idx in point_indices {
+        let Some(vid) = normalized[idx] else { continue };
+        if out[idx].is_some() {
+            continue;
+        }
+        let record = match route_vertex_id(&vid)? {
+            RoutedVertexId::Int(id_int) => {
+                ctx.get_vertex_by_i64_projected(label_id, id_int, properties, ts)
+            }
+            RoutedVertexId::Text(id_str) => {
+                ctx.get_vertex_projected(label_id, &id_str, properties, ts)
+            }
+        };
+        if let Some(record) = record {
+            if !expired(&record) {
+                out[idx] = Some(extract(&record));
+            }
+        }
+    }
+    Ok(out)
+}
+
 pub(crate) fn get_vertex_with_schema(
     ctx: &GraphStorageContext,
     space: &str,

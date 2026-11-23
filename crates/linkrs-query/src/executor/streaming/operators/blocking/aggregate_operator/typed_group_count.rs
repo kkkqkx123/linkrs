@@ -254,9 +254,6 @@ pub(crate) fn try_accumulate(
         });
     }
     let fast = state.as_mut().expect("typed group count initialized above");
-    for key in new_keys {
-        fast.counts.insert(key, 0);
-    }
     let (validity_bitmap, expand_counts) = validity;
     for idx in 0..len {
         let key = key_at(key_column, kind, idx).expect("key was validated in the preflight pass");
@@ -276,10 +273,8 @@ pub(crate) fn try_accumulate(
                 (value as u64).saturating_mul(multiplicity)
             }
         };
-        *fast
-            .counts
-            .get_mut(&key)
-            .expect("key was inserted in the preflight pass") += contribution;
+        let count = fast.counts.entry(key).or_insert(0);
+        *count += contribution;
     }
     true
 }

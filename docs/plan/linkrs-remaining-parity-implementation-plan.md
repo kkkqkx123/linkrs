@@ -215,3 +215,13 @@ devs 2026-11-18 两轮 LSQB sf0.1 实测显示：原有九条纯计数仍为 0.1
 - 阶段六之前不把 Linkrs 方言用例计入三方数值对比。
 - 阶段七只有在阶段一到六的查询数值全部稳定后才启动。
 - 任一阶段的数值回归立即停止该阶段，先补反例再继续。
+
+---
+
+## 当前状态与后续收敛
+
+截至 2026-11-23，阶段一的原始秒级用例已由 1.1–1.5 秒降到约 90–120 ms，typed 分组计数和分区局部 TopK 均已在 PROFILE 中确认生效；阶段二的两跳与变长计数已降到约 6 ms；阶段三的过滤计数已降到约 1.2 ms。详细证据见 `docs/issue/linkrs-remaining-parity-issues.md` 第 35 节。
+
+阶段一的“秒级瓶颈”已消除，但相对 Ladybug 仍约 15–30 倍，且收益依赖 benchmark 显式放行并行，生产默认配置未启用。因此首条硬门槛按原始字面已满足，按下一阶段 20 ms / 15 ms 目标仍未闭环。后续不重新划分阶段，也不改写上述历史目标；针对阶段一、二的收敛实施与生产配置更新写入 `docs/plan/stage1-stage2-current-gap-remediation.md`，该文件继承本方案的护栏与不做项。
+
+首轮回测已于 2026-11-23 在 devs 完成：release 构建与 partitioning / typed group / local topk / parallel / DQL / storage 全绿，生产默认已切到 `workers=8, max_partitions=8, allow_ordered_parallel_expand=true`。固定门中两条阶段一用例仍在约 100–130 ms，未达 40 ms / 30 ms 中间门；阶段二两跳约 6.2 ms，未达 4 ms。新增自耗时证据显示扫描读取与展开读取合计占主导，后续按问题清单第 37 节转入扫描枚举/可见性与目的端属性读取；不得因配置收益而宣称算子目标闭环。

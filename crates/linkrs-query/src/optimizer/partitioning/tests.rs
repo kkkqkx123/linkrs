@@ -1363,3 +1363,15 @@ fn desired_partition_count_trades_per_partition_cost_against_saving() {
     let planner = PartitioningPlanner::new(config);
     assert_eq!(planner.desired_partition_count(100_000), 5);
 }
+
+#[test]
+fn default_config_releases_only_ordered_expand_shape() {
+    let config = PartitioningConfig::default();
+    assert!(!config.enabled);
+    assert!(config.allow_ordered_parallel_expand);
+    assert!(!config.allow_pure_count_chain);
+    assert!(!config.allow_global_aggregate);
+    assert!(!config.allow_parallel_count_frontier);
+    assert_eq!(config.max_workers, 8);
+    assert_eq!(config.max_partitions, 8);
+}

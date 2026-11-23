@@ -15,8 +15,8 @@ use super::expand_columnar::{
     check_output_layout, check_rowless_lockstep, edge_neighbor, read_destinations,
 };
 use super::expand_dispatch::{
-    bypass_column, closed_loop_dst_tag, dst_bypass_value, edge_bypass_value, edge_projection,
-    expand_on_chunk, has_bypass_conflict, hop_bypass, is_closed_loop_storage, ColumnarOutcome,
+    bypass_column, closed_loop_dst_tag, edge_bypass_value, edge_projection, expand_on_chunk,
+    has_bypass_conflict, hop_bypass, is_closed_loop_storage, ColumnarOutcome,
 };
 use super::expand_seeds::{
     identity_seed_ids, materialize_rowless_rows, parse_seeds, seed_slot, seed_vid,
@@ -174,16 +174,17 @@ pub(super) fn expand_multi_hop_frontier(
     )
     .unwrap_or_else(|| ctx.dst_tag.to_string());
     let tail_tag = tail_tag_owned.as_str();
-    let vertices = read_destinations(
+    let destinations = read_destinations(
         reader,
         ctx.space_name,
         tail_tag,
         &all_dst,
         dst_bypass_opt.as_ref(),
+        false,
     )?;
     let mut kept: Vec<usize> = Vec::new();
-    for (i, vertex) in vertices.iter().enumerate() {
-        if vertex.is_some() {
+    for i in 0..destinations.len() {
+        if destinations.present(i) {
             kept.push(i);
         }
     }
@@ -243,7 +244,7 @@ pub(super) fn expand_multi_hop_frontier(
         for prop in &dst_bypass {
             typed.push(bypass_column(
                 kept.iter()
-                    .map(|&i| dst_bypass_value(vertices.get(i).and_then(|v| v.as_ref()), prop))
+                    .map(|&i| destinations.property(i, prop))
                     .collect(),
             ));
         }
@@ -272,7 +273,7 @@ pub(super) fn expand_multi_hop_frontier(
         let dst_value = if dst_empty {
             Value::VertexId(req.dst)
         } else {
-            match vertices.get(i).and_then(|v| v.clone()) {
+            match destinations.vertex(i).cloned() {
                 Some(v) => Value::Vertex(Box::new(v)),
                 None => continue,
             }
@@ -285,10 +286,7 @@ pub(super) fn expand_multi_hop_frontier(
             row.push(edge_bypass_value(&req.edge, prop));
         }
         for prop in &dst_bypass {
-            row.push(dst_bypass_value(
-                vertices.get(i).and_then(|v| v.as_ref()),
-                prop,
-            ));
+            row.push(destinations.property(i, prop));
         }
         out_rows.push(row);
     }
@@ -482,16 +480,17 @@ pub(super) fn expand_variable_frontier(
     )
     .unwrap_or_else(|| ctx.dst_tag.to_string());
     let var_tag = var_tag_owned.as_str();
-    let vertices = read_destinations(
+    let destinations = read_destinations(
         reader,
         ctx.space_name,
         var_tag,
         &all_dst,
         dst_bypass_opt.as_ref(),
+        false,
     )?;
     let mut kept: Vec<usize> = Vec::new();
-    for (i, vertex) in vertices.iter().enumerate() {
-        if vertex.is_some() {
+    for i in 0..destinations.len() {
+        if destinations.present(i) {
             kept.push(i);
         }
     }
@@ -551,7 +550,7 @@ pub(super) fn expand_variable_frontier(
         for prop in &dst_bypass {
             typed.push(bypass_column(
                 kept.iter()
-                    .map(|&i| dst_bypass_value(vertices.get(i).and_then(|v| v.as_ref()), prop))
+                    .map(|&i| destinations.property(i, prop))
                     .collect(),
             ));
         }
@@ -580,7 +579,7 @@ pub(super) fn expand_variable_frontier(
         let dst_value = if dst_empty {
             Value::VertexId(req.dst)
         } else {
-            match vertices.get(i).and_then(|v| v.clone()) {
+            match destinations.vertex(i).cloned() {
                 Some(v) => Value::Vertex(Box::new(v)),
                 None => continue,
             }
@@ -593,10 +592,7 @@ pub(super) fn expand_variable_frontier(
             row.push(edge_bypass_value(&req.edge, prop));
         }
         for prop in &dst_bypass {
-            row.push(dst_bypass_value(
-                vertices.get(i).and_then(|v| v.as_ref()),
-                prop,
-            ));
+            row.push(destinations.property(i, prop));
         }
         out_rows.push(row);
     }
@@ -695,11 +691,15 @@ pub(super) fn expand_count_only(
     depths.sort_unstable();
     depths.dedup();
     let mut total: i64 = 0;
-    if depths.contains(&1) {
+    if depths.contains(&1) && depths.contains(&2) {
+        let degrees =
+            reader.frontier_degree_batch(space_name, &seed_vids, direction, edge_types)?;
+        total += degrees.direct.iter().map(|&d| d as i64).sum::<i64>();
+        total += degrees.two_hop.iter().map(|&d| d as i64).sum::<i64>();
+    } else if depths.contains(&1) {
         let degrees = reader.out_degree_batch(space_name, &seed_vids, direction, edge_types)?;
         total += degrees.iter().map(|&d| d as i64).sum::<i64>();
-    }
-    if depths.contains(&2) {
+    } else if depths.contains(&2) {
         let degrees =
             reader.neighbor_degree_batch(space_name, &seed_vids, direction, edge_types)?;
         total += degrees.iter().map(|&d| d as i64).sum::<i64>();

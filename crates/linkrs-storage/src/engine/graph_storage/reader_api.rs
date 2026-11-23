@@ -149,6 +149,19 @@ impl StorageReader for GraphStorage {
         )
     }
 
+    fn get_packed_node_edge_headers_batch(
+        &self,
+        space: &str,
+        node_ids: &[VertexId],
+        handles: Option<&[Option<(u32, u32)>]>,
+        direction: linkrs_core::EdgeDirection,
+        edge_types: &[String],
+    ) -> Result<crate::PackedEdgeTopology, StorageError> {
+        reader::packed_node_edge_headers_batch(
+            &self.ctx, space, node_ids, handles, direction, edge_types,
+        )
+    }
+
     fn get_vertices_batch(
         &self,
         space: &str,
@@ -166,6 +179,16 @@ impl StorageReader for GraphStorage {
         projection: &[Arc<str>],
     ) -> Result<Vec<Option<Vertex>>, StorageError> {
         reader::get_vertices_projected_batch(&self.ctx, space, tag, ids, projection)
+    }
+
+    fn get_vertex_property_columns_batch(
+        &self,
+        space: &str,
+        tag: &str,
+        ids: &[VertexId],
+        properties: &[std::sync::Arc<str>],
+    ) -> Result<Vec<Option<Vec<Value>>>, StorageError> {
+        reader::get_vertex_property_columns_batch(&self.ctx, space, tag, ids, properties)
     }
 
     fn neighbor_dst_ids_batch(
@@ -196,6 +219,16 @@ impl StorageReader for GraphStorage {
         edge_types: &[String],
     ) -> Result<Vec<usize>, StorageError> {
         reader::neighbor_degree_batch(&self.ctx, space, src_ids, direction, edge_types)
+    }
+
+    fn frontier_degree_batch(
+        &self,
+        space: &str,
+        src_ids: &[VertexId],
+        direction: EdgeDirection,
+        edge_types: &[String],
+    ) -> Result<crate::FrontierDegrees, StorageError> {
+        reader::frontier_degree_batch(&self.ctx, space, src_ids, direction, edge_types)
     }
 
     fn scan_edges_by_type(&self, space: &str, edge_type: &str) -> Result<Vec<Edge>, StorageError> {

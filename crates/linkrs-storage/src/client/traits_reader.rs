@@ -18,6 +18,79 @@ pub struct EdgeTopology {
     pub ranking: i64,
 }
 
+/// Topology-only edges of one seed batch in parent-major order.
+///
+/// `child_offsets` has one entry per parent plus a trailing end offset, so a
+/// consumer can accumulate directly over `[child_offsets[p], child_offsets[p + 1])`
+/// without building one object per edge.
+#[derive(Debug, Clone, Default)]
+pub struct PackedEdgeTopology {
+    pub parents: Vec<VertexId>,
+    pub child_offsets: Vec<usize>,
+    pub src: Vec<VertexId>,
+    pub dst: Vec<VertexId>,
+    pub edge_type_ids: Vec<u32>,
+    pub edge_type_names: Vec<Arc<str>>,
+    pub rankings: Vec<i64>,
+}
+
+impl PackedEdgeTopology {
+    pub fn parent_count(&self) -> usize {
+        self.child_offsets.len().saturating_sub(1)
+    }
+
+    pub fn child_range(&self, parent: usize) -> std::ops::Range<usize> {
+        if parent >= self.parent_count() {
+            return 0..0;
+        }
+        self.child_offsets[parent]..self.child_offsets[parent + 1]
+    }
+
+    pub fn edge_type(&self, index: usize) -> Arc<str> {
+        Arc::clone(&self.edge_type_names[self.edge_type_ids[index] as usize])
+    }
+
+    pub fn intern_edge_type(&mut self, name: &Arc<str>) -> u32 {
+        if let Some(index) = self
+            .edge_type_names
+            .iter()
+            .position(|item| Arc::ptr_eq(item, name) || item == name)
+        {
+            return index as u32;
+        }
+        let index = self.edge_type_names.len();
+        self.edge_type_names.push(Arc::clone(name));
+        index as u32
+    }
+
+    /// Expand the packed layout into the per-parent form used by portable
+    /// readers and tests. The production topology-only path consumes the
+    /// packed arrays directly.
+    pub fn to_batches(&self) -> Vec<Vec<EdgeTopology>> {
+        let mut batches = Vec::with_capacity(self.parent_count());
+        for parent in 0..self.parent_count() {
+            let mut batch = Vec::new();
+            for index in self.child_range(parent) {
+                batch.push(EdgeTopology {
+                    src: self.src[index],
+                    dst: self.dst[index],
+                    edge_type: self.edge_type(index),
+                    ranking: self.rankings[index],
+                });
+            }
+            batches.push(batch);
+        }
+        batches
+    }
+}
+
+/// Direct and two-hop frontier degrees of one seed batch.
+#[derive(Debug, Clone, Default)]
+pub struct FrontierDegrees {
+    pub direct: Vec<usize>,
+    pub two_hop: Vec<usize>,
+}
+
 /// Read-only data and schema operations.
 pub trait StorageReader: Send + Sync + std::fmt::Debug {
     fn get_vertex(
@@ -218,6 +291,38 @@ pub trait StorageReader: Send + Sync + std::fmt::Debug {
             .collect())
     }
 
+    /// Packed form of [`Self::get_node_edge_headers_batch`].
+    ///
+    /// Portable adapters flatten the per-parent batches; the native engine
+    /// overrides this with a single CSR pass over the seed batch.
+    fn get_packed_node_edge_headers_batch(
+        &self,
+        space: &str,
+        node_ids: &[VertexId],
+        handles: Option<&[Option<(u32, LabelId)>]>,
+        direction: EdgeDirection,
+        edge_types: &[String],
+    ) -> Result<PackedEdgeTopology, StorageError> {
+        let batches =
+            self.get_node_edge_headers_batch(space, node_ids, handles, direction, edge_types)?;
+        let mut packed = PackedEdgeTopology {
+            parents: node_ids.to_vec(),
+            ..PackedEdgeTopology::default()
+        };
+        packed.child_offsets.push(0);
+        for batch in batches {
+            for topology in batch {
+                packed.src.push(topology.src);
+                packed.dst.push(topology.dst);
+                let type_id = packed.intern_edge_type(&topology.edge_type);
+                packed.edge_type_ids.push(type_id);
+                packed.rankings.push(topology.ranking);
+            }
+            packed.child_offsets.push(packed.dst.len());
+        }
+        Ok(packed)
+    }
+
     /// Batch vertex point lookups with the schema resolved once.
     ///
     /// Returns one entry per input id in input order. The default
@@ -258,6 +363,37 @@ pub trait StorageReader: Send + Sync + std::fmt::Debug {
             out.push(self.get_vertex_projected(space, tag, id, projection)?);
         }
         Ok(out)
+    }
+
+    /// Batch property-column reads for destination bypass slots.
+    ///
+    /// Returns one aligned property vector per input id; `None` means the
+    /// vertex is absent at the read snapshot. Missing properties inside a
+    /// present vertex are `Value::Null`, matching the projected entity path.
+    /// An empty property list performs an existence-only read.
+    fn get_vertex_property_columns_batch(
+        &self,
+        space: &str,
+        tag: &str,
+        ids: &[VertexId],
+        properties: &[Arc<str>],
+    ) -> Result<Vec<Option<Vec<Value>>>, StorageError> {
+        let vertices = self.get_vertices_projected_batch(space, tag, ids, properties)?;
+        Ok(vertices
+            .into_iter()
+            .map(|vertex| {
+                vertex.map(|vertex| {
+                    properties
+                        .iter()
+                        .map(|name| {
+                            vertex
+                                .property_value(name.as_ref())
+                                .unwrap_or(Value::Null(linkrs_core::NullType::Null))
+                        })
+                        .collect()
+                })
+            })
+            .collect())
     }
 
     /// Whether any edge type reached by a topology fast path has TTL
@@ -332,18 +468,36 @@ pub trait StorageReader: Send + Sync + std::fmt::Debug {
         direction: EdgeDirection,
         edge_types: &[String],
     ) -> Result<Vec<usize>, StorageError> {
+        Ok(self
+            .frontier_degree_batch(space, src_ids, direction, edge_types)?
+            .two_hop)
+    }
+
+    /// Direct and two-hop frontier degrees in one batch.
+    ///
+    /// The default composes the existing degree reads so adapters keep their
+    /// portable semantics; the native engine stages the first hop once and
+    /// derives both counts from the same adjacency pass.
+    fn frontier_degree_batch(
+        &self,
+        space: &str,
+        src_ids: &[VertexId],
+        direction: EdgeDirection,
+        edge_types: &[String],
+    ) -> Result<FrontierDegrees, StorageError> {
+        let direct = self.out_degree_batch(space, src_ids, direction, edge_types)?;
         let neighbors = self.neighbor_dst_ids_batch(space, src_ids, direction, edge_types)?;
         let lengths: Vec<usize> = neighbors.iter().map(Vec::len).collect();
         let flat: Vec<VertexId> = neighbors.into_iter().flatten().collect();
         let degrees = self.out_degree_batch(space, &flat, direction, edge_types)?;
-        let mut totals = Vec::with_capacity(src_ids.len());
+        let mut two_hop = Vec::with_capacity(src_ids.len());
         let mut offset = 0;
         for length in lengths {
             let sum: usize = degrees[offset..offset + length].iter().sum();
-            totals.push(sum);
+            two_hop.push(sum);
             offset += length;
         }
-        Ok(totals)
+        Ok(FrontierDegrees { direct, two_hop })
     }
 
     fn scan_edges_by_type(&self, space: &str, edge_type: &str) -> Result<Vec<Edge>, StorageError>;

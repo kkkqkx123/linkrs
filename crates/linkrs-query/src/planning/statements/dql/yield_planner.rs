@@ -70,6 +70,7 @@ impl Planner for YieldPlanner {
             ProjectNode::new(current_node.clone(), yield_columns.clone()).map_err(|e| {
                 PlannerError::PlanGenerationFailed(format!("Failed to create ProjectNode: {}", e))
             })?;
+        let project_types = project_node.column_types().to_vec();
         current_node = PlanNodeEnum::Project(project_node);
         current_logical = wrap_logical_project(
             current_logical,
@@ -97,12 +98,17 @@ impl Planner for YieldPlanner {
         }
 
         if yield_stmt.distinct {
-            let dedup_node = DedupNode::new(current_node.clone()).map_err(|e| {
+            let output_types = project_types.clone();
+            let mut dedup_node = DedupNode::new(current_node.clone()).map_err(|e| {
                 PlannerError::PlanGenerationFailed(format!("Failed to create DedupNode: {}", e))
             })?;
+            dedup_node.set_column_types(output_types);
             current_node = PlanNodeEnum::Dedup(dedup_node);
-            current_logical =
-                wrap_logical_dedup(current_logical, current_node.col_names().to_vec());
+            current_logical = wrap_logical_dedup(
+                current_logical,
+                current_node.col_names().to_vec(),
+                project_types,
+            );
         }
 
         if let Some(order_by) = &yield_stmt.order_by {

@@ -81,6 +81,8 @@ struct QueryDiagnostics {
     partition_skew_ratio: f64,
     local_topk_pushed: u64,
     local_topk_unpushed: u64,
+    scan_read_us: u64,
+    expand_read_us: u64,
 }
 
 fn directory_size_bytes(path: &Path) -> u64 {
@@ -1047,6 +1049,8 @@ fn cmd_run(args: &[String]) {
                 partition_skew_ratio: partition_skew_ratio(&explain_text),
                 local_topk_pushed: count_occurrences(&explain_text, "local_topk:pushed"),
                 local_topk_unpushed: count_occurrences(&explain_text, "local_topk:unpushed"),
+                scan_read_us: explain_metric(&explain_text, "scan_read_us").unwrap_or(0),
+                expand_read_us: explain_metric(&explain_text, "expand_read_us").unwrap_or(0),
             };
             let parallel_ok =
                 !required_parallel.contains(&target.name) || has_parallel_execution(&explain_text);
@@ -1126,6 +1130,8 @@ fn patch_resource_result(
         "local_topk_unpushed",
         diagnostics.local_topk_unpushed,
     );
+    set_json_u64(&mut text, "scan_read_us", diagnostics.scan_read_us);
+    set_json_u64(&mut text, "expand_read_us", diagnostics.expand_read_us);
     let _ = fs::write(path, text);
 }
 
@@ -1283,6 +1289,8 @@ fn write_run_result(
     json.push_str("  \"partition_skew_ratio\": 0.0,\n");
     json.push_str("  \"local_topk_pushed\": 0,\n");
     json.push_str("  \"local_topk_unpushed\": 0,\n");
+    json.push_str("  \"scan_read_us\": 0,\n");
+    json.push_str("  \"expand_read_us\": 0,\n");
     json.push_str("  \"spill_rows\": 0\n}\n");
     let path = out_dir.join(format!("{}.json", bench.name.replace('/', "_")));
     fs::write(&path, json).ok();

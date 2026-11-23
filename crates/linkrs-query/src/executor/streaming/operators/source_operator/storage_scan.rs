@@ -443,9 +443,14 @@ fn next_column_chunk(
         None => return Ok(None),
     };
     let fixed_batch = op.config.chunk_size.clamp(1, 2048);
-    let batch = cur
-        .next_column_batch(projected_properties, fixed_batch)
-        .map_err(|error| storage_error(source, "read column batch", space_name, error))?;
+    let read_started = std::time::Instant::now();
+    let read = cur.next_column_batch(projected_properties, fixed_batch);
+    let read_us = read_started.elapsed().as_micros() as u64;
+    if let Some(runtime) = op.runtime.as_ref() {
+        runtime.columnar_stats().record_scan_read_us(read_us);
+    }
+    let batch =
+        read.map_err(|error| storage_error(source, "read column batch", space_name, error))?;
     if batch.is_empty() {
         return Ok(None);
     }

@@ -133,6 +133,10 @@ pub struct ColumnarStats {
     pub typed_group_hits: AtomicU64,
     /// Chunks that matched the aggregate shape but could not use typed state.
     pub typed_group_fallbacks: AtomicU64,
+    /// Wall-clock microseconds spent in storage scan batch reads.
+    pub scan_read_us: AtomicU64,
+    /// Wall-clock microseconds spent in columnar adjacency and destination reads.
+    pub expand_read_us: AtomicU64,
 }
 
 impl Default for ColumnarStats {
@@ -155,6 +159,8 @@ impl Default for ColumnarStats {
             columnar_wasted_builds: AtomicU64::new(0),
             typed_group_hits: AtomicU64::new(0),
             typed_group_fallbacks: AtomicU64::new(0),
+            scan_read_us: AtomicU64::new(0),
+            expand_read_us: AtomicU64::new(0),
         }
     }
 }
@@ -196,6 +202,16 @@ impl ColumnarStats {
     /// Record a chunk that fell back from typed group counting.
     pub fn record_typed_group_fallback(&self) {
         self.typed_group_fallbacks.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Add storage scan read time for one batch.
+    pub fn record_scan_read_us(&self, micros: u64) {
+        self.scan_read_us.fetch_add(micros, Ordering::Relaxed);
+    }
+
+    /// Add columnar expand read time for one batch.
+    pub fn record_expand_read_us(&self, micros: u64) {
+        self.expand_read_us.fetch_add(micros, Ordering::Relaxed);
     }
 
     /// Record a chunk handed downstream with a selection vector.
@@ -332,6 +348,8 @@ pub struct ColumnarStatsSnapshot {
     pub columnar_wasted_builds: u64,
     pub typed_group_hits: u64,
     pub typed_group_fallbacks: u64,
+    pub scan_read_us: u64,
+    pub expand_read_us: u64,
 }
 
 impl ColumnarStatsSnapshot {
@@ -353,6 +371,8 @@ impl ColumnarStatsSnapshot {
             columnar_wasted_builds: stats.columnar_wasted_builds.load(Ordering::Relaxed),
             typed_group_hits: stats.typed_group_hits.load(Ordering::Relaxed),
             typed_group_fallbacks: stats.typed_group_fallbacks.load(Ordering::Relaxed),
+            scan_read_us: stats.scan_read_us.load(Ordering::Relaxed),
+            expand_read_us: stats.expand_read_us.load(Ordering::Relaxed),
         }
     }
 
@@ -391,7 +411,7 @@ impl ColumnarStatsSnapshot {
     /// Human-readable one-line summary for PROFILE output.
     pub fn summary(&self) -> String {
         format!(
-            "columnar_hits={}, misses={}, hit_rate={:.3}, typed_hit_rate={:.3}, b_path_hits={}, wasted_builds={}, typed_group_hits={}, typed_group_fallbacks={}, selection_attached={}, selection_materialized={}, selection_pushed={}, column_block_hits={}, multiplicity_expanded={}, spill_rows={}, spill_bytes={}, spill_runs={}, batch_outlets={}",
+            "columnar_hits={}, misses={}, hit_rate={:.3}, typed_hit_rate={:.3}, b_path_hits={}, wasted_builds={}, typed_group_hits={}, typed_group_fallbacks={}, scan_read_us={}, expand_read_us={}, selection_attached={}, selection_materialized={}, selection_pushed={}, column_block_hits={}, multiplicity_expanded={}, spill_rows={}, spill_bytes={}, spill_runs={}, batch_outlets={}",
             self.columnar_hits,
             self.columnar_misses,
             self.hit_rate(),
@@ -400,6 +420,8 @@ impl ColumnarStatsSnapshot {
             self.columnar_wasted_builds,
             self.typed_group_hits,
             self.typed_group_fallbacks,
+            self.scan_read_us,
+            self.expand_read_us,
             self.selection_attached,
             self.selection_materialized,
             self.selection_pushed,

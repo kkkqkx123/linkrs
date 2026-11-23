@@ -4,36 +4,83 @@ use crate::executor::streaming::chunk::{
     gather_typed_column, DataChunk, EdgeHeaderColumn, TypedColumn,
 };
 use crate::executor::streaming::slot::SlotLayout;
-use crate::storage::{EdgeTopology, QueryStorage};
+use crate::storage::{EdgeTopology, PackedEdgeTopology, QueryStorage};
 use linkrs_core::error::QueryError;
 use linkrs_core::types::storage_ids::VertexId;
 use linkrs_core::{Edge, EdgeDirection, EdgeHeader, Value, Vertex};
 
 use super::expand_dispatch::{
-    bypass_column, closed_loop_dst_tag, dst_bypass_value, edge_bypass_value, edge_projection,
-    has_bypass_conflict, hop_bypass, ColumnarOutcome,
+    bypass_column, closed_loop_dst_tag, edge_bypass_value, edge_projection, has_bypass_conflict,
+    hop_bypass, ColumnarOutcome,
 };
 use super::expand_seeds::{identity_seed_handles, parse_seeds, seed_slot};
 use super::ExpandCtx;
 
 /// Destination batch read honoring the bypass projection.
 ///
-/// Non-empty destination demands decode only the demanded properties while
-/// keeping the full batch's timestamp, input order and visibility: one entry
-/// per id, `None` for missing vertices (dangling edges still drop the row).
-/// An empty demand needs existence only, so it reads with an empty
-/// projection and skips property decoding instead of falling back to the
-/// full batch. A whole-entity demand keeps the full batch so boxed entity
-/// slots observe unchanged records. Columnar paths never carry a hop filter
-/// when this runs, so the projection only ever trims downstream-demanded
-/// properties the demand audit already proved complete.
+/// Flat demand uses property columns (or existence only) so no entity value
+/// is built; whole-entity demand keeps the full vertex batch. Both views
+/// preserve the batch timestamp, input order and visibility, with one entry
+/// per id and missing vertices marked absent so dangling edges drop the row.
+pub(super) enum DestinationView {
+    Vertices(Vec<Option<Vertex>>),
+    Properties {
+        names: Vec<String>,
+        present: Vec<bool>,
+        values: Vec<Vec<Value>>,
+    },
+}
+
+impl DestinationView {
+    pub(super) fn len(&self) -> usize {
+        match self {
+            Self::Vertices(vertices) => vertices.len(),
+            Self::Properties { present, .. } => present.len(),
+        }
+    }
+
+    pub(super) fn present(&self, index: usize) -> bool {
+        match self {
+            Self::Vertices(vertices) => vertices.get(index).is_some_and(Option::is_some),
+            Self::Properties { present, .. } => present.get(index).copied().unwrap_or(false),
+        }
+    }
+
+    pub(super) fn vertex(&self, index: usize) -> Option<&Vertex> {
+        match self {
+            Self::Vertices(vertices) => vertices.get(index).and_then(|v| v.as_ref()),
+            Self::Properties { .. } => None,
+        }
+    }
+
+    pub(super) fn property(&self, index: usize, name: &str) -> Value {
+        match self {
+            Self::Vertices(vertices) => vertices
+                .get(index)
+                .and_then(|v| v.as_ref())
+                .and_then(|v| v.property_value(name))
+                .unwrap_or(Value::Null(linkrs_core::NullType::Null)),
+            Self::Properties { names, values, .. } => names
+                .iter()
+                .position(|item| item == name)
+                .and_then(|slot| {
+                    values
+                        .get(slot)
+                        .and_then(|column| column.get(index).cloned())
+                })
+                .unwrap_or(Value::Null(linkrs_core::NullType::Null)),
+        }
+    }
+}
+
 pub(super) fn read_destinations(
     reader: &dyn QueryStorage,
     space_name: &str,
     dst_tag: &str,
     ids: &[VertexId],
     dst_props: Option<&Vec<String>>,
-) -> Result<Vec<Option<Vertex>>, QueryError> {
+    property_columns_only: bool,
+) -> Result<DestinationView, QueryError> {
     // A hop emits one row per edge, but many edges share a destination.
     // Point lookups at one snapshot are pure, so fetch each distinct id once
     // and restore input order for the row assembly.
@@ -46,6 +93,46 @@ pub(super) fn read_destinations(
             unique.len() - 1
         });
         slots.push(slot);
+    }
+
+    if property_columns_only {
+        if let Some(props) = dst_props {
+            let mut names = props.clone();
+            names.sort();
+            names.dedup();
+            let projection: Vec<std::sync::Arc<str>> = names
+                .iter()
+                .map(|s| std::sync::Arc::from(s.as_str()))
+                .collect();
+            let columns = reader.get_vertex_property_columns_batch(
+                space_name,
+                dst_tag,
+                &unique,
+                &projection,
+            )?;
+            let present: Vec<bool> = columns.iter().map(Option::is_some).collect();
+            let mut values: Vec<Vec<Value>> = vec![Vec::with_capacity(unique.len()); names.len()];
+            for column in columns {
+                let row = column
+                    .unwrap_or_else(|| vec![Value::Null(linkrs_core::NullType::Null); names.len()]);
+                for (slot, value) in row.into_iter().enumerate() {
+                    values[slot].push(value);
+                }
+            }
+            let mut edge_present = vec![false; ids.len()];
+            let mut edge_values: Vec<Vec<Value>> = vec![Vec::with_capacity(ids.len()); names.len()];
+            for (edge, slot) in slots.into_iter().enumerate() {
+                edge_present[edge] = present[slot];
+                for (column, value) in edge_values.iter_mut().zip(&values) {
+                    column.push(value[slot].clone());
+                }
+            }
+            return Ok(DestinationView::Properties {
+                names,
+                present: edge_present,
+                values: edge_values,
+            });
+        }
     }
 
     let vertices = match dst_props {
@@ -62,10 +149,12 @@ pub(super) fn read_destinations(
         Some(_) => reader.get_vertices_projected_batch(space_name, dst_tag, &unique, &[])?,
         None => reader.get_vertices_batch(space_name, dst_tag, &unique)?,
     };
-    Ok(slots
-        .into_iter()
-        .map(|slot| vertices[slot].clone())
-        .collect())
+    Ok(DestinationView::Vertices(
+        slots
+            .into_iter()
+            .map(|slot| vertices[slot].clone())
+            .collect(),
+    ))
 }
 
 /// Explicit layout lockstep check: typed arms and row width must match the
@@ -158,24 +247,6 @@ pub(super) fn edge_neighbor(edge: &Edge, seed: &VertexId, direction: EdgeDirecti
     }
 }
 
-fn edge_neighbor_topology(
-    topology: &EdgeTopology,
-    seed: &VertexId,
-    direction: linkrs_core::EdgeDirection,
-) -> VertexId {
-    match direction {
-        linkrs_core::EdgeDirection::Out => topology.dst,
-        linkrs_core::EdgeDirection::In => topology.src,
-        linkrs_core::EdgeDirection::Both => {
-            if topology.src == *seed {
-                topology.dst
-            } else {
-                topology.src
-            }
-        }
-    }
-}
-
 /// Single-step columnar assembly for closed-loop materialized hops.
 ///
 /// Uses a projected edge read (topology only when no edge properties are
@@ -253,34 +324,56 @@ pub(super) fn expand_single_step_columnar(
         edge: Option<Edge>,
     }
     let mut pending: Vec<PendingEdge> = Vec::new();
+    let mut parent_of_child: Vec<usize> = Vec::new();
     let mut all_dst: Vec<VertexId> = Vec::new();
-    if edge_empty && ctx.edge_required_props.is_some() {
-        let batches = reader.get_node_edge_headers_batch(
+    let mut packed_edges: Option<PackedEdgeTopology> = None;
+    if edge_empty && ctx.edge_required_props.is_some() && edge_bypass.is_empty() {
+        let read_started = std::time::Instant::now();
+        let read = reader.get_packed_node_edge_headers_batch(
             space_name,
             &seed_vids,
             Some(&seed_handles),
             direction,
             edge_types,
-        )?;
-        for (seed_idx, (vid, headers)) in seed_vids.iter().zip(batches.iter()).enumerate() {
-            for topology in headers {
-                let dst = edge_neighbor_topology(topology, vid, direction);
-                pending.push(PendingEdge {
-                    seed_idx,
-                    topology: topology.clone(),
-                    edge: None,
-                });
-                all_dst.push(dst);
+        );
+        let read_us = read_started.elapsed().as_micros() as u64;
+        if let Some(runtime) = ctx.runtime.as_ref() {
+            runtime.columnar_stats().record_expand_read_us(read_us);
+        }
+        let packed = read?;
+        for parent in 0..packed.parent_count() {
+            let parent_vid = packed.parents[parent];
+            for index in packed.child_range(parent) {
+                let far = match direction {
+                    linkrs_core::EdgeDirection::Out => packed.dst[index],
+                    linkrs_core::EdgeDirection::In => packed.src[index],
+                    linkrs_core::EdgeDirection::Both => {
+                        if packed.src[index] == parent_vid {
+                            packed.dst[index]
+                        } else {
+                            packed.src[index]
+                        }
+                    }
+                };
+                parent_of_child.push(parent);
+                all_dst.push(far);
             }
         }
+        packed_edges = Some(packed);
     } else {
-        let edge_batches = reader.get_node_edges_projected_batch(
+        let read_started = std::time::Instant::now();
+        let read = reader.get_node_edges_projected_batch(
             space_name,
             &seed_vids,
             direction,
             edge_types,
             projection_ref,
-        )?;
+        );
+        let read_us = read_started.elapsed().as_micros() as u64;
+        if let Some(runtime) = ctx.runtime.as_ref() {
+            runtime.columnar_stats().record_expand_read_us(read_us);
+        }
+        let edge_batches = read?;
         for (seed_idx, (vid, edges)) in seed_vids.iter().zip(edge_batches.iter()).enumerate() {
             for edge in edges {
                 let dst = edge_neighbor(edge, vid, direction);
@@ -294,11 +387,12 @@ pub(super) fn expand_single_step_columnar(
                     },
                     edge: Some(edge.clone()),
                 });
+                parent_of_child.push(seed_idx);
                 all_dst.push(dst);
             }
         }
     }
-    if pending.is_empty() {
+    if all_dst.is_empty() {
         // OPTIONAL MATCH must preserve seeds with no reachable neighbour.
         // The columnar path has no pending hops to project; decline so the
         // row path emits the NULL-filled rows instead of dropping them.
@@ -310,16 +404,23 @@ pub(super) fn expand_single_step_columnar(
     let dst_tag_owned = closed_loop_dst_tag(reader, space_name, edge_types, direction, ctx.dst_tag)
         .unwrap_or_else(|| ctx.dst_tag.to_string());
     let dst_tag = dst_tag_owned.as_str();
-    let vertices = read_destinations(
+    let dest_started = std::time::Instant::now();
+    let read = read_destinations(
         reader,
         space_name,
         dst_tag,
         &all_dst,
         dst_bypass_opt.as_ref(),
-    )?;
-    let mut kept: Vec<usize> = Vec::with_capacity(pending.len());
-    for (i, vertex) in vertices.iter().enumerate() {
-        if vertex.is_some() {
+        rowless || dst_empty,
+    );
+    let dest_us = dest_started.elapsed().as_micros() as u64;
+    if let Some(runtime) = ctx.runtime.as_ref() {
+        runtime.columnar_stats().record_expand_read_us(dest_us);
+    }
+    let destinations = read?;
+    let mut kept: Vec<usize> = Vec::with_capacity(all_dst.len());
+    for i in 0..destinations.len() {
+        if destinations.present(i) {
             kept.push(i);
         }
     }
@@ -334,14 +435,25 @@ pub(super) fn expand_single_step_columnar(
         let mut rankings = Vec::with_capacity(kept.len());
         let mut dst_ids = Vec::with_capacity(kept.len());
         let mut gather_indices = Vec::with_capacity(kept.len());
-        for &i in &kept {
-            let req = &pending[i];
-            edge_src.push(req.topology.src);
-            edge_dst.push(req.topology.dst);
-            edge_types_out.push(Arc::clone(&req.topology.edge_type));
-            rankings.push(req.topology.ranking);
-            dst_ids.push(req.topology.dst);
-            gather_indices.push(seed_positions[req.seed_idx]);
+        if let Some(ref packed) = packed_edges {
+            for &i in &kept {
+                edge_src.push(packed.src[i]);
+                edge_dst.push(packed.dst[i]);
+                edge_types_out.push(packed.edge_type(i));
+                rankings.push(packed.rankings[i]);
+                dst_ids.push(packed.dst[i]);
+                gather_indices.push(seed_positions[parent_of_child[i]]);
+            }
+        } else {
+            for &i in &kept {
+                let req = &pending[i];
+                edge_src.push(req.topology.src);
+                edge_dst.push(req.topology.dst);
+                edge_types_out.push(Arc::clone(&req.topology.edge_type));
+                rankings.push(req.topology.ranking);
+                dst_ids.push(req.topology.dst);
+                gather_indices.push(seed_positions[req.seed_idx]);
+            }
         }
         let mut typed: Vec<TypedColumn> =
             Vec::with_capacity(seed_width + 2 + edge_bypass.len() + dst_bypass.len());
@@ -355,7 +467,7 @@ pub(super) fn expand_single_step_columnar(
             typed.push(TypedColumn::Fallback(
                 kept.iter()
                     .map(|&i| {
-                        seed_rows[pending[i].seed_idx]
+                        seed_rows[parent_of_child[i]]
                             .get(slot)
                             .cloned()
                             .unwrap_or(Value::Null(linkrs_core::NullType::Null))
@@ -388,7 +500,7 @@ pub(super) fn expand_single_step_columnar(
         for prop in &dst_bypass {
             typed.push(bypass_column(
                 kept.iter()
-                    .map(|&i| dst_bypass_value(vertices.get(i).and_then(|v| v.as_ref()), prop))
+                    .map(|&i| destinations.property(i, prop))
                     .collect(),
             ));
         }
@@ -409,27 +521,40 @@ pub(super) fn expand_single_step_columnar(
     // issued with the schema-resolved tag and is aligned with `pending`, so
     // no per-row point lookup is needed for any demand shape.
     for &i in &kept {
-        let req = &pending[i];
-        let seed_row = &seed_rows[req.seed_idx];
+        let seed_idx = parent_of_child[i];
+        let seed_row = &seed_rows[seed_idx];
+        let (src, far_dst, edge_type, rank) = match packed_edges.as_ref() {
+            Some(packed) => (
+                packed.src[i],
+                packed.dst[i],
+                packed.edge_type(i),
+                packed.rankings[i],
+            ),
+            None => {
+                let req = &pending[i];
+                (
+                    req.topology.src,
+                    req.topology.dst,
+                    Arc::clone(&req.topology.edge_type),
+                    req.topology.ranking,
+                )
+            }
+        };
         let edge_value = if edge_empty {
-            Value::edge_header(EdgeHeader::new(
-                req.topology.src,
-                req.topology.dst,
-                req.topology.edge_type.to_string(),
-                req.topology.ranking,
-            ))
+            Value::edge_header(EdgeHeader::new(src, far_dst, edge_type.to_string(), rank))
         } else {
             Value::Edge(Box::new(
-                req.edge
+                pending[i]
+                    .edge
                     .clone()
                     .expect("non-topology edge demand keeps the full edge"),
             ))
         };
         let dst_value = if dst_empty {
-            Value::VertexId(req.topology.dst)
+            Value::VertexId(far_dst)
         } else {
-            match vertices.get(i).and_then(|v| v.clone()) {
-                Some(v) => Value::Vertex(Box::new(v)),
+            match destinations.vertex(i) {
+                Some(v) => Value::Vertex(Box::new(v.clone())),
                 None => continue,
             }
         };
@@ -439,25 +564,23 @@ pub(super) fn expand_single_step_columnar(
         row.push(dst_value);
         for prop in &edge_bypass {
             row.push(edge_bypass_value(
-                req.edge
+                pending[i]
+                    .edge
                     .as_ref()
                     .expect("edge property demand keeps the full edge"),
                 prop,
             ));
         }
         for prop in &dst_bypass {
-            row.push(dst_bypass_value(
-                vertices.get(i).and_then(|v| v.as_ref()),
-                prop,
-            ));
+            row.push(destinations.property(i, prop));
         }
         out_rows.push(row);
-        edge_src.push(req.topology.src);
-        edge_dst.push(req.topology.dst);
-        edge_types_out.push(Arc::clone(&req.topology.edge_type));
-        rankings.push(req.topology.ranking);
-        dst_ids.push(req.topology.dst);
-        gather_indices.push(seed_positions[req.seed_idx]);
+        edge_src.push(src);
+        edge_dst.push(far_dst);
+        edge_types_out.push(edge_type);
+        rankings.push(rank);
+        dst_ids.push(far_dst);
+        gather_indices.push(seed_positions[seed_idx]);
     }
     if out_rows.is_empty() {
         return Ok(ColumnarOutcome::Empty);

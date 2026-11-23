@@ -23,6 +23,6 @@ pub use traits_admin::{
     StoragePersistenceOps, StorageSnapshotOps, StorageStats, StorageSyncContextOps,
     StorageTtlPurgeOps, TtlPurgeEntry,
 };
-pub use traits_reader::{EdgeTopology, StorageReader};
+pub use traits_reader::{EdgeTopology, FrontierDegrees, PackedEdgeTopology, StorageReader};
 pub use traits_schema::{StorageRecoveryOps, StorageSchemaContextOps, StorageSchemaOps};
 pub use traits_writer::{StorageCommitOps, StorageWriter};
