@@ -64,6 +64,10 @@ name = "topology_read_bench"
 harness = false
 
 [[bench]]
+name = "visibility_decode_bench"
+harness = false
+
+[[bench]]
 name = "edge_property_tables_bench"
 harness = false
 

@@ -446,6 +446,46 @@ fn edge_column_batch_predicate_matches_row_path() {
 }
 
 #[test]
+fn cursor_snapshot_ignores_delete_committed_after_enumeration() {
+    let storage = setup_storage(false);
+    let read_ts = storage.read().version_manager().read_timestamp();
+    let mut opts = options(vec!["value"], None);
+    opts.read_timestamp = Some(read_ts);
+    let prop_names = vec![Arc::from("value")];
+    let mut cursor = open_vertex_scan(&storage, "t", &opts).expect("open cursor");
+    let first = cursor
+        .next_column_batch(&prop_names, 128)
+        .expect("first batch");
+    assert_eq!(first.len(), 128);
+
+    let deleted = VertexId::try_from_int64(400).expect("vertex id");
+    storage
+        .write()
+        .delete_vertex("t", "Node", &deleted)
+        .expect("delete after enumeration");
+    assert!(
+        storage.read().version_manager().read_timestamp() > read_ts,
+        "auto commit must advance the read frontier"
+    );
+
+    let mut seen_deleted = false;
+    loop {
+        let batch = cursor
+            .next_column_batch(&prop_names, 128)
+            .expect("later batch");
+        if batch.is_empty() {
+            break;
+        }
+        seen_deleted |= (0..batch.len())
+            .any(|row| batch.columns[0].values.value_at(row) == Some(Value::BigInt(400)));
+    }
+    assert!(
+        seen_deleted,
+        "a commit after the cursor snapshot must not hide an enumerated row"
+    );
+}
+
+#[test]
 fn edge_column_batch_string_fallback_matches_row_path() {
     let storage = setup_edge_storage();
     let mut opts = edge_options();

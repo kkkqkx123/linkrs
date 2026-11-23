@@ -23,7 +23,9 @@ pub mod column_batch;
 pub mod predicates;
 pub mod vec_cursors;
 
-pub use column_batch::{ColumnValues, EdgeColumnBatch, PropertyColumn, VertexColumnBatch};
+pub use column_batch::{
+    ColumnValues, EdgeColumnBatch, PropertyColumn, ScanIdProvenance, ScanTimings, VertexColumnBatch,
+};
 pub use predicates::{compare_stat_values, IndexPredicate, PredicateRange, ScanPredicate};
 pub use vec_cursors::{VecEdgeCursor, VecVertexCursor};
 
@@ -436,6 +438,7 @@ pub trait VertexCursor: Send + std::fmt::Debug {
             label_ids: Vec::with_capacity(row_count),
             tag_names: Vec::with_capacity(row_count),
             columns: Vec::with_capacity(prop_names.len()),
+            timings: ScanTimings::default(),
         };
         let mut per_name: Vec<Vec<Option<linkrs_core::Value>>> = prop_names
             .iter()

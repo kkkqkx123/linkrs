@@ -82,6 +82,11 @@ struct QueryDiagnostics {
     local_topk_pushed: u64,
     local_topk_unpushed: u64,
     scan_read_us: u64,
+    scan_enumerate_us: u64,
+    scan_visibility_us: u64,
+    scan_decode_us: u64,
+    scan_assemble_us: u64,
+    scan_predicate_us: u64,
     expand_read_us: u64,
 }
 
@@ -1050,6 +1055,12 @@ fn cmd_run(args: &[String]) {
                 local_topk_pushed: count_occurrences(&explain_text, "local_topk:pushed"),
                 local_topk_unpushed: count_occurrences(&explain_text, "local_topk:unpushed"),
                 scan_read_us: explain_metric(&explain_text, "scan_read_us").unwrap_or(0),
+                scan_enumerate_us: explain_metric(&explain_text, "scan_enumerate_us").unwrap_or(0),
+                scan_visibility_us: explain_metric(&explain_text, "scan_visibility_us")
+                    .unwrap_or(0),
+                scan_decode_us: explain_metric(&explain_text, "scan_decode_us").unwrap_or(0),
+                scan_assemble_us: explain_metric(&explain_text, "scan_assemble_us").unwrap_or(0),
+                scan_predicate_us: explain_metric(&explain_text, "scan_predicate_us").unwrap_or(0),
                 expand_read_us: explain_metric(&explain_text, "expand_read_us").unwrap_or(0),
             };
             let parallel_ok =
@@ -1131,6 +1142,23 @@ fn patch_resource_result(
         diagnostics.local_topk_unpushed,
     );
     set_json_u64(&mut text, "scan_read_us", diagnostics.scan_read_us);
+    set_json_u64(
+        &mut text,
+        "scan_enumerate_us",
+        diagnostics.scan_enumerate_us,
+    );
+    set_json_u64(
+        &mut text,
+        "scan_visibility_us",
+        diagnostics.scan_visibility_us,
+    );
+    set_json_u64(&mut text, "scan_decode_us", diagnostics.scan_decode_us);
+    set_json_u64(&mut text, "scan_assemble_us", diagnostics.scan_assemble_us);
+    set_json_u64(
+        &mut text,
+        "scan_predicate_us",
+        diagnostics.scan_predicate_us,
+    );
     set_json_u64(&mut text, "expand_read_us", diagnostics.expand_read_us);
     let _ = fs::write(path, text);
 }
@@ -1290,6 +1318,11 @@ fn write_run_result(
     json.push_str("  \"local_topk_pushed\": 0,\n");
     json.push_str("  \"local_topk_unpushed\": 0,\n");
     json.push_str("  \"scan_read_us\": 0,\n");
+    json.push_str("  \"scan_enumerate_us\": 0,\n");
+    json.push_str("  \"scan_visibility_us\": 0,\n");
+    json.push_str("  \"scan_decode_us\": 0,\n");
+    json.push_str("  \"scan_assemble_us\": 0,\n");
+    json.push_str("  \"scan_predicate_us\": 0,\n");
     json.push_str("  \"expand_read_us\": 0,\n");
     json.push_str("  \"spill_rows\": 0\n}\n");
     let path = out_dir.join(format!("{}.json", bench.name.replace('/', "_")));

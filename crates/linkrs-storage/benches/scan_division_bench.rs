@@ -67,13 +67,17 @@ fn median_us(samples: &[u128]) -> u128 {
     values[values.len() / 2]
 }
 
-fn drain(storage: &Arc<RwLock<GraphStorage>>, options: &ScanOptions) -> (usize, usize) {
+fn drain(
+    storage: &Arc<RwLock<GraphStorage>>,
+    options: &ScanOptions,
+    batch_size: usize,
+) -> (usize, usize) {
     let mut cursor = open_vertex_scan(storage, SPACE, options).expect("open scan");
     let mut rows = 0usize;
     let mut batches = 0usize;
     loop {
         let batch = cursor
-            .next_column_batch(&[], BATCH_SIZE)
+            .next_column_batch(&[], batch_size)
             .expect("next column batch");
         if batch.is_empty() {
             break;
@@ -84,13 +88,18 @@ fn drain(storage: &Arc<RwLock<GraphStorage>>, options: &ScanOptions) -> (usize, 
     (rows, batches)
 }
 
-fn measure(storage: &Arc<RwLock<GraphStorage>>, label: &str, options: &ScanOptions) {
+fn measure(
+    storage: &Arc<RwLock<GraphStorage>>,
+    label: &str,
+    options: &ScanOptions,
+    batch_size: usize,
+) {
     let mut samples = Vec::with_capacity(ITERATIONS);
     let mut rows = 0usize;
     let mut batches = 0usize;
     for _ in 0..ITERATIONS {
         let start = Instant::now();
-        let (drained_rows, drained_batches) = drain(storage, options);
+        let (drained_rows, drained_batches) = drain(storage, options, batch_size);
         samples.push(start.elapsed().as_micros());
         rows = drained_rows;
         batches = drained_batches;
@@ -116,7 +125,7 @@ fn main() {
         batch_size: BATCH_SIZE,
         ..ScanOptions::default()
     };
-    measure(&storage, "full", &full);
+    measure(&storage, "full", &full, BATCH_SIZE);
 
     // `ByValueRange`, the division used by row-partitioned scans. Every
     // partition still enumerates the whole table and prunes by external id.
@@ -124,7 +133,7 @@ fn main() {
         vertex_id_range: Some(0..width),
         ..full.clone()
     };
-    measure(&storage, "external_id_range", &ranged);
+    measure(&storage, "external_id_range", &ranged, BATCH_SIZE);
 
     // `ByShardSlice`, the alternative division that partitions enumeration
     // itself instead of filtering after a full walk.
@@ -132,7 +141,7 @@ fn main() {
         shard_slice: Some(ShardSlice::new(0, PARTITIONS)),
         ..full.clone()
     };
-    measure(&storage, "shard_slice", &sliced);
+    measure(&storage, "shard_slice", &sliced, BATCH_SIZE);
 
     // The anchored traversal scans carry property demand, so topology-only
     // numbers do not explain their scan_read_us. Measure the same shard slice
@@ -142,12 +151,53 @@ fn main() {
         projection: Some(vec![RequiredProperty::new("id".to_string())]),
         ..sliced.clone()
     };
-    measure(&storage, "shard_slice_projected", &projected);
+    measure(&storage, "shard_slice_projected", &projected, BATCH_SIZE);
 
     let full_decode = ScanOptions {
         topology_only: false,
         projection: None,
         ..sliced.clone()
     };
-    measure(&storage, "shard_slice_full_decode", &full_decode);
+    measure(
+        &storage,
+        "shard_slice_full_decode",
+        &full_decode,
+        BATCH_SIZE,
+    );
+
+    // Fixed comparison matrix: enumeration baseline, one-column decode,
+    // full property decode, pushed predicate, and the multi-scan range shape.
+    // Only the row batch size changes within each group.
+    for batch_size in [512, 2048, 4096] {
+        measure(
+            &storage,
+            &format!("A_topo_{batch_size}"),
+            &sliced,
+            batch_size,
+        );
+        measure(
+            &storage,
+            &format!("B_one_column_{batch_size}"),
+            &projected,
+            batch_size,
+        );
+        measure(
+            &storage,
+            &format!("C_full_decode_{batch_size}"),
+            &full_decode,
+            batch_size,
+        );
+    }
+    let predicate = ScanOptions {
+        predicate: Some(vec![linkrs_storage::ScanPredicate::ColumnRange {
+            column: Arc::from("id"),
+            lower: Some(Value::BigInt(500)),
+            upper: Some(Value::BigInt(1_500)),
+            include_lower: true,
+            include_upper: false,
+        }]),
+        ..projected.clone()
+    };
+    measure(&storage, "D_predicate_2048", &predicate, 2048);
+    measure(&storage, "E_range_2048", &ranged, 2048);
 }

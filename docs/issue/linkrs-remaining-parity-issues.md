@@ -620,3 +620,15 @@ devs release 编译通过；local topk 3/3、typed group 5/5、并行分区 27/2
 结论：生产配置更新已生效且正确性门全绿；阶段一、二的性能中间门未达成，按方案不扩大放行面、不改近似语义，研究重点转入扫描与目的端读取。
 
 随后按 `docs/plan/remaining-bottleneck-microbench-and-design.md` 完成第二轮修改：packed 拓扑改为事件流 + 计数散射 + 紧凑边类型 ID，目的端 flat 需求改用属性列/存在性批量读取，两跳度数去掉每父容器。微基准中 packed 读取由 3985 us / 15.5 MB 降到 3280 us / 8.68 MB，目的端 `id` 读取由 1361 us 降到 1090 us；固定门中 `expand_read_us` 由约 160–210 ms 降到 110–135 ms，`join_two_hop` 为 5.78 / 5.94 ms，`variable_path_count` 为 5.77 / 5.45 ms。端到端 `group_by_count` 88.25 / 98.20 ms、`distinct_limit` 84.29 / 135.52 ms，仍未稳定跨越中间门；剩余主因是扫描自身的可见性枚举与属性解码。原计划中的 vid 哈希交换策略未改变目标查询的 EXPLAIN，已回退，不进入最终改动集合。完整结果见 `perf-data/parity/results/2026-11-23/stage1-stage2-remediation-final/`。
+
+## 38. 扫描可见性枚举与属性解码归因回测（2026-11-23）
+
+按 `docs/plan/scan-visibility-and-decode-remediation.md` 在 devs 完成三轮固定门与微基准：仅计时基线、保留切片一与枚举单锁优化的最终版，以及额外试过切片二后回退的中间版。子计时先进入 `ColumnarStats` / EXPLAIN / parity JSON，五个字段之和占 `scan_read_us` 的 96%–98%，归因成立。基线两轮中 `scan_enumerate_us` 为 262–463 ms，`scan_visibility_us` 为 102–262 ms；目标查询的 `scan_decode_us` 为 0，说明阶段一固定门走拓扑-only 扫描，属性解码不是这两条用例的端到端主因。
+
+最终采纳改动：游标为已枚举 ID 增加来源标记，源自在同 guard 下枚举的 ID 跳过 sharded 表内的二次行可见性复核；点读与 allowlist 路径继续复核。分片切片改为在单个身份锁下枚举连续 ID 区间，消除逐行锁获取。切片二（列按 chunk 批量解码、去掉候选预分配后 select）在中间版实测中仅把一列投影扫描从 651 us 降到 611 us，可见性+解码从 372 us 降到 304 us，分配却从 355 B/行升到 511 B/行；按“无实测收益不叠加复杂度”回退，不进入最终代码。
+
+固定门两轮仍满足 `actual=10`、`actual_partitions=10`、`result_stable=true`、`spill_rows=0`。最终版 `group_by_count` 为 53.34 / 58.04 ms（基线 80.30 / 102.96），`distinct_limit` 为 47.67 / 39.84 ms（基线 69.35 / 96.84）；对应 `scan_read_us` 从 492–700 ms 降到 87–120 ms，降幅约 82%。生产默认单轮为 55.53 / 38.38 ms（基线 80.08 / 73.56），`actual=8`；九条纯计数仍在 0.15–0.68 ms，无实质回归。微基准中分片拓扑-only 从 298 us 降到 277 us（较基线快约 7%），可见性复核计时从 91 us 降到 62 us；一列投影扫描未达 30% 门槛，属性解码相关改动已全部回退。
+
+正确性门全绿：配置默认值 1/1、partitioning 49/49、typed group 8/8、local topk 10/10、`parallel_partition_execution` 27/27、DQL 324/324、storage lib 1415/1415，新增 `column_batch_test` 13/13（含“枚举后、解码前提交”的快照回归）。`linkrs-config` lib 单测仍因 devs 离线缺少 `serial_test v3.5.0` 未启动，配置默认值继续由 partitioning 断言覆盖。
+
+判定：扫描自耗时与端到端中位数均显著下降，但 `group_by_count` ≤40 ms、`distinct_limit` ≤30 ms 的最终门尚未同时达成；剩余主因已转为展开读取与固定门抖动（`expand_read_us` 在两轮间为 160–230 ms）。不扩大并行放行面、不引入近似，也不保留未达标的解码改动。原始日志、逐用例 JSON、EXPLAIN 与微基准见 `perf-data/parity/results/2026-11-23/scan-visibility-decode-remediation/`。

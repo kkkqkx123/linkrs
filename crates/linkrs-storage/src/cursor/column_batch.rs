@@ -608,13 +608,50 @@ pub struct PropertyColumn {
     pub values: ColumnValues,
 }
 
+/// Wall-clock microseconds spent inside one storage cursor batch read.
+///
+/// The phases are disjoint so their sum explains where the cursor's read
+/// time went. Enumeration covers candidate discovery, visibility covers
+/// repeated row-liveness checks on those candidates, decode covers column
+/// value reads, assemble covers grouping and batch construction, and
+/// predicate covers pruning and residual filtering.
+/// Origin of the ids passed to a sharded table scan.
+///
+/// `CursorVerified` ids came from the cursor's own guarded enumeration and
+/// carry no further row-liveness work. Other callers pass `Unverified` and
+/// keep the guard check.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScanIdProvenance {
+    CursorVerified,
+    Unverified,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ScanTimings {
+    pub scan_enumerate_us: u64,
+    pub scan_visibility_us: u64,
+    pub scan_decode_us: u64,
+    pub scan_assemble_us: u64,
+    pub scan_predicate_us: u64,
+}
+
+impl ScanTimings {
+    pub fn add(&mut self, other: &Self) {
+        self.scan_enumerate_us += other.scan_enumerate_us;
+        self.scan_visibility_us += other.scan_visibility_us;
+        self.scan_decode_us += other.scan_decode_us;
+        self.scan_assemble_us += other.scan_assemble_us;
+        self.scan_predicate_us += other.scan_predicate_us;
+    }
+}
+
 /// A column-major vertex batch produced by `VertexCursor::next_column_batch`.
 ///
 /// Rows are implicit: every column (and `vids`/`internal_ids`) has the same
 /// length.  `columns` holds one entry per requested property in projection
 /// order; when the scan requests a full-row decode (empty projection) it
 /// holds every column of the scanned table(s).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct VertexColumnBatch {
     pub vids: Vec<linkrs_core::types::VertexId>,
     pub internal_ids: Vec<i64>,
@@ -623,6 +660,18 @@ pub struct VertexColumnBatch {
     /// Tag (label) name per row (batches may span tables).
     pub tag_names: Vec<String>,
     pub columns: Vec<PropertyColumn>,
+    /// Phase timings of the cursor read that produced this batch.
+    pub timings: ScanTimings,
+}
+
+impl PartialEq for VertexColumnBatch {
+    fn eq(&self, other: &Self) -> bool {
+        self.vids == other.vids
+            && self.internal_ids == other.internal_ids
+            && self.label_ids == other.label_ids
+            && self.tag_names == other.tag_names
+            && self.columns == other.columns
+    }
 }
 
 impl VertexColumnBatch {
@@ -633,6 +682,7 @@ impl VertexColumnBatch {
             label_ids: Vec::new(),
             tag_names: Vec::new(),
             columns: Vec::new(),
+            timings: ScanTimings::default(),
         }
     }
 

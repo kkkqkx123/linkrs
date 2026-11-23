@@ -144,3 +144,13 @@ allow_partition_metadata_count = false
 验证：配置默认值 1/1、partitioning 49/49、typed group 8/8、local topk 10/10、parallel 27/27、DQL 324/324、storage 1415/1415。`linkrs-config` lib 单测因 devs 离线缺少 `serial_test v3.5.0` 未能启动，配置默认值由 partitioning 新增断言覆盖。固定门两轮中 `group_by_count` 为 96.01 / 94.66 ms、`distinct_limit` 为 91.90 / 81.91 ms、`join_two_hop` 为 6.24 / 10.31 ms、`variable_path_count` 为 6.09 / 6.36 ms；生产默认单轮中前两项为 99.64 / 85.41 ms 且 `actual=8`。计划期类型传播已接入逻辑与物理 Dedup，但当前 LSQB 形状仍显示 `local_topk:pushed:runtime`，运行时判型继续生效。原始产物见 `perf-data/parity/results/2026-11-23/stage1-stage2-final/`。
 
 判定：生产配置切换带来实际收益，正确性门全绿；但本方案的性能中间门未达成，packed 拓扑与 typed 状态调整没有可测端到端收益。按第 4 节护栏不扩大放行面、不引入近似；后续应以新增自耗时为输入，直接处理扫描枚举/可见性与目的端属性读取，并在有实测收益前不再叠加 DTO 复杂度。微基准证据与后续改进设计见 `docs/plan/remaining-bottleneck-microbench-and-design.md`，第二轮落地与最终回测见同文档第 8 节及 `perf-data/parity/results/2026-11-23/stage1-stage2-remediation-final/`。
+
+---
+
+## 6. 扫描归因后的最终回测（2026-11-23）
+
+按 `docs/plan/scan-visibility-and-decode-remediation.md` 继续收敛扫描：新增五个扫描子计时并接入 EXPLAIN / parity JSON；游标为已枚举 ID 增加来源标记，跳过同一 guard 下的二次行可见性复核；分片切片改为单锁枚举连续 ID 区间。按 chunk 批量解码列、跳过候选预分配后 select 的切片二在中间版实测中未达微基准门槛且增加分配，已按无实测收益原则回退。
+
+基线子计时之和占 `scan_read_us` 的 96%–98%；固定门基线枚举为 262–463 ms、重复可见性复核为 102–262 ms，目标用例 `scan_decode_us=0`，确认阶段一走拓扑-only 扫描。最终回测中两轮 `scan_read_us` 降为 87–120 ms（基线 492–700 ms，降约 82%）；`group_by_count` 为 53.34 / 58.04 ms、`distinct_limit` 为 47.67 / 39.84 ms；生产默认单轮为 55.53 / 38.38 ms，九条纯计数无实质回归。正确性门全绿，并新增枚举后提交快照回归用例。
+
+最终门中的 `group_by_count` ≤40 ms 与 `distinct_limit` ≤30 ms 尚未同时达成；剩余自耗时转向展开读取。按第 4 节护栏不扩大并行放行面、不引入近似，保留已验证的扫描改动集合。完整数据见 `perf-data/parity/results/2026-11-23/scan-visibility-decode-remediation/`。

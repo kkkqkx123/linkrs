@@ -5,6 +5,8 @@
 
 use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
+use crate::mvcc_visibility::VisibilityGuard;
+
 use super::latch_order::{Guard, RANK_IDENTITY};
 use super::{Timestamp, INVALID_TIMESTAMP, MAX_TIMESTAMP};
 
@@ -139,6 +141,22 @@ impl VertexTimestamp {
         }
 
         crate::mvcc_visibility::Visibility::row_live(ts, start, Some(end))
+    }
+
+    /// Guard-aware liveness probe for a contiguous id run. Callers hold the
+    /// identity latch once while enumerating a whole chunk, so each row pays
+    /// only the stamp and gate checks instead of a lock acquisition.
+    pub(crate) fn is_row_visible(&self, index: u32, guard: &VisibilityGuard<'_>) -> bool {
+        let idx = index as usize;
+        if idx >= self.start_ts.len() {
+            return false;
+        }
+        let start = self.start_ts[idx];
+        if start == INVALID_TIMESTAMP {
+            return false;
+        }
+        let end = (self.end_ts[idx] != MAX_TIMESTAMP).then(|| self.end_ts[idx]);
+        guard.is_row_visible(start, end)
     }
 
     /// Maximum creation stamp over live slots, ignoring invalidated ones.

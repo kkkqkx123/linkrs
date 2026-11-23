@@ -135,6 +135,16 @@ pub struct ColumnarStats {
     pub typed_group_fallbacks: AtomicU64,
     /// Wall-clock microseconds spent in storage scan batch reads.
     pub scan_read_us: AtomicU64,
+    /// Candidate enumeration inside a storage scan batch read.
+    pub scan_enumerate_us: AtomicU64,
+    /// Repeated row-liveness checks on enumerated candidates.
+    pub scan_visibility_us: AtomicU64,
+    /// Column value decode inside a storage scan batch read.
+    pub scan_decode_us: AtomicU64,
+    /// Shard grouping and batch assembly inside a storage scan batch read.
+    pub scan_assemble_us: AtomicU64,
+    /// Zone pruning and residual predicate filtering inside a scan batch read.
+    pub scan_predicate_us: AtomicU64,
     /// Wall-clock microseconds spent in columnar adjacency and destination reads.
     pub expand_read_us: AtomicU64,
 }
@@ -160,6 +170,11 @@ impl Default for ColumnarStats {
             typed_group_hits: AtomicU64::new(0),
             typed_group_fallbacks: AtomicU64::new(0),
             scan_read_us: AtomicU64::new(0),
+            scan_enumerate_us: AtomicU64::new(0),
+            scan_visibility_us: AtomicU64::new(0),
+            scan_decode_us: AtomicU64::new(0),
+            scan_assemble_us: AtomicU64::new(0),
+            scan_predicate_us: AtomicU64::new(0),
             expand_read_us: AtomicU64::new(0),
         }
     }
@@ -207,6 +222,26 @@ impl ColumnarStats {
     /// Add storage scan read time for one batch.
     pub fn record_scan_read_us(&self, micros: u64) {
         self.scan_read_us.fetch_add(micros, Ordering::Relaxed);
+    }
+
+    /// Add the disjoint phases of one storage scan batch read.
+    pub fn record_scan_phases(
+        &self,
+        enumerate_us: u64,
+        visibility_us: u64,
+        decode_us: u64,
+        assemble_us: u64,
+        predicate_us: u64,
+    ) {
+        self.scan_enumerate_us
+            .fetch_add(enumerate_us, Ordering::Relaxed);
+        self.scan_visibility_us
+            .fetch_add(visibility_us, Ordering::Relaxed);
+        self.scan_decode_us.fetch_add(decode_us, Ordering::Relaxed);
+        self.scan_assemble_us
+            .fetch_add(assemble_us, Ordering::Relaxed);
+        self.scan_predicate_us
+            .fetch_add(predicate_us, Ordering::Relaxed);
     }
 
     /// Add columnar expand read time for one batch.
@@ -349,6 +384,11 @@ pub struct ColumnarStatsSnapshot {
     pub typed_group_hits: u64,
     pub typed_group_fallbacks: u64,
     pub scan_read_us: u64,
+    pub scan_enumerate_us: u64,
+    pub scan_visibility_us: u64,
+    pub scan_decode_us: u64,
+    pub scan_assemble_us: u64,
+    pub scan_predicate_us: u64,
     pub expand_read_us: u64,
 }
 
@@ -372,6 +412,11 @@ impl ColumnarStatsSnapshot {
             typed_group_hits: stats.typed_group_hits.load(Ordering::Relaxed),
             typed_group_fallbacks: stats.typed_group_fallbacks.load(Ordering::Relaxed),
             scan_read_us: stats.scan_read_us.load(Ordering::Relaxed),
+            scan_enumerate_us: stats.scan_enumerate_us.load(Ordering::Relaxed),
+            scan_visibility_us: stats.scan_visibility_us.load(Ordering::Relaxed),
+            scan_decode_us: stats.scan_decode_us.load(Ordering::Relaxed),
+            scan_assemble_us: stats.scan_assemble_us.load(Ordering::Relaxed),
+            scan_predicate_us: stats.scan_predicate_us.load(Ordering::Relaxed),
             expand_read_us: stats.expand_read_us.load(Ordering::Relaxed),
         }
     }
@@ -411,7 +456,7 @@ impl ColumnarStatsSnapshot {
     /// Human-readable one-line summary for PROFILE output.
     pub fn summary(&self) -> String {
         format!(
-            "columnar_hits={}, misses={}, hit_rate={:.3}, typed_hit_rate={:.3}, b_path_hits={}, wasted_builds={}, typed_group_hits={}, typed_group_fallbacks={}, scan_read_us={}, expand_read_us={}, selection_attached={}, selection_materialized={}, selection_pushed={}, column_block_hits={}, multiplicity_expanded={}, spill_rows={}, spill_bytes={}, spill_runs={}, batch_outlets={}",
+            "columnar_hits={}, misses={}, hit_rate={:.3}, typed_hit_rate={:.3}, b_path_hits={}, wasted_builds={}, typed_group_hits={}, typed_group_fallbacks={}, scan_read_us={}, scan_enumerate_us={}, scan_visibility_us={}, scan_decode_us={}, scan_assemble_us={}, scan_predicate_us={}, expand_read_us={}, selection_attached={}, selection_materialized={}, selection_pushed={}, column_block_hits={}, multiplicity_expanded={}, spill_rows={}, spill_bytes={}, spill_runs={}, batch_outlets={}",
             self.columnar_hits,
             self.columnar_misses,
             self.hit_rate(),
@@ -421,6 +466,11 @@ impl ColumnarStatsSnapshot {
             self.typed_group_hits,
             self.typed_group_fallbacks,
             self.scan_read_us,
+            self.scan_enumerate_us,
+            self.scan_visibility_us,
+            self.scan_decode_us,
+            self.scan_assemble_us,
+            self.scan_predicate_us,
             self.expand_read_us,
             self.selection_attached,
             self.selection_materialized,

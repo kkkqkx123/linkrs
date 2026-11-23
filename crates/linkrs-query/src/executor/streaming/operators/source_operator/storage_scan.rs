@@ -451,6 +451,16 @@ fn next_column_chunk(
     }
     let batch =
         read.map_err(|error| storage_error(source, "read column batch", space_name, error))?;
+    if let Some(runtime) = op.runtime.as_ref() {
+        let t = batch.timings;
+        runtime.columnar_stats().record_scan_phases(
+            t.scan_enumerate_us,
+            t.scan_visibility_us,
+            t.scan_decode_us,
+            t.scan_assemble_us,
+            t.scan_predicate_us,
+        );
+    }
     if batch.is_empty() {
         return Ok(None);
     }

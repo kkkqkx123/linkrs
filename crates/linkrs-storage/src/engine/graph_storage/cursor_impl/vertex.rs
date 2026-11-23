@@ -2,13 +2,21 @@ use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::Arc;
 
-use crate::cursor::{ColumnValues, FlatVertexRecord, ScanOptions, ShardSlice, VertexCursor};
+use crate::cursor::{
+    ColumnValues, FlatVertexRecord, ScanIdProvenance, ScanOptions, ScanTimings, ShardSlice,
+    VertexCursor,
+};
 use crate::engine::graph_storage::context::vertex_ops::StagedRow;
 use crate::engine::graph_storage::context::GraphStorageContext;
 use crate::vertex::ShardedVertexTable;
 use linkrs_core::types::{LabelId, Timestamp, VertexId};
 use linkrs_core::vertex_edge_path::Tag;
 use linkrs_core::{StorageError, StorageResult, Value, Vertex};
+
+#[inline]
+fn record_elapsed(start: std::time::Instant, counter: &mut u64) {
+    *counter += start.elapsed().as_micros() as u64;
+}
 
 // ---------------------------------------------------------------------------
 // GraphVertexCursor (unchanged)
@@ -72,6 +80,11 @@ pub(crate) struct GraphVertexCursor {
     staged_rows: Vec<StagedRow>,
     /// Index into `staged_rows`.
     staged_idx: usize,
+    /// Whether pending ids came from this cursor's guarded enumeration and
+    /// therefore need no second row-liveness check.
+    ids_verified: bool,
+    /// Phase timings accumulated by the column-batch read in progress.
+    timings: ScanTimings,
 }
 
 impl std::fmt::Debug for GraphVertexCursor {
@@ -208,7 +221,18 @@ impl GraphVertexCursor {
             allowlist_loaded: false,
             staged_rows: Vec::new(),
             staged_idx: 0,
+            ids_verified: true,
+            timings: ScanTimings::default(),
         })
+    }
+
+    /// Source contract for the pending ids consumed by decode.
+    fn id_provenance(&self) -> ScanIdProvenance {
+        if self.ids_verified {
+            ScanIdProvenance::CursorVerified
+        } else {
+            ScanIdProvenance::Unverified
+        }
     }
 
     /// TTL config of one scanned table, if the schema gives it a valid TTL.
@@ -284,6 +308,7 @@ impl GraphVertexCursor {
                     })
                     .collect();
                 self.pending_ids = ids;
+                self.ids_verified = false;
                 self.current_label = Some(*label_id);
                 self.current_table = Some(Arc::clone(table));
                 return;
@@ -324,6 +349,7 @@ impl GraphVertexCursor {
             };
             if !ids.is_empty() || !staged_rows.is_empty() {
                 self.current_label = Some(label_id);
+                self.ids_verified = true;
                 self.pending_ids = ids;
                 self.staged_rows = staged_rows;
                 self.current_table = Some(Arc::clone(table));
@@ -473,6 +499,7 @@ impl VertexCursor for GraphVertexCursor {
             return Ok(crate::cursor::VertexColumnBatch::empty());
         }
         let batch_size = batch_size.max(1);
+        self.timings = ScanTimings::default();
         loop {
             let batch = self.collect_column_batch(prop_names, batch_size)?;
             if !batch.is_empty() || self.exhausted {
@@ -514,7 +541,9 @@ impl GraphVertexCursor {
 
             while internal_ids.len() < batch_size && !self.exhausted {
                 if self.current_table.is_none() {
+                    let enumerate_start = std::time::Instant::now();
                     self.load_next_table(tables, &guard);
+                    record_elapsed(enumerate_start, &mut self.timings.scan_enumerate_us);
                     continue;
                 }
                 if self.pending_idx >= self.pending_ids.len() {
@@ -561,7 +590,9 @@ impl GraphVertexCursor {
                 let ranged: Vec<u32>;
                 let ids: &[u32] = match self.id_range.as_ref() {
                     Some(range) => {
-                        let (topo_ids, topo_vids) = table.scan_topology(ids, &guard);
+                        let provenance = self.id_provenance();
+                        let (topo_ids, topo_vids) =
+                            table.scan_topology(ids, &guard, provenance, &mut self.timings);
                         ranged = topo_ids
                             .into_iter()
                             .zip(topo_vids)
@@ -616,12 +647,16 @@ impl GraphVertexCursor {
                 let candidates: Vec<u32> = if self.predicate.is_empty() {
                     ids.to_vec()
                 } else {
+                    let predicate_start = std::time::Instant::now();
                     let ranges = crate::cursor::ScanPredicate::merged_ranges(&self.predicate);
                     let mask = table.zone_prune_mask(ids, &ranges);
-                    ids.iter()
+                    let candidates = ids
+                        .iter()
                         .zip(mask.iter())
                         .filter_map(|(&id, &keep)| keep.then_some(id))
-                        .collect()
+                        .collect();
+                    record_elapsed(predicate_start, &mut self.timings.scan_predicate_us);
+                    candidates
                 };
 
                 // Topology-only run: resolve identities with zero property
@@ -631,7 +666,9 @@ impl GraphVertexCursor {
                 // decode path, filters on the TTL column, and strips the
                 // helper column back out below.
                 if self.topology_only && run_ttl.is_none() {
-                    let (run_internal, run_vids) = table.scan_topology(&candidates, &guard);
+                    let provenance = self.id_provenance();
+                    let (run_internal, run_vids) =
+                        table.scan_topology(&candidates, &guard, provenance, &mut self.timings);
                     if run_internal.is_empty() {
                         continue;
                     }
@@ -660,8 +697,14 @@ impl GraphVertexCursor {
                 // write is read at the version below it, so the scan never
                 // yields an uncommitted value. Rows with no visible version are
                 // dropped and the columns stay aligned with the surviving ids.
-                let (mut run_internal, mut run_vids, mut decoded) =
-                    table.scan_columns(&candidates, &guard, &run_names);
+                let provenance = self.id_provenance();
+                let (mut run_internal, mut run_vids, mut decoded) = table.scan_columns(
+                    &candidates,
+                    &guard,
+                    &run_names,
+                    provenance,
+                    &mut self.timings,
+                );
                 if run_internal.is_empty() {
                     continue;
                 }
@@ -741,6 +784,7 @@ impl GraphVertexCursor {
                 }
 
                 // Merge the run into the batch's column union.
+                let assemble_start = std::time::Instant::now();
                 let before = internal_ids.len();
                 for (name, _) in &decoded {
                     if !union_names.contains(name) {
@@ -764,6 +808,7 @@ impl GraphVertexCursor {
                 vids.extend(run_vids);
                 label_ids.extend(std::iter::repeat_n(self.current_label, run_rows));
                 tag_names.extend(std::iter::repeat_n(tag_name.to_string(), run_rows));
+                record_elapsed(assemble_start, &mut self.timings.scan_assemble_us);
             }
 
             (
@@ -783,6 +828,7 @@ impl GraphVertexCursor {
         // Apply pushed predicates over the decoded columns. Filtering
         // produces a selection vector (index sequence, not a boolean mask)
         // and surviving rows are gathered via that selection.
+        let predicate_start = std::time::Instant::now();
         let (final_ids, final_labels, final_vids, final_tags) = if self.predicate.is_empty() {
             (internal_ids, label_ids, vids, tag_names)
         } else {
@@ -827,7 +873,9 @@ impl GraphVertexCursor {
                 (internal_ids, label_ids, vids, tag_names)
             }
         };
+        record_elapsed(predicate_start, &mut self.timings.scan_predicate_us);
 
+        let assemble_start = std::time::Instant::now();
         let mut batch = Self::assemble_column_batch(
             prop_names,
             union_names,
@@ -854,6 +902,9 @@ impl GraphVertexCursor {
                 self.emitted += batch.len();
             }
         }
+
+        record_elapsed(assemble_start, &mut self.timings.scan_assemble_us);
+        batch.timings = self.timings;
 
         Ok(batch)
     }
@@ -974,7 +1025,9 @@ impl GraphVertexCursor {
                 let ranged: Vec<u32>;
                 let ids: &[u32] = match self.id_range.as_ref() {
                     Some(range) => {
-                        let (topo_ids, topo_vids) = table.scan_topology(window, &guard);
+                        let provenance = self.id_provenance();
+                        let (topo_ids, topo_vids) =
+                            table.scan_topology(window, &guard, provenance, &mut self.timings);
                         ranged = topo_ids
                             .into_iter()
                             .zip(topo_vids)
@@ -1113,6 +1166,7 @@ impl GraphVertexCursor {
             label_ids,
             tag_names,
             columns: output_columns,
+            timings: ScanTimings::default(),
         }
     }
 }

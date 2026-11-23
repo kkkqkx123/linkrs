@@ -1,6 +1,6 @@
 use super::super::core::VertexTable;
 use super::ShardedVertexTable;
-use crate::cursor::ColumnValues;
+use crate::cursor::{ColumnValues, ScanIdProvenance, ScanTimings};
 use crate::mvcc_visibility::VisibilityGuard;
 use crate::vertex::{IdKey, PkLookup, VertexRecord};
 use linkrs_core::types::{DataType, Timestamp, VertexId};
@@ -9,6 +9,11 @@ use std::sync::Arc;
 
 /// One decoded column of a columnar scan: column name plus its typed values.
 type ColumnRow = (std::sync::Arc<str>, ColumnValues);
+
+#[inline]
+fn record_elapsed(start: std::time::Instant, counter: &mut u64) {
+    *counter += start.elapsed().as_micros() as u64;
+}
 
 /// Decode an ID-index key into the external vertex ID.
 ///
@@ -312,8 +317,9 @@ impl ShardedVertexTable {
             }
             let table = shard.read();
             ids.extend(
-                chunk
-                    .filter(|local_id| Self::shard_row_visible(&table, *local_id, guard))
+                table
+                    .live_ids_in_range(chunk, guard)
+                    .into_iter()
                     .map(|local_id| self.encode_id(shard_idx, local_id)),
             );
         }
@@ -323,15 +329,16 @@ impl ShardedVertexTable {
 
     /// Column-major batch decode for paginated scans.
     ///
-    /// Filters candidates by guard visibility, decodes the requested columns
-    /// at the snapshot (a full decode when `names` is empty) and compacts the
-    /// result. The returned ids, external vertex ids and columns are aligned;
-    /// rows with no visible version are dropped.
+    /// Cursor-enumerated ids are already visible under the same guard, so
+    /// they skip the second row-liveness check; ids from any other caller
+    /// keep it. The remaining decode and compaction shape is unchanged.
     pub fn scan_columns(
         &self,
         global_ids: &[u32],
         guard: &VisibilityGuard<'_>,
         names: &[std::sync::Arc<str>],
+        provenance: ScanIdProvenance,
+        timings: &mut ScanTimings,
     ) -> (Vec<u32>, Vec<VertexId>, Vec<ColumnRow>) {
         if let Err(error) = self.verify_shard_schema_uniform() {
             log::error!(
@@ -339,6 +346,7 @@ impl ShardedVertexTable {
                 error
             );
         }
+        let mut assemble_start = std::time::Instant::now();
         let snapshot = guard.snapshot();
         let (resolved_names, types) = self.column_layout(names);
         let mut merged: Vec<(Arc<str>, ColumnValues)> = resolved_names
@@ -351,16 +359,21 @@ impl ShardedVertexTable {
                 )
             })
             .collect();
+        let groups = self.group_by_shard(global_ids);
+        record_elapsed(assemble_start, &mut timings.scan_assemble_us);
 
         let mut vids: Vec<Option<VertexId>> = vec![None; global_ids.len()];
-        for (shard_idx, group) in self.group_by_shard(global_ids) {
+        for (shard_idx, group) in groups {
             if group.is_empty() {
                 continue;
             }
             let table = self.shards[shard_idx].read();
             let mut visible: Vec<(usize, u32)> = Vec::new();
+            let visibility_start = std::time::Instant::now();
             for (slot, local_id) in group {
-                if !Self::shard_row_visible(&table, local_id, guard) {
+                if provenance == ScanIdProvenance::Unverified
+                    && !Self::shard_row_visible(&table, local_id, guard)
+                {
                     continue;
                 }
                 let Some(vid) = table.get_external_id_raw(local_id).and_then(vertex_id_of) else {
@@ -369,19 +382,26 @@ impl ShardedVertexTable {
                 vids[slot] = Some(vid);
                 visible.push((slot, local_id));
             }
+            record_elapsed(visibility_start, &mut timings.scan_visibility_us);
             if visible.is_empty() {
                 continue;
             }
+            assemble_start = std::time::Instant::now();
             let locals: Vec<u32> = visible.iter().map(|&(_, local)| local).collect();
-            for (name, column) in
-                table.get_projected_columns_offline(&locals, snapshot, &resolved_names)
-            {
+            record_elapsed(assemble_start, &mut timings.scan_assemble_us);
+            let decode_start = std::time::Instant::now();
+            let decoded = table.get_projected_columns_offline(&locals, snapshot, &resolved_names);
+            record_elapsed(decode_start, &mut timings.scan_decode_us);
+            assemble_start = std::time::Instant::now();
+            for (name, column) in decoded {
                 if let Some((_, target)) = merged.iter_mut().find(|(n, _)| *n == name) {
                     column.scatter(target, &visible);
                 }
             }
+            record_elapsed(assemble_start, &mut timings.scan_assemble_us);
         }
 
+        assemble_start = std::time::Instant::now();
         // Compact to the surviving rows: the decode was pre-sized to the
         // candidate count, which includes rows the guard hid.
         let mut kept_ids = Vec::new();
@@ -398,6 +418,7 @@ impl ShardedVertexTable {
                 column.select(&selection);
             }
         }
+        record_elapsed(assemble_start, &mut timings.scan_assemble_us);
 
         // Already-typed merges skip the box-and-retype roundtrip; only
         // `General` columns (unknown type or cross-shard kind mismatch)
@@ -416,22 +437,30 @@ impl ShardedVertexTable {
         (kept_ids, kept_vids, merged)
     }
 
-    /// Topology resolution for paginated scans: the same visibility and
-    /// identity gate as [`Self::scan_columns`] with zero property decode.
-    /// Returns surviving global ids and external vertex ids in input order.
+    /// Topology resolution for paginated scans: the same identity gate as
+    /// [`Self::scan_columns`] with zero property decode. Cursor-enumerated
+    /// ids keep their already-checked liveness; other callers recheck it.
     pub fn scan_topology(
         &self,
         global_ids: &[u32],
         guard: &VisibilityGuard<'_>,
+        provenance: ScanIdProvenance,
+        timings: &mut ScanTimings,
     ) -> (Vec<u32>, Vec<VertexId>) {
+        let mut assemble_start = std::time::Instant::now();
+        let groups = self.group_by_shard(global_ids);
+        record_elapsed(assemble_start, &mut timings.scan_assemble_us);
         let mut resolved: Vec<(usize, u32, VertexId)> = Vec::new();
-        for (shard_idx, group) in self.group_by_shard(global_ids) {
+        for (shard_idx, group) in groups {
             if group.is_empty() {
                 continue;
             }
             let table = self.shards[shard_idx].read();
+            let visibility_start = std::time::Instant::now();
             for (slot, local_id) in group {
-                if !Self::shard_row_visible(&table, local_id, guard) {
+                if provenance == ScanIdProvenance::Unverified
+                    && !Self::shard_row_visible(&table, local_id, guard)
+                {
                     continue;
                 }
                 let Some(vid) = table.get_external_id_raw(local_id).and_then(vertex_id_of) else {
@@ -439,10 +468,13 @@ impl ShardedVertexTable {
                 };
                 resolved.push((slot, global_ids[slot], vid));
             }
+            record_elapsed(visibility_start, &mut timings.scan_visibility_us);
         }
-        resolved.sort_by_key(|(slot, _, _)| *slot);
+        assemble_start = std::time::Instant::now();
+        resolved.sort_unstable_by_key(|(slot, _, _)| *slot);
         let ids = resolved.iter().map(|(_, id, _)| *id).collect();
         let vids = resolved.into_iter().map(|(_, _, vid)| vid).collect();
+        record_elapsed(assemble_start, &mut timings.scan_assemble_us);
         (ids, vids)
     }
 

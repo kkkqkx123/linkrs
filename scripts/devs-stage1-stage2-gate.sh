@@ -6,14 +6,15 @@ export CARGO_NET_OFFLINE=true
 cd /data/kkkqkx/linkrs/repo
 
 ROOT=/data/kkkqkx/linkrs
-OUT="$ROOT/stage1-stage2-remediation-final"
+OUT_NAME="${GATE_OUT:-scan-visibility-baseline}"
+OUT="$ROOT/$OUT_NAME"
 mkdir -p "$OUT"
 
 echo "=== build parity bench ==="
-cargo build --release --features embedded --bin linkrs-parity-bench > "$ROOT/stage1-stage2-remediation-final-build.log" 2>&1
+cargo build --release --features embedded --bin linkrs-parity-bench > "$ROOT/$OUT_NAME-build.log" 2>&1
 BUILD_EXIT=$?
 echo "BUILD_EXIT=$BUILD_EXIT"
-tail -n 15 "$ROOT/stage1-stage2-remediation-final-build.log"
+tail -n 15 "$ROOT/$OUT_NAME-build.log"
 if [ "$BUILD_EXIT" -ne 0 ] || [ ! -x target/release/linkrs-parity-bench ]; then
   echo "BUILD_FAILED"
   echo "STAGE12_GATE_DONE"
@@ -39,6 +40,7 @@ run_test local_topk cargo test -p linkrs-query --lib -- local_topk
 run_test parallel cargo test -p linkrs-query --test parallel_partition_execution
 run_test dql cargo test -p linkrs-query --test dql
 run_test storage cargo test -p linkrs-storage --lib
+run_test column_batch cargo test -p linkrs-storage --test column_batch_test
 
 DB="$ROOT/parity/lsqb-sf0.1-v4/db"
 BIN=target/release/linkrs-parity-bench
@@ -83,8 +85,10 @@ import sys
 out = sys.argv[1]
 keys = (
     "name", "median_ms", "compile_median_ms", "typed_group_hits",
-    "local_topk_pushed", "scan_read_us", "expand_read_us",
-    "spill_rows", "result", "status",
+    "local_topk_pushed", "scan_read_us", "scan_enumerate_us",
+    "scan_visibility_us", "scan_decode_us", "scan_assemble_us",
+    "scan_predicate_us", "expand_read_us", "spill_rows", "result",
+    "status",
 )
 print("\t".join(keys))
 for group in ("round1", "round2", "prod"):
@@ -116,7 +120,10 @@ taskset -c 16 cargo bench -p linkrs-storage --bench scan_division_bench > "$OUT/
 echo "SCAN_BENCH_EXIT=$?"
 taskset -c 16 cargo bench -p linkrs-storage --bench topology_read_bench > "$OUT/microbench-topology.log" 2>&1
 echo "TOPO_BENCH_EXIT=$?"
+taskset -c 16 cargo bench -p linkrs-storage --bench visibility_decode_bench > "$OUT/microbench-visibility-decode.log" 2>&1
+echo "VISIBILITY_BENCH_EXIT=$?"
 tail -n 8 "$OUT/microbench-scan.log"
 tail -n 10 "$OUT/microbench-topology.log"
+tail -n 8 "$OUT/microbench-visibility-decode.log"
 
 echo "STAGE12_GATE_DONE"

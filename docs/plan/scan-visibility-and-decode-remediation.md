@@ -112,3 +112,11 @@
 3. 实现切片二，跑完整固定门；以 `scan_decode_us` 与分配字节/行为主门槛。
 4. 仅在前两步收益成立时评估切片三。
 5. 全部通过后更新 `docs/issue/linkrs-remaining-parity-issues.md` 与 `docs/plan/stage1-stage2-current-gap-remediation.md` 的状态；未通过则保留已验证收益最小的改动集合，不叠加无收益复杂度。
+
+## 7. 落地结果与判定（2026-11-23）
+
+在 devs 用同一 golden DB 与绑核口径跑了三轮固定门：仅计时基线、切片一+切片二中间版、最终版。子计时之和占 `scan_read_us` 的 96%–98%；基线枚举为 262–463 ms、重复可见性复核为 102–262 ms，目标查询没有属性解码（`scan_decode_us=0`），因此归因落在可见性枚举而非列解码。
+
+最终采纳：游标为已枚举 ID 增加来源标记，跳过同 guard 下的二次可见性复核；分片切片在单个身份锁下枚举连续 ID 区间。切片二中间版把一列投影扫描从 651 us 降到 611 us，但可见性+解码只从 372 us 降到 304 us（低于 40% 门槛），分配从 355 B/行升到 511 B/行，故整体回退；没有追加切片三和批大小默认值变更。
+
+最终版固定门两轮 `group_by_count` 为 53.34 / 58.04 ms、`distinct_limit` 为 47.67 / 39.84 ms，`scan_read_us` 从基线 492–700 ms 降到 87–120 ms（约 -82%）；生产默认单轮为 55.53 / 38.38 ms。分片拓扑-only 微基准从 298 us 降到 277 us，没有超过 5% 退化；可见性复核从 91 us 降到 62 us。正确性门全绿，新增枚举后提交快照回归用例。最终门 ≤40 ms / ≤30 ms 尚未同时达成，剩余自耗时主要是展开读取的波动；详细数据见 `perf-data/parity/results/2026-11-23/scan-visibility-decode-remediation/` 与 `docs/issue/linkrs-remaining-parity-issues.md` 第 38 节。

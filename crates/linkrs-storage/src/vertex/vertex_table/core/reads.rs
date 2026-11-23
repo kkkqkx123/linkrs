@@ -1,9 +1,11 @@
 //! Liveness checks, projected reads, and the offline snapshot iterator.
 
+use std::ops::Range;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use super::VertexTable;
+use crate::mvcc_visibility::VisibilityGuard;
 use crate::vertex::{IdKey, Timestamp, VertexId, VertexRecord};
 use linkrs_core::{StorageError, StorageResult, Value};
 
@@ -36,6 +38,15 @@ impl VertexTable {
         let stamps = self.timestamps.read();
         let create_ts = stamps.get_start_ts(internal_id)?;
         Some((create_ts, stamps.get_end_ts(internal_id)))
+    }
+
+    /// Guard-visible local ids inside one contiguous range, determined under
+    /// a single identity-latch acquisition.
+    pub fn live_ids_in_range(&self, range: Range<u32>, guard: &VisibilityGuard<'_>) -> Vec<u32> {
+        let stamps = self.timestamps.read();
+        range
+            .filter(|&local_id| stamps.is_row_visible(local_id, guard))
+            .collect()
     }
 
     /// Per-column covering version stamps for cache fences.
