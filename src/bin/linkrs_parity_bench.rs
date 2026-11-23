@@ -71,6 +71,18 @@ struct ResourceSample {
     buffer_pool_bytes: u64,
 }
 
+/// Per-query diagnostics recovered from EXPLAIN plus persistence snapshots.
+/// These are written as JSON placeholders and patched after the EXPLAIN pass.
+#[derive(Debug, Clone, Copy, Default)]
+struct QueryDiagnostics {
+    reclaim_failures: u64,
+    typed_group_hits: u64,
+    typed_group_fallbacks: u64,
+    partition_skew_ratio: f64,
+    local_topk_pushed: u64,
+    local_topk_unpushed: u64,
+}
+
 fn directory_size_bytes(path: &Path) -> u64 {
     let Ok(entries) = fs::read_dir(path) else {
         return 0;
@@ -106,6 +118,80 @@ fn explain_metric(text: &str, key: &str) -> Option<u64> {
 fn has_parallel_execution(text: &str) -> bool {
     explain_metric(text, "actual").is_some_and(|n| n > 1)
         && explain_metric(text, "actual_partitions").is_some_and(|n| n > 1)
+}
+
+/// Ratio between the slowest and fastest partition work time.
+fn partition_skew_ratio(text: &str) -> f64 {
+    let Some(list) = text
+        .lines()
+        .find_map(|line| line.split("partition_work_us=[").nth(1))
+        .and_then(|rest| rest.split(']').next())
+    else {
+        return 0.0;
+    };
+    let mut values = list.split(',').filter_map(|entry| entry.split(':').nth(1));
+    let first = values
+        .next()
+        .and_then(|value| value.trim().parse::<u64>().ok());
+    let Some(mut min) = first else {
+        return 0.0;
+    };
+    let mut max = min;
+    for value in values {
+        let Ok(value) = value.trim().parse::<u64>() else {
+            continue;
+        };
+        min = min.min(value);
+        max = max.max(value);
+    }
+    if min == 0 {
+        0.0
+    } else {
+        max as f64 / min as f64
+    }
+}
+
+fn count_occurrences(text: &str, needle: &str) -> u64 {
+    if needle.is_empty() {
+        return 0;
+    }
+    text.match_indices(needle).count() as u64
+}
+
+fn set_json_value(text: &mut String, key: &str, value: String) {
+    let prefix = format!("  \"{key}\": ");
+    let Some(start) = text.find(&prefix) else {
+        return;
+    };
+    let value_start = start + prefix.len();
+    let value_end = text[value_start..]
+        .find('\n')
+        .map(|offset| value_start + offset)
+        .unwrap_or(text.len());
+    let had_comma = text.as_bytes()[value_end.saturating_sub(1)] == b',';
+    let mut replacement = format!("  \"{key}\": {value}");
+    if had_comma {
+        replacement.push(',');
+    }
+    text.replace_range(start..value_end, &replacement);
+}
+
+fn set_json_u64(text: &mut String, key: &str, value: u64) {
+    set_json_value(text, key, value.to_string());
+}
+
+fn patch_reclaim_failures(out_dir: &Path, bench_name: &str, reclaim_failures: u64) {
+    let path = out_dir.join(format!("{}.json", bench_name.replace('/', "_")));
+    let Ok(text) = fs::read_to_string(&path) else {
+        return;
+    };
+    let mut text = text;
+    set_json_u64(&mut text, "reclaim_failures", reclaim_failures);
+    let _ = fs::write(path, text);
+}
+
+fn set_json_f64(text: &mut String, key: &str, value: f64) {
+    set_json_value(text, key, format!("{value:.3}"));
 }
 
 // ---------------------------------------------------------------------------
@@ -953,6 +1039,15 @@ fn cmd_run(args: &[String]) {
                 }
             }
             let spill_rows = explain_metric(&explain_text, "spill_rows").unwrap_or(0);
+            let diagnostics = QueryDiagnostics {
+                reclaim_failures: 0,
+                typed_group_hits: explain_metric(&explain_text, "typed_group_hits").unwrap_or(0),
+                typed_group_fallbacks: explain_metric(&explain_text, "typed_group_fallbacks")
+                    .unwrap_or(0),
+                partition_skew_ratio: partition_skew_ratio(&explain_text),
+                local_topk_pushed: count_occurrences(&explain_text, "local_topk:pushed"),
+                local_topk_unpushed: count_occurrences(&explain_text, "local_topk:unpushed"),
+            };
             let parallel_ok =
                 !required_parallel.contains(&target.name) || has_parallel_execution(&explain_text);
             if !parallel_ok {
@@ -962,7 +1057,13 @@ fn cmd_run(args: &[String]) {
                 );
                 invalid_parallel = true;
             }
-            patch_resource_result(&out_dir, &target.name, spill_rows, parallel_ok);
+            patch_resource_result(
+                &out_dir,
+                &target.name,
+                spill_rows,
+                parallel_ok,
+                &diagnostics,
+            );
         }
     }
     if let Some(kb) = rss_peak_kb() {
@@ -970,6 +1071,16 @@ fn cmd_run(args: &[String]) {
     }
     drop(session);
     database.close();
+    // Checkpoint retention runs during close, so the failure counter is only
+    // meaningful after close. Patch every already-written result file with
+    // the final snapshot instead of the pre-run value.
+    let final_reclaim_failures = database
+        .persistence_diagnostics()
+        .map_or(0, |diagnostics| diagnostics.reclaim_failures);
+    println!("[run] reclaim_failures={final_reclaim_failures}");
+    for target in &explain_targets {
+        patch_reclaim_failures(&out_dir, &target.name, final_reclaim_failures);
+    }
     if invalid_parallel {
         std::process::exit(2);
     }
@@ -977,27 +1088,43 @@ fn cmd_run(args: &[String]) {
 
 /// EXPLAIN runs after the timed queries, so the resource fields it supplies
 /// are appended to each already-written result file.
-fn patch_resource_result(out_dir: &Path, bench_name: &str, spill_rows: u64, parallel_ok: bool) {
+fn patch_resource_result(
+    out_dir: &Path,
+    bench_name: &str,
+    spill_rows: u64,
+    parallel_ok: bool,
+    diagnostics: &QueryDiagnostics,
+) {
     let path = out_dir.join(format!("{}.json", bench_name.replace('/', "_")));
     let Ok(text) = fs::read_to_string(&path) else {
         return;
     };
     let mut text = text;
     if !parallel_ok {
-        if let Some(start) = text.find("\"status\": ") {
-            let rest = &text[start + "\"status\": ".len()..];
-            if let Some(end) = rest.find(',') {
-                text.replace_range(
-                    start + "\"status\": ".len()..start + "\"status\": ".len() + end,
-                    "\"invalid_parallel\"",
-                );
-            }
-        }
+        set_json_value(&mut text, "status", "\"invalid_parallel\"".to_string());
     }
-    text = text.replacen(
-        "  \"spill_rows\": 0",
-        &format!("  \"spill_rows\": {spill_rows}"),
-        1,
+    set_json_u64(&mut text, "spill_rows", spill_rows);
+    set_json_u64(&mut text, "reclaim_failures", diagnostics.reclaim_failures);
+    set_json_u64(&mut text, "typed_group_hits", diagnostics.typed_group_hits);
+    set_json_u64(
+        &mut text,
+        "typed_group_fallbacks",
+        diagnostics.typed_group_fallbacks,
+    );
+    set_json_f64(
+        &mut text,
+        "partition_skew_ratio",
+        diagnostics.partition_skew_ratio,
+    );
+    set_json_u64(
+        &mut text,
+        "local_topk_pushed",
+        diagnostics.local_topk_pushed,
+    );
+    set_json_u64(
+        &mut text,
+        "local_topk_unpushed",
+        diagnostics.local_topk_unpushed,
     );
     let _ = fs::write(path, text);
 }
@@ -1150,6 +1277,12 @@ fn write_run_result(
         "  \"buffer_pool_bytes\": {},",
         resources.buffer_pool_bytes
     );
+    json.push_str("  \"reclaim_failures\": 0,\n");
+    json.push_str("  \"typed_group_hits\": 0,\n");
+    json.push_str("  \"typed_group_fallbacks\": 0,\n");
+    json.push_str("  \"partition_skew_ratio\": 0.0,\n");
+    json.push_str("  \"local_topk_pushed\": 0,\n");
+    json.push_str("  \"local_topk_unpushed\": 0,\n");
     json.push_str("  \"spill_rows\": 0\n}\n");
     let path = out_dir.join(format!("{}.json", bench.name.replace('/', "_")));
     fs::write(&path, json).ok();
@@ -1223,6 +1356,29 @@ mod tests {
             skip_entry("lsqb/operators/shortest_path unsupported syntax | unlock with fix"),
             Some("lsqb/operators/shortest_path".to_string())
         );
+    }
+
+    #[test]
+    fn partition_skew_ratio_uses_work_time_extremes() {
+        let text = "Parallel Workers: partition_work_us=[0:100,1:200,2:150], spill_rows=0";
+        assert!((partition_skew_ratio(text) - 2.0).abs() < f64::EPSILON);
+        assert_eq!(partition_skew_ratio("no profile"), 0.0);
+    }
+
+    #[test]
+    fn json_field_patch_preserves_comma_and_value_type() {
+        let mut text = String::from("{\n  \"a\": 1,\n  \"b\": 0\n}\n");
+        set_json_u64(&mut text, "a", 7);
+        set_json_f64(&mut text, "b", 1.5);
+        assert_eq!(text, "{\n  \"a\": 7,\n  \"b\": 1.500\n}\n");
+    }
+
+    #[test]
+    fn local_topk_reasons_are_counted_from_explain_text() {
+        let text = "reason:local_topk:pushed:typed, local_topk:pushed:runtime, \
+                    cbo: local_topk:unpushed,reason=unsupported-key-type";
+        assert_eq!(count_occurrences(text, "local_topk:pushed"), 2);
+        assert_eq!(count_occurrences(text, "local_topk:unpushed"), 1);
     }
 
     #[test]

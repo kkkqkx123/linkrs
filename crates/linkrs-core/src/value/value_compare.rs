@@ -142,52 +142,42 @@ impl Ord for Value {
             (Value::BigInt(a), Value::Int(b)) => a.cmp(&(*b as i64)),
 
             // Integer to float comparisons
-            (Value::SmallInt(a), Value::Float(b)) => {
-                (*a as f32).partial_cmp(b).unwrap_or(CmpOrdering::Equal)
-            }
-            (Value::Float(a), Value::SmallInt(b)) => {
-                a.partial_cmp(&(*b as f32)).unwrap_or(CmpOrdering::Equal)
-            }
-            (Value::Int(a), Value::Float(b)) => {
-                (*a as f32).partial_cmp(b).unwrap_or(CmpOrdering::Equal)
-            }
-            (Value::Float(a), Value::Int(b)) => {
-                a.partial_cmp(&(*b as f32)).unwrap_or(CmpOrdering::Equal)
-            }
-            (Value::BigInt(a), Value::Float(b)) => {
-                (*a as f32).partial_cmp(b).unwrap_or(CmpOrdering::Equal)
-            }
-            (Value::Float(a), Value::BigInt(b)) => {
-                a.partial_cmp(&(*b as f32)).unwrap_or(CmpOrdering::Equal)
-            }
-            (Value::SmallInt(a), Value::Double(b)) => {
-                (*a as f64).partial_cmp(b).unwrap_or(CmpOrdering::Equal)
-            }
-            (Value::Double(a), Value::SmallInt(b)) => {
-                a.partial_cmp(&(*b as f64)).unwrap_or(CmpOrdering::Equal)
-            }
-            (Value::Int(a), Value::Double(b)) => {
-                (*a as f64).partial_cmp(b).unwrap_or(CmpOrdering::Equal)
-            }
-            (Value::Double(a), Value::Int(b)) => {
-                a.partial_cmp(&(*b as f64)).unwrap_or(CmpOrdering::Equal)
-            }
-            (Value::BigInt(a), Value::Double(b)) => {
-                (*a as f64).partial_cmp(b).unwrap_or(CmpOrdering::Equal)
-            }
-            (Value::Double(a), Value::BigInt(b)) => {
-                a.partial_cmp(&(*b as f64)).unwrap_or(CmpOrdering::Equal)
-            }
-            (Value::Float(a), Value::Double(b)) => {
-                (*a as f64).partial_cmp(b).unwrap_or(CmpOrdering::Equal)
-            }
-            (Value::Double(a), Value::Float(b)) => {
-                a.partial_cmp(&(*b as f64)).unwrap_or(CmpOrdering::Equal)
-            }
+            (Value::SmallInt(a), Value::Float(b)) => Self::cmp_int_f32(*a as i64, *b),
+            (Value::Float(a), Value::SmallInt(b)) => Self::cmp_f32_int(*a, *b as i64),
+            (Value::Int(a), Value::Float(b)) => Self::cmp_int_f32(*a as i64, *b),
+            (Value::Float(a), Value::Int(b)) => Self::cmp_f32_int(*a, *b as i64),
+            (Value::BigInt(a), Value::Float(b)) => Self::cmp_int_f32(*a, *b),
+            (Value::Float(a), Value::BigInt(b)) => Self::cmp_f32_int(*a, *b),
+            (Value::SmallInt(a), Value::Double(b)) => Self::cmp_int_f64(*a as i64, *b),
+            (Value::Double(a), Value::SmallInt(b)) => Self::cmp_f64_int(*a, *b as i64),
+            (Value::Int(a), Value::Double(b)) => Self::cmp_int_f64(*a as i64, *b),
+            (Value::Double(a), Value::Int(b)) => Self::cmp_f64_int(*a, *b as i64),
+            (Value::BigInt(a), Value::Double(b)) => Self::cmp_int_f64(*a, *b),
+            (Value::Double(a), Value::BigInt(b)) => Self::cmp_f64_int(*a, *b),
+            (Value::Float(a), Value::Double(b)) => Self::cmp_f32_f64(*a, *b),
+            (Value::Double(a), Value::Float(b)) => Self::cmp_f64_f32(*a, *b),
 
             // Comparison between different types: based on type prioritization
             (a, b) => Self::cmp_by_type_priority(a, b),
         }
+    }
+}
+
+// Numerically equal values across physical kinds must hash identically.
+// Collisions for large integers rounded to the same f64 are allowed; only
+// equal values need a shared hash. Canonicalizing NaN and zero keeps the
+// same-kind float contract from changing.
+fn hash_canonical_number<H: std::hash::Hasher>(value: f64, state: &mut H) {
+    100u8.hash(state);
+    let i64_bound = i64::MAX as f64;
+    if value.is_finite() && value.fract() == 0.0 && value >= -i64_bound && value <= i64_bound {
+        (value as i64).hash(state);
+    } else if value.is_nan() {
+        f64::NAN.to_bits().hash(state);
+    } else if value == 0.0 {
+        0.0_f64.to_bits().hash(state);
+    } else {
+        value.to_bits().hash(state);
     }
 }
 
@@ -204,44 +194,11 @@ impl Hash for Value {
                 2u8.hash(state);
                 b.hash(state);
             }
-            Value::SmallInt(i) => {
-                3u8.hash(state);
-                i.hash(state);
-            }
-            Value::Int(i) => {
-                4u8.hash(state);
-                i.hash(state);
-            }
-            Value::BigInt(i) => {
-                5u8.hash(state);
-                i.hash(state);
-            }
-            Value::Float(f) => {
-                6u8.hash(state);
-                // Creating a hash from a bitwise representation of a floating point number
-                if f.is_nan() {
-                    // All NaN values should hash to the same value
-                    0x7fc00000_u32.hash(state);
-                } else if *f == 0.0 {
-                    // Ensure +0.0 and -0.0 hash to the same value
-                    0.0_f32.to_bits().hash(state);
-                } else {
-                    f.to_bits().hash(state);
-                }
-            }
-            Value::Double(f) => {
-                7u8.hash(state);
-                // Creating a hash from a bitwise representation of a floating point number
-                if f.is_nan() {
-                    // All NaN values should hash to the same value
-                    0x7ff8000000000000_u64.hash(state);
-                } else if *f == 0.0 {
-                    // Ensure +0.0 and -0.0 hash to the same value
-                    0.0_f64.to_bits().hash(state);
-                } else {
-                    f.to_bits().hash(state);
-                }
-            }
+            Value::SmallInt(i) => hash_canonical_number(*i as f64, state),
+            Value::Int(i) => hash_canonical_number(*i as f64, state),
+            Value::BigInt(i) => hash_canonical_number(*i as f64, state),
+            Value::Float(f) => hash_canonical_number(*f as f64, state),
+            Value::Double(f) => hash_canonical_number(*f, state),
             Value::Decimal128(d) => {
                 8u8.hash(state);
                 d.hash(state);
@@ -379,6 +336,71 @@ impl Value {
             NullType::UnknownProp => 4,
             NullType::DivByZero => 5,
             NullType::OutOfRange => 6,
+        }
+    }
+
+    // Cross-kind numeric comparisons keep NaN below every number, matching
+    // the same-kind float order. Two NaNs of different physical kinds are
+    // ordered by type priority so Eq and Ord stay consistent.
+    fn cmp_int_f32(value: i64, float: f32) -> CmpOrdering {
+        if float.is_nan() {
+            CmpOrdering::Greater
+        } else {
+            (value as f32)
+                .partial_cmp(&float)
+                .unwrap_or(CmpOrdering::Equal)
+        }
+    }
+
+    fn cmp_f32_int(float: f32, value: i64) -> CmpOrdering {
+        if float.is_nan() {
+            CmpOrdering::Less
+        } else {
+            float
+                .partial_cmp(&(value as f32))
+                .unwrap_or(CmpOrdering::Equal)
+        }
+    }
+
+    fn cmp_int_f64(value: i64, float: f64) -> CmpOrdering {
+        if float.is_nan() {
+            CmpOrdering::Greater
+        } else {
+            (value as f64)
+                .partial_cmp(&float)
+                .unwrap_or(CmpOrdering::Equal)
+        }
+    }
+
+    fn cmp_f64_int(float: f64, value: i64) -> CmpOrdering {
+        if float.is_nan() {
+            CmpOrdering::Less
+        } else {
+            float
+                .partial_cmp(&(value as f64))
+                .unwrap_or(CmpOrdering::Equal)
+        }
+    }
+
+    fn cmp_f32_f64(float: f32, double: f64) -> CmpOrdering {
+        match (float.is_nan(), double.is_nan()) {
+            (true, true) => CmpOrdering::Less,
+            (true, false) => CmpOrdering::Less,
+            (false, true) => CmpOrdering::Greater,
+            (false, false) => (float as f64)
+                .partial_cmp(&double)
+                .unwrap_or(CmpOrdering::Equal),
+        }
+    }
+
+    fn cmp_f64_f32(double: f64, float: f32) -> CmpOrdering {
+        match (double.is_nan(), float.is_nan()) {
+            (true, true) => CmpOrdering::Greater,
+            (true, false) => CmpOrdering::Less,
+            (false, true) => CmpOrdering::Greater,
+            (false, false) => double
+                .partial_cmp(&(float as f64))
+                .unwrap_or(CmpOrdering::Equal),
         }
     }
 
@@ -735,5 +757,72 @@ impl Value {
             Value::Struct(_) => 30,
             Value::Array(_) => 31,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::Hasher as _;
+
+    fn representative_values() -> Vec<Value> {
+        vec![
+            Value::Int(5),
+            Value::BigInt(5),
+            Value::Float(5.0),
+            Value::Double(5.0),
+            Value::Float(f32::NAN),
+            Value::Double(f64::NAN),
+            Value::Float(-1.5),
+            Value::Double(-1.5),
+            Value::string("a"),
+            Value::Null(NullType::Null),
+        ]
+    }
+
+    fn hash_of(value: &Value) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        value.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    #[test]
+    fn equality_and_order_agree_for_representative_values() {
+        let values = representative_values();
+        for a in &values {
+            for b in &values {
+                let equal = a == b;
+                let order = a.cmp(b);
+                assert_eq!(
+                    equal,
+                    order == CmpOrdering::Equal,
+                    "Eq/Ord mismatch: {a:?} vs {b:?} -> {order:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn equal_cross_kind_numbers_share_a_hash() {
+        let values = [
+            Value::Int(5),
+            Value::BigInt(5),
+            Value::Float(5.0),
+            Value::Double(5.0),
+        ];
+        let hashes: Vec<u64> = values.iter().map(hash_of).collect();
+        assert!(hashes.windows(2).all(|pair| pair[0] == pair[1]));
+    }
+
+    #[test]
+    fn nan_is_ordered_by_kind_across_float_widths() {
+        let float = Value::Float(f32::NAN);
+        let double = Value::Double(f64::NAN);
+        assert_ne!(float, double);
+        assert_eq!(float.cmp(&double), CmpOrdering::Less);
+        assert_eq!(double.cmp(&float), CmpOrdering::Greater);
+        assert_eq!(Value::Int(5).cmp(&float), CmpOrdering::Greater);
+        assert_eq!(float.cmp(&Value::Int(5)), CmpOrdering::Less);
     }
 }

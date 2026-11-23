@@ -256,7 +256,8 @@ pub(super) fn build_partition_local_fragments(
         // monotone across partitions: the global top k can only draw from the
         // per-partition top k. Truncating here keeps the global operators in
         // place for correctness and shrinks the exchange payload.
-        if let Some((dedup, local_spec)) = local_distinct_topn(chain) {
+        let decision = local_distinct_topn(chain);
+        if let Some((dedup, local_spec)) = decision.pushed {
             ArenaPlanAssembler::push_blocking_op(
                 &mut FragmentCtx {
                     operators,
@@ -287,62 +288,102 @@ pub(super) fn build_partition_local_fragments(
     }
     Ok(partition_fids)
 }
+/// Outcome of checking the partition-local Distinct + TopN shape.
+///
+/// The optional spec is pushed into each partition fragment. The note is
+/// emitted into plan diagnostics only when a Distinct shape was seen but not
+/// proven, so ordinary queries do not get a misleading unpushed marker.
+pub(super) struct LocalTopKDecision<'a> {
+    pub pushed: Option<(
+        &'a crate::planning::plan::core::nodes::graph_operations::DedupNode,
+        BlockingSpec,
+    )>,
+    pub note: Option<String>,
+}
+
+fn local_topk_unproven<'a>(reason: &str) -> LocalTopKDecision<'a> {
+    LocalTopKDecision {
+        pushed: None,
+        note: Some(format!("local_topk:unpushed,reason={reason}")),
+    }
+}
+
 /// Narrow shape where Distinct and its following TopN can be truncated per
 /// partition without changing the final answer.
-fn local_distinct_topn<'a>(
-    chain: &'a PartitionedChain<'a>,
-) -> Option<(
-    &'a crate::planning::plan::core::nodes::graph_operations::DedupNode,
-    BlockingSpec,
-)> {
-    let dedup = match chain.global.first()? {
+fn local_distinct_topn<'a>(chain: &'a PartitionedChain<'a>) -> LocalTopKDecision<'a> {
+    let Some(first) = chain.global.first() else {
+        return LocalTopKDecision {
+            pushed: None,
+            note: None,
+        };
+    };
+    if !matches!(first, PlanNodeEnum::Dedup(_)) {
+        return LocalTopKDecision {
+            pushed: None,
+            note: None,
+        };
+    }
+    let dedup = match first {
         PlanNodeEnum::Dedup(dedup) if dedup.col_names().len() == 1 => dedup,
-        _ => return None,
+        PlanNodeEnum::Dedup(_) => return local_topk_unproven("multi-column-distinct"),
+        _ => unreachable!("dedup shape checked above"),
     };
-    let topn = match chain.global.get(1)? {
-        PlanNodeEnum::TopN(topn) => topn,
-        _ => return None,
+    let topn = match chain.global.get(1) {
+        Some(PlanNodeEnum::TopN(topn)) => topn,
+        _ => return local_topk_unproven("missing-topn"),
     };
-    let spec = build_topn_spec(topn).ok()?;
+    let spec = match build_topn_spec(topn) {
+        Ok(spec) => spec,
+        Err(_) => return local_topk_unproven("invalid-topn-limit"),
+    };
     let BlockingSpec::TopN {
         n,
         sort_expressions,
         sort_directions,
     } = &spec
     else {
-        return None;
+        return local_topk_unproven("unsupported-topn-spec");
     };
     let key_column = match (sort_expressions.as_slice(), n) {
         ([Expression::Variable(name)], n) if *n > 0 => name.clone(),
         ([Expression::Property { object, property }], n) if *n > 0 => {
             let Expression::Variable(object) = object.as_ref() else {
-                return None;
+                return local_topk_unproven("complex-sort-expression");
             };
             format!("{object}.{property}")
         }
-        _ => return None,
+        _ => return local_topk_unproven("unsupported-sort-shape"),
     };
     let direction = match sort_directions.as_slice() {
         [direction] => *direction,
-        _ => return None,
+        _ => return local_topk_unproven("multi-column-sort"),
     };
     if key_column != dedup.col_names()[0] {
-        return None;
+        return local_topk_unproven("sort-key-mismatch");
     }
     let push_reason = match dedup.column_types() {
         [] => "runtime".to_string(),
         [linkrs_core::DataType::BigInt] => "typed".to_string(),
-        _ => return None,
+        _ => return local_topk_unproven("unsupported-key-type"),
     };
-    Some((
-        dedup,
-        BlockingSpec::LocalTopKDistinct {
-            key_name: key_column,
-            limit: *n,
-            direction,
-            push_reason,
-        },
-    ))
+    LocalTopKDecision {
+        pushed: Some((
+            dedup,
+            BlockingSpec::LocalTopKDistinct {
+                key_name: key_column,
+                limit: *n,
+                direction,
+                push_reason,
+            },
+        )),
+        note: None,
+    }
+}
+
+/// Diagnose the local TopK decision for a partitioned logical plan.
+pub(crate) fn local_topk_decision(node: &PlanNodeEnum) -> Option<String> {
+    let chain = decompose(node)?;
+    local_distinct_topn(&chain).note
 }
 
 /// Decompose the logical root into a partitionable chain, or return `None`

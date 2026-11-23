@@ -15,7 +15,9 @@ use linkrs_metrics::StatsManager;
 use linkrs_query::executor::streaming::pool::SharedScheduler;
 use linkrs_query::optimizer::PartitioningConfig;
 use linkrs_query::OptimizerEngine;
-use linkrs_storage::{GraphStorage, PersistenceConfig, StorageClient, SyncWrapper};
+use linkrs_storage::{
+    GraphStorage, PersistenceConfig, PersistenceDiagnostics, StorageClient, SyncWrapper,
+};
 #[cfg(feature = "vector")]
 use linkrs_sync::backend::VectorBackend;
 use linkrs_sync::SyncManager;
@@ -666,6 +668,11 @@ impl<S: StorageClient + Clone + Send + Sync + 'static> GraphDatabase<S> {
             .into_iter()
             .map(|(k, v)| (format!("{k:?}"), v))
             .collect();
+        let persistence = self.persistence_diagnostics().map(|diagnostics| {
+            serde_json::json!({
+                "reclaim_failures": diagnostics.reclaim_failures,
+            })
+        });
         serde_json::json!({
             "spaces": spaces,
             "transactions": {
@@ -678,8 +685,18 @@ impl<S: StorageClient + Clone + Send + Sync + 'static> GraphDatabase<S> {
                 "pending_writes": metrics.pending_writes,
             },
             "counters": counters,
+            "persistence": persistence,
             "in_memory": self.is_memory(),
         })
+    }
+
+    /// Snapshot persistence retention and reclaim diagnostics.
+    ///
+    /// Returns `None` for storage implementations without a persistence
+    /// coordinator. The value is a point-in-time copy; reading it has no
+    /// side effects on checkpoint or WAL scheduling.
+    pub fn persistence_diagnostics(&self) -> Option<PersistenceDiagnostics> {
+        self.inner.storage.read().persistence_diagnostics()
     }
 
     /// Snapshot transaction counters and resource gauges (convenience method).
@@ -947,6 +964,25 @@ mod tests {
 
         let config = DatabaseConfig::file("/tmp/test.db");
         assert!(!config.is_memory());
+    }
+
+    #[test]
+    fn persistence_diagnostics_is_read_only_for_file_database() {
+        let directory = tempfile::TempDir::new().unwrap();
+        let db = GraphDatabase::<GraphStorage>::open_with_config(DatabaseConfig::file(
+            directory.path().join("graph.db"),
+        ))
+        .unwrap();
+
+        let first = db
+            .persistence_diagnostics()
+            .expect("file database must expose persistence diagnostics");
+        let second = db
+            .persistence_diagnostics()
+            .expect("diagnostics accessor must be repeatable");
+        assert_eq!(first.reclaim_failures, 0);
+        assert_eq!(second.reclaim_failures, 0);
+        assert!(db.database_overview()["persistence"]["reclaim_failures"].is_number());
     }
 
     #[test]

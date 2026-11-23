@@ -176,18 +176,18 @@ fn null_placement_must_use_null_last_encoding() {
 }
 
 #[test]
-fn nan_breaks_index_order_proof() {
+fn nan_byte_order_matches_the_total_order_but_planner_still_rejects_nan() {
     let values = [
         Value::Double(1.0),
         Value::Double(f64::NAN),
         Value::Double(2.0),
     ];
-    assert!(!codec_matches_sort(&values, false));
-    assert_eq!(compare_values(&values[1], &values[0]), Ordering::Equal);
+    assert!(codec_matches_sort(&values, false));
+    assert_eq!(compare_values(&values[1], &values[0]), Ordering::Less);
 }
 
 #[test]
-fn date_string_fallback_breaks_wide_year_ranges() {
+fn date_wide_year_ranges_are_order_compatible() {
     let values = [
         Value::Date(DateValue {
             year: 999,
@@ -200,12 +200,16 @@ fn date_string_fallback_breaks_wide_year_ranges() {
             day: 1,
         }),
     ];
-    assert!(!codec_matches_sort(&values, false));
+    assert!(codec_matches_sort(&values, false));
 }
 
 #[test]
 fn mixed_numeric_kinds_are_not_order_compatible() {
-    let values = [Value::Int(5), Value::BigInt(100)];
+    let values = [Value::BigInt(-100), Value::Int(5)];
     assert!(!codec_matches_sort(&values, false));
-    assert_eq!(compare_values(&values[0], &values[1]), Ordering::Greater);
+    assert_eq!(compare_values(&values[0], &values[1]), Ordering::Less);
+    assert_eq!(
+        compare_values(&values[0], &values[1]),
+        linkrs_core::Value::cmp(&values[0], &values[1])
+    );
 }

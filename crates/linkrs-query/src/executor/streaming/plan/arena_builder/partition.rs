@@ -13,6 +13,7 @@ mod join;
 #[cfg(test)]
 mod tests;
 
+pub(super) use chain::local_topk_decision;
 use chain::{build_chain_group, decompose};
 use join::build_partitioned_multi;
 

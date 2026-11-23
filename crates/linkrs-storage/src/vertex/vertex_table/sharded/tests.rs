@@ -290,6 +290,37 @@ fn test_id_uniqueness_across_shards() {
 }
 
 #[test]
+fn test_internal_external_id_bijection_across_shards() {
+    let table = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 16);
+    let ts = TEST_TS;
+    let mut external = Vec::new();
+    for i in 0..200 {
+        let name = format!("v_{i:03}");
+        insert_with_name(&table, &name, ts);
+        external.push(name);
+    }
+
+    let manager = linkrs_transaction::VersionManager::new();
+    let records = table.scan(&scan_guard(ts, &manager));
+    let mut by_internal = std::collections::HashMap::new();
+    for record in records {
+        let name = record.vid.as_str().expect("text vertex id").to_string();
+        assert!(
+            by_internal.insert(record.internal_id, name).is_none(),
+            "global internal id must identify one visible vertex"
+        );
+    }
+    assert_eq!(by_internal.len(), external.len());
+    for name in &external {
+        let internal = table.get_internal_id(name, ts).unwrap();
+        assert_eq!(
+            by_internal.get(&internal).map(String::as_str),
+            Some(name.as_str())
+        );
+    }
+}
+
+#[test]
 fn test_id_hole_stats_tracks_allocated_and_live() {
     // Single shard: shard selection is hash-driven, so a multi-shard
     // table may skip low-fragmentation shards and remove only a subset.

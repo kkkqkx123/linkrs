@@ -5,39 +5,22 @@
 use linkrs_core::Value;
 use std::cmp::Ordering;
 
-/// Compare two values for sorting
+/// Compare two values for sorting.
 ///
-/// Handles NULL values (NULL comes last), numeric values, strings, and other types.
-/// Used in Sort and other comparison operations.
+/// NULL is explicitly sorted last. Every other shape delegates to `Value`'s
+/// total order so sorting, predicate evaluation and grouping agree on cross
+/// numeric kinds, dates and NaN placement.
 pub fn compare_values(a: &Value, b: &Value) -> Ordering {
-    // Handle NULL values - NULL comes last
     match (a, b) {
         (Value::Null(_), Value::Null(_)) => Ordering::Equal,
         (Value::Null(_), _) => Ordering::Greater,
         (_, Value::Null(_)) => Ordering::Less,
         (Value::Bool(a), Value::Bool(b)) => a.cmp(b),
+        (Value::SmallInt(a), Value::SmallInt(b)) => a.cmp(b),
         (Value::Int(a), Value::Int(b)) => a.cmp(b),
         (Value::BigInt(a), Value::BigInt(b)) => a.cmp(b),
-        (Value::Float(a), Value::Float(b)) => {
-            if a < b {
-                Ordering::Less
-            } else if a > b {
-                Ordering::Greater
-            } else {
-                Ordering::Equal
-            }
-        }
-        (Value::Double(a), Value::Double(b)) => {
-            if a < b {
-                Ordering::Less
-            } else if a > b {
-                Ordering::Greater
-            } else {
-                Ordering::Equal
-            }
-        }
         (Value::String(a), Value::String(b)) => a.cmp(b),
-        _ => a.to_string().cmp(&b.to_string()),
+        _ => a.cmp(b),
     }
 }
 
@@ -96,5 +79,24 @@ mod tests {
         assert_eq!(compare_values(&v2, &v1), Ordering::Greater);
         assert_eq!(compare_values(&v1, &v1), Ordering::Equal);
         assert_eq!(compare_values(&v3, &v4), Ordering::Greater);
+    }
+
+    #[test]
+    fn mixed_numeric_values_use_numeric_order() {
+        let small = Value::Int(5);
+        let large = Value::BigInt(100);
+        assert_eq!(compare_values(&small, &large), Ordering::Less);
+        assert_eq!(compare_values(&large, &small), Ordering::Greater);
+        assert_eq!(
+            compare_values(&Value::Int(5), &Value::Double(5.0)),
+            Ordering::Equal
+        );
+    }
+
+    #[test]
+    fn nan_sorts_before_numbers() {
+        let nan = Value::Double(f64::NAN);
+        assert_eq!(compare_values(&nan, &Value::Double(1.0)), Ordering::Less);
+        assert_eq!(compare_values(&Value::Double(1.0), &nan), Ordering::Greater);
     }
 }

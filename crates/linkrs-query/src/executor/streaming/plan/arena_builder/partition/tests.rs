@@ -4,13 +4,16 @@ use crate::executor::streaming::plan::arena_builder::PhysicalPlanBuilder;
 use crate::executor::streaming::plan::context::PhysicalPlanBuildContext;
 use crate::executor::streaming::plan::types::InputContract;
 use crate::executor::streaming::{BlockingSpec, JoinSpec, SourceSpec};
+use crate::planning::plan::core::nodes::graph_operations::DedupNode;
 use crate::planning::plan::core::nodes::operation::filter_node::FilterNode;
+use crate::planning::plan::core::nodes::operation::sort_node::{SortItem, TopNNode};
 use crate::planning::plan::core::nodes::ScanVerticesNode;
 use crate::planning::plan::{PartitionSource, PartitionSpec};
 use linkrs_core::types::expr::expression_context::ExpressionAnalysisContext;
 use linkrs_core::types::expr::{ContextualExpression, ExpressionMeta};
+use linkrs_core::types::graph_schema::OrderDirection;
 use linkrs_core::types::operators::AggregateFunction;
-use linkrs_core::Expression;
+use linkrs_core::{DataType, Expression};
 use std::sync::Arc;
 
 fn test_context() -> ExecutionContext {
@@ -33,6 +36,30 @@ fn tagged_scan() -> PlanNodeEnum {
     scan.set_tag("person");
     scan.set_col_names(vec!["v".to_string()]);
     PlanNodeEnum::ScanVertices(scan)
+}
+
+fn distinct_topn_scan(types: Vec<DataType>) -> PlanNodeEnum {
+    let mut dedup = DedupNode::new(tagged_scan()).expect("dedup plan should build");
+    dedup.set_col_names(vec!["v".to_string()]);
+    dedup.set_column_types(types);
+    let topn = TopNNode::new(
+        PlanNodeEnum::Dedup(dedup),
+        vec![SortItem::column("v".to_string(), OrderDirection::Asc)],
+        10,
+    )
+    .expect("topn plan should build");
+    PlanNodeEnum::TopN(topn)
+}
+
+fn has_local_topk(plan: &crate::executor::streaming::plan::types::PhysicalPlan) -> bool {
+    plan.operators.iter().any(|op| {
+        matches!(
+            op.spec,
+            crate::executor::streaming::plan::types::OperatorKindSpec::Blocking(
+                BlockingSpec::LocalTopKDistinct { .. }
+            )
+        )
+    })
 }
 
 fn simple_filter(input: PlanNodeEnum) -> PlanNodeEnum {
@@ -106,6 +133,45 @@ fn partitionable_scan_chain_produces_partition_and_exchange_fragments() {
 
     crate::executor::streaming::plan::validator::PhysicalPlanValidator::validate(&Arc::new(plan))
         .expect("partitioned plan should validate");
+}
+
+#[test]
+fn local_topk_unsupported_key_type_is_reported_in_plan_diagnostics() {
+    let node = distinct_topn_scan(vec![DataType::String]);
+    let mut ctx = PhysicalPlanBuildContext::new();
+    ctx.partition_spec = Some(spec_with_two_ranges());
+    let exec_ctx = test_context();
+
+    let plan = PhysicalPlanBuilder::build(&node, &mut ctx, &exec_ctx).expect("build");
+
+    assert!(
+        ctx.diagnostics
+            .notes
+            .iter()
+            .any(|note| note == "local_topk:unpushed,reason=unsupported-key-type"),
+        "unsupported key type must be visible in EXPLAIN diagnostics: {:?}",
+        ctx.diagnostics.notes
+    );
+    assert!(!has_local_topk(&plan));
+}
+
+#[test]
+fn local_topk_pushed_shape_does_not_emit_unpushed_note() {
+    let node = distinct_topn_scan(vec![DataType::BigInt]);
+    let mut ctx = PhysicalPlanBuildContext::new();
+    ctx.partition_spec = Some(spec_with_two_ranges());
+    let exec_ctx = test_context();
+
+    let plan = PhysicalPlanBuilder::build(&node, &mut ctx, &exec_ctx).expect("build");
+
+    assert!(
+        ctx.diagnostics
+            .notes
+            .iter()
+            .all(|note| !note.contains("local_topk:unpushed")),
+        "pushed shape must not claim it was unpushed"
+    );
+    assert!(has_local_topk(&plan));
 }
 
 #[test]

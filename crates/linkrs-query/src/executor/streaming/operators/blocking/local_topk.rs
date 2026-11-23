@@ -11,10 +11,11 @@ use std::sync::Arc;
 
 use linkrs_core::columnar::MaterializedBatch;
 use linkrs_core::error::QueryError;
+use linkrs_core::value::NullType;
 use linkrs_core::Value;
 
 use crate::executor::base::MemoryTracker;
-use crate::executor::streaming::chunk::{DataChunk, TypedColumn};
+use crate::executor::streaming::chunk::{bitmap_is_valid, DataChunk, TypedColumn};
 use crate::executor::streaming::executor::SortDirection;
 
 use super::helpers::{emit_batch_slice, BlockingContext};
@@ -35,6 +36,7 @@ pub struct LocalTopKDistinctState {
     heap: BinaryHeap<i64>,
     reversed_heap: BinaryHeap<Reverse<i64>>,
     seen_keys: HashSet<i64>,
+    saw_null: bool,
     batch: MaterializedBatch,
     emitted_offset: usize,
     col_names: Vec<String>,
@@ -50,6 +52,7 @@ impl LocalTopKDistinctState {
             heap: BinaryHeap::new(),
             reversed_heap: BinaryHeap::new(),
             seen_keys: HashSet::new(),
+            saw_null: false,
             batch: MaterializedBatch::new(0, 0),
             emitted_offset: 0,
             col_names: Vec::new(),
@@ -96,11 +99,64 @@ impl LocalTopKDistinctState {
         false
     }
 
-    fn typed_keys(chunk: &mut DataChunk, key_name: &str) -> Option<Vec<i64>> {
+    fn accept_typed_keys(
+        &mut self,
+        keys: Vec<Option<i64>>,
+        memory_tracker: &mut MemoryTracker,
+    ) -> Result<(), QueryError> {
+        for key in keys {
+            match key {
+                Some(key) => {
+                    if self.insert_key(key) {
+                        memory_tracker.try_reserve(32)?;
+                    }
+                }
+                None => {
+                    if !self.saw_null {
+                        self.saw_null = true;
+                        memory_tracker.try_reserve(32)?;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn emit_typed_batch(&mut self) {
+        let mut keys: Vec<i64> = match self.direction {
+            SortDirection::Ascending => self.heap.clone().into_vec(),
+            SortDirection::Descending => self.reversed_heap.iter().map(|Reverse(k)| *k).collect(),
+        };
+        match self.direction {
+            SortDirection::Ascending => keys.sort_unstable(),
+            SortDirection::Descending => keys.sort_unstable_by(|a, b| b.cmp(a)),
+        }
+        self.batch.clear();
+        // The global comparator puts NULL after numbers before reversing the
+        // direction, so NULL is last for ASC and first for DESC. It is kept
+        // as one deduplicated key and can evict a non-null candidate in DESC.
+        if self.saw_null && self.direction == SortDirection::Descending {
+            self.batch.append_row(vec![Value::Null(NullType::Null)]);
+            keys.truncate(self.limit.saturating_sub(1));
+        }
+        for key in keys {
+            self.batch.append_row(vec![Value::BigInt(key)]);
+        }
+        if self.saw_null
+            && self.direction == SortDirection::Ascending
+            && self.batch.num_rows() < self.limit
+        {
+            self.batch.append_row(vec![Value::Null(NullType::Null)]);
+        }
+    }
+
+    fn typed_keys(chunk: &mut DataChunk, key_name: &str) -> Option<Vec<Option<i64>>> {
         let slot = chunk.get_layout().slot_id(key_name)?;
         chunk.ensure_typed_columns();
-        let TypedColumn::I64(values) = chunk.typed_column(slot)? else {
-            return None;
+        let (values, validity) = match chunk.typed_column(slot)? {
+            TypedColumn::I64(values) => (values, None),
+            TypedColumn::NullableI64(values, bitmap) => (values, Some(bitmap)),
+            _ => return None,
         };
         let len = if chunk.rows.is_empty() {
             values.len()
@@ -114,7 +170,15 @@ impl LocalTopKDistinctState {
         if indices.iter().any(|&idx| idx >= values.len()) {
             return None;
         }
-        Some(indices.into_iter().map(|idx| values[idx]).collect())
+        Some(
+            indices
+                .into_iter()
+                .map(|idx| match validity {
+                    Some(bitmap) if !bitmap_is_valid(bitmap, idx) => None,
+                    _ => Some(values[idx]),
+                })
+                .collect(),
+        )
     }
 }
 
@@ -155,15 +219,11 @@ pub(super) fn next(
             Mode::Typed => {
                 let keys = keys.ok_or_else(|| {
                     QueryError::execution(format!(
-                        "LocalTopKDistinct typed key '{}' disappeared after the first chunk",
+                        "LocalTopKDistinct typed key '{}' changed after the first chunk",
                         state.key_name
                     ))
                 })?;
-                for key in keys {
-                    if state.insert_key(key) {
-                        memory_tracker.try_reserve(32)?;
-                    }
-                }
+                state.accept_typed_keys(keys, memory_tracker)?;
             }
             Mode::PassThrough => {
                 let slot = chunk
@@ -185,18 +245,7 @@ pub(super) fn next(
     }
 
     if state.mode == Mode::Typed {
-        let mut keys: Vec<i64> = match state.direction {
-            SortDirection::Ascending => state.heap.clone().into_vec(),
-            SortDirection::Descending => state.reversed_heap.iter().map(|Reverse(k)| *k).collect(),
-        };
-        match state.direction {
-            SortDirection::Ascending => keys.sort_unstable(),
-            SortDirection::Descending => keys.sort_unstable_by(|a, b| b.cmp(a)),
-        }
-        state.batch.clear();
-        for key in keys {
-            state.batch.append_row(vec![Value::BigInt(key)]);
-        }
+        state.emit_typed_batch();
     }
     if !state.col_names.is_empty() {
         state
@@ -272,7 +321,7 @@ mod tests {
         rowless.typed_columns = Some(vec![TypedColumn::I64(vec![5, 1, 5, 9])]);
         assert_eq!(
             LocalTopKDistinctState::typed_keys(&mut rowless, "k"),
-            Some(vec![5, 1, 5, 9])
+            Some(vec![Some(5), Some(1), Some(5), Some(9)])
         );
 
         let mut selected = DataChunk::new_with_layout(
@@ -287,7 +336,72 @@ mod tests {
         selected.typed_columns = Some(vec![TypedColumn::I64(vec![5, 1, 9])]);
         assert_eq!(
             LocalTopKDistinctState::typed_keys(&mut selected, "k"),
-            Some(vec![5, 9])
+            Some(vec![Some(5), Some(9)])
+        );
+    }
+
+    #[test]
+    fn typed_keys_read_nullable_i64_validity() {
+        use crate::executor::streaming::slot::SlotLayout;
+
+        let layout = Arc::new(SlotLayout::from_names(&["k".to_string()]));
+        let mut chunk = DataChunk::new_with_layout(Vec::new(), Arc::clone(&layout));
+        chunk.typed_columns = Some(vec![TypedColumn::NullableI64(vec![5, 1, 9], vec![0b101])]);
+        assert_eq!(
+            LocalTopKDistinctState::typed_keys(&mut chunk, "k"),
+            Some(vec![Some(5), None, Some(9)])
+        );
+    }
+
+    #[test]
+    fn nullable_keys_follow_global_null_placement() {
+        use crate::executor::base::MemoryBudget;
+
+        let mut tracker = MemoryTracker::new(MemoryBudget::default_budget());
+        let mut ascending = LocalTopKDistinctState::new(3, SortDirection::Ascending, "k".into());
+        ascending
+            .accept_typed_keys(vec![Some(5), None, Some(1), Some(9)], &mut tracker)
+            .expect("accept nullable keys");
+        ascending.emit_typed_batch();
+        let rows: Vec<Vec<Value>> = ascending.batch.rows().collect();
+        assert_eq!(
+            rows,
+            vec![
+                vec![Value::BigInt(1)],
+                vec![Value::BigInt(5)],
+                vec![Value::BigInt(9)],
+            ]
+        );
+
+        let mut ascending_with_room =
+            LocalTopKDistinctState::new(3, SortDirection::Ascending, "k".into());
+        ascending_with_room
+            .accept_typed_keys(vec![Some(5), None, Some(1), Some(5)], &mut tracker)
+            .expect("accept nullable keys");
+        ascending_with_room.emit_typed_batch();
+        let rows: Vec<Vec<Value>> = ascending_with_room.batch.rows().collect();
+        assert_eq!(
+            rows,
+            vec![
+                vec![Value::BigInt(1)],
+                vec![Value::BigInt(5)],
+                vec![Value::Null(NullType::Null)],
+            ]
+        );
+
+        let mut descending = LocalTopKDistinctState::new(3, SortDirection::Descending, "k".into());
+        descending
+            .accept_typed_keys(vec![Some(5), None, Some(9), Some(7)], &mut tracker)
+            .expect("accept nullable keys");
+        descending.emit_typed_batch();
+        let rows: Vec<Vec<Value>> = descending.batch.rows().collect();
+        assert_eq!(
+            rows,
+            vec![
+                vec![Value::Null(NullType::Null)],
+                vec![Value::BigInt(9)],
+                vec![Value::BigInt(7)],
+            ]
         );
     }
 

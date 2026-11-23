@@ -63,6 +63,9 @@ impl PhysicalPlanBuilder {
 
         let (mut operators, mut fragments, root_fid, root_op_id) = match partitioned {
             Some((operators, fragments, root_fid, root_op_id)) => {
+                if let Some(note) = partition::local_topk_decision(node) {
+                    ctx.diagnostics.push_note(note);
+                }
                 (operators, fragments, root_fid, root_op_id)
             }
             None => Self::build_serial(node, exec_ctx)?,
