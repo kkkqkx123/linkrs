@@ -107,7 +107,6 @@ impl EsBreaker {
 
 #[derive(Debug, Clone, Copy)]
 enum Method {
-    Get,
     Post,
     Put,
 }
@@ -272,7 +271,6 @@ impl EsSearchEngine {
 
     fn build_request(&self, method: Method, url: &str, body: RequestBody) -> RequestBuilder {
         let builder = match method {
-            Method::Get => self.http.get(url),
             Method::Post => self.http.post(url),
             Method::Put => self.http.put(url),
         };
@@ -509,32 +507,6 @@ impl EsSearchEngine {
         Ok(())
     }
 
-    /// Read back the commit fence written by `commit_with_payload`.
-    ///
-    /// The trait exposes only a synchronous `commit_payload` accessor, which
-    /// cannot perform ES I/O and therefore returns `None`. This async variant
-    /// is the real fence read for remote backends; consistency does not depend
-    /// on it because ES writes are idempotent by `_id` and the sync outbox
-    /// carries the durable LSN. It is provided for diagnostics and future
-    /// online-rebuild catch-up.
-    #[allow(dead_code)]
-    pub async fn read_commit_payload(&self) -> Result<Option<String>, SearchError> {
-        let url = format!(
-            "{}/_doc/{}",
-            self.index_url(),
-            Self::hex_encode(&self.fence_id())
-        );
-        let (status, text) = self.request(Method::Get, url, RequestBody::None).await?;
-        if status == StatusCode::NOT_FOUND {
-            return Ok(None);
-        }
-        let payload: JsonValue = serde_json::from_str(&text)
-            .map_err(|e| SearchError::SerializationError(format!("es fence parse failed: {e}")))?;
-        Ok(payload
-            .pointer("/_source/payload")
-            .and_then(JsonValue::as_str)
-            .map(str::to_string))
-    }
 }
 
 #[async_trait]
@@ -628,11 +600,16 @@ impl FulltextSearchEngine for EsSearchEngine {
         self.refresh().await
     }
 
+    async fn rollback(&self) -> Result<(), SearchError> {
+        // ES bulk writes are applied immediately and are idempotent by _id;
+        // there is no uncommitted local transaction to discard.
+        Ok(())
+    }
+
     fn commit_payload(&self) -> Result<Option<String>, SearchError> {
-        // ES reads require async I/O; the fence is recovered via the async
-        // `read_commit_payload` on `EsSearchEngine`. Consistency does not rely
-        // on this sync accessor: ES writes are idempotent by `_id` and the
-        // sync outbox carries the durable LSN.
+        // ES has no locally readable fence. Consistency relies on _id
+        // idempotency and the durable outbox LSN, so None is the intended
+        // result here and must not be read as a failed commit.
         Ok(None)
     }
 

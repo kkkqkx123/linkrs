@@ -574,7 +574,7 @@ impl FulltextIndexManager {
         space_id: u64,
         tag_name: &str,
         field_name: &str,
-    ) -> Option<Arc<MetricsSearchEngine>> {
+    ) -> Option<Arc<dyn FulltextSearchEngine>> {
         let key = IndexKey::new(space_id, tag_name, field_name);
         let engine = self.engines.get(&key)?;
         let stats_manager = self.stats_manager.lock();
@@ -585,7 +585,7 @@ impl FulltextIndexManager {
             Arc::clone(sm),
             space_id,
             index_name,
-        )))
+        )) as Arc<dyn FulltextSearchEngine>)
     }
 
     pub fn get_metadata(

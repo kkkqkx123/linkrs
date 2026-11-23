@@ -581,6 +581,10 @@ impl crate::engine::FulltextSearchEngine for TantivySearchEngine {
         self.commit().await
     }
 
+    async fn rollback(&self) -> Result<(), SearchError> {
+        TantivySearchEngine::rollback(self).await
+    }
+
     async fn commit_with_payload(&self, payload: String) -> Result<(), SearchError> {
         self.commit_with_payload(payload).await
     }

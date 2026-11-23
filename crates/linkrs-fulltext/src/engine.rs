@@ -85,12 +85,18 @@ pub trait FulltextSearchEngine: Send + Sync + std::fmt::Debug + 'static {
         self.commit().await
     }
 
-    /// Read back the payload from the last committed transaction.
+    /// Read back the payload attached by `commit_with_payload`.
+    ///
+    /// This is a local-only fence read. Remote backends return `None`: their
+    /// consistency is carried by the durable outbox LSN, not by a locally
+    /// readable fence. Callers must not treat `None` as a failed commit.
     fn commit_payload(&self) -> Result<Option<String>, SearchError> {
         Ok(None)
     }
 
-    /// Roll back uncommitted writes.
+    /// Roll back uncommitted writes. Local backends discard the open writer
+    /// transaction; remote backends with immediate, idempotent writes may
+    /// treat this as a no-op.
     async fn rollback(&self) -> Result<(), SearchError> {
         Ok(())
     }

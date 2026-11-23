@@ -237,6 +237,89 @@ impl MetricsSearchEngine {
     }
 }
 
+#[async_trait::async_trait]
+impl FulltextSearchEngine for MetricsSearchEngine {
+    fn name(&self) -> &str {
+        MetricsSearchEngine::name(self)
+    }
+
+    fn version(&self) -> &str {
+        MetricsSearchEngine::version(self)
+    }
+
+    async fn index(&self, doc_id: &str, content: &str) -> Result<(), SearchError> {
+        MetricsSearchEngine::index(self, doc_id, content).await
+    }
+
+    async fn index_batch(&self, docs: Vec<(String, String)>) -> Result<(), SearchError> {
+        MetricsSearchEngine::index_batch(self, docs).await
+    }
+
+    async fn search(&self, query: &str, limit: usize) -> Result<Vec<SearchResult>, SearchError> {
+        MetricsSearchEngine::search(self, query, limit).await
+    }
+
+    async fn search_structured(
+        &self,
+        query: &crate::query::FulltextQuery,
+        limit: usize,
+    ) -> Result<Vec<SearchResult>, SearchError> {
+        MetricsSearchEngine::search_structured(self, query, limit).await
+    }
+
+    async fn delete(&self, doc_id: &str) -> Result<(), SearchError> {
+        MetricsSearchEngine::delete(self, doc_id).await
+    }
+
+    async fn delete_batch(&self, doc_ids: Vec<&str>) -> Result<(), SearchError> {
+        MetricsSearchEngine::delete_batch(self, doc_ids).await
+    }
+
+    async fn ensure_ready(&self) -> Result<(), SearchError> {
+        self.inner.ensure_ready().await
+    }
+
+    async fn commit(&self) -> Result<(), SearchError> {
+        MetricsSearchEngine::commit(self).await
+    }
+
+    async fn commit_with_payload(&self, payload: String) -> Result<(), SearchError> {
+        self.inner.commit_with_payload(payload).await
+    }
+
+    fn commit_payload(&self) -> Result<Option<String>, SearchError> {
+        self.inner.commit_payload()
+    }
+
+    async fn rollback(&self) -> Result<(), SearchError> {
+        MetricsSearchEngine::rollback(self).await
+    }
+
+    async fn stats(&self) -> Result<IndexStats, SearchError> {
+        MetricsSearchEngine::stats(self).await
+    }
+
+    fn consistency_state(&self) -> ConsistencyState {
+        MetricsSearchEngine::consistency_state(self)
+    }
+
+    fn mark_inconsistent(&self) {
+        MetricsSearchEngine::mark_inconsistent(self)
+    }
+
+    fn mark_consistent(&self) {
+        MetricsSearchEngine::mark_consistent(self)
+    }
+
+    async fn clear(&self) -> Result<(), SearchError> {
+        MetricsSearchEngine::clear(self).await
+    }
+
+    async fn close(&self) -> Result<(), SearchError> {
+        MetricsSearchEngine::close(self).await
+    }
+}
+
 impl std::fmt::Debug for MetricsSearchEngine {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MetricsSearchEngine")
