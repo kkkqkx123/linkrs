@@ -390,13 +390,22 @@ fn expand_packed_identity(
 
     let view_started = std::time::Instant::now();
     let mut out_keys = Vec::with_capacity(unique.len());
-    let mut out_weights = Vec::with_capacity(unique.len());
+    let mut non_uniform_weight = false;
     for (index, found) in present.iter().enumerate() {
         if *found {
             out_keys.push(keys[index].clone());
-            out_weights.push(weights[index]);
+            non_uniform_weight |= weights[index] != 1;
         }
     }
+    let out_weights = if non_uniform_weight {
+        present
+            .iter()
+            .enumerate()
+            .filter_map(|(index, found)| found.then_some(weights[index]))
+            .collect()
+    } else {
+        Vec::new()
+    };
     let view_us = view_started.elapsed().as_micros() as u64;
     if let Some(stats) = stats {
         stats.record_expand_read_us(read_us);
@@ -522,7 +531,7 @@ pub(super) fn expand_single_step_columnar(
             .zip(ctx.packed_identity_type.clone());
         if let Some((key_name, identity_type)) = identity_key {
             let key_property = key_name.rsplit('.').next().unwrap_or(&key_name);
-            if dst_bypass.len() == 1 && dst_bypass[0] == key_property {
+            if edge_bypass.is_empty() && dst_bypass.len() == 1 && dst_bypass[0] == key_property {
                 if packed.dst.is_empty() && ctx.include_empty_paths {
                     return Ok(ColumnarOutcome::Declined);
                 }
@@ -658,15 +667,16 @@ pub(super) fn expand_single_step_columnar(
     }
     if let Some(key_name) = ctx.packed_key_name.as_deref() {
         let key_property = key_name.rsplit('.').next().unwrap_or(key_name);
-        let (direct, eligible) = if dst_bypass.len() == 1 && dst_bypass[0] == key_property {
-            (Some(dst_bypass[0].as_str()), true)
-        } else if dst_empty {
-            (None, true)
-        } else {
-            // The plan selected a direct handoff but this chunk does not
-            // carry the expected key; keep the ordinary typed output path.
-            (None, false)
-        };
+        let (direct, eligible) =
+            if edge_bypass.is_empty() && dst_bypass.len() == 1 && dst_bypass[0] == key_property {
+                (Some(dst_bypass[0].as_str()), true)
+            } else if edge_bypass.is_empty() && dst_empty {
+                (None, true)
+            } else {
+                // The plan selected a direct handoff but this chunk does not
+                // carry every demanded column; keep the ordinary typed output path.
+                (None, false)
+            };
         if rowless && eligible {
             let keys: Vec<Value> = kept
                 .iter()
@@ -680,7 +690,7 @@ pub(super) fn expand_single_step_columnar(
                 .collect();
             let payload = PackedExpandPayload {
                 key_name: key_name.to_string(),
-                weights: vec![1; keys.len()],
+                weights: Vec::new(),
                 keys,
             };
             if let Some(stats) = &stats {

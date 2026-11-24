@@ -710,3 +710,15 @@ devs release 编译通过，正确性门全绿：配置默认值 1/1、partition
 当前保留实现仍有三项可量化但已被收益覆盖的额外开销：`PackedExpandPayload` 每键多带一个 `u64` 权重（Distinct 路径不用，约 244 KB/批），身份快路径仍需一次按目的端 ID 的哈希去重与一次存在性读取（存在性结果仍为 `Vec<Option<Vec<Value>>>`，空投影产生空 Vec），按父直写与父优先邻居遍历会在整批父点上持有边表读锁。三者分别换来一次累加、展开输出从 215488 行降到 30473 行，以及取消 event/scatter；固定门与微基准均显示净收益，且没有结果漂移，因此不回退第 45 节的三项改动。两跳的 `join_two_hop` 9.90 ms 是单轮高值，第二轮 5.52 ms、生产默认 5.57 ms 与基线同量级，也不构成回退依据。
 
 语义复核另发现并修正一处真实问题：身份直通在运行时 `resolved_dst_tag()` 返回 `None` 时仍可能回退到计划期 `dst_tag`，若目录在计划与执行之间漂移，目的端存在性检查会落在不同标签上，身份证明随之失效。现在只有在运行时标签解析成功且等于计划标签、并且计划标签非空时才允许直通，否则继续走原属性列读取。`linkrs-query` partitioning 49/49 通过；修正后固定门单轮 `group_by_count` 29.87 ms、`distinct_limit` 26.46 ms，结果仍为 `[14|59]` / `[14]`，`result_stable=true`、`actual=10`、`spill_rows=0`，EXPLAIN 仍显示 `expand_output_rows=30473` 且身份直通未被关闭。结论：预取候选本身无语义问题但未证明有收益；当前保留的身份直通与直写路径在补齐标签守卫后未发现语义漂移。日志、EXPLAIN 与逐用例 JSON 见 `perf-data/parity/results/2026-11-24/csr-prefetch-proof/`。
+
+## 47. 三方差距收敛实施（2026-11-24）
+
+完整设计与门槛写入 `docs/plan/parity-remaining-gap-convergence-design.md`。按任务顺序处理：
+
+1. `LocalTopKDistinctState::insert_key` 把 ASC 的 `key >= worst`、DESC 的 `key <= worst` 边界判断前移到 `seen_keys` 查询之前， rejected key 不再做哈希查找或状态修改；`limit=0` 仍直接拒绝。`PackedExpandPayload.weights` 在全为 1 的批上省略分配，空 `weights` 统一解释为每键权重 1；显式非 1 权重仍逐键写入。
+2. 非主键整数属性直通按计划实现后，发现当前 LSQB 四个目的端标签都只有主键整数列，无法构造可激活证明的查询。没有 A/B 证据，已撤回该代码，不保留无收益的上下文字段与分支。
+3. 两跳存在性折叠依赖“无悬空边”证明；当前 schema 不能提供该证明，跳过会改变计数语义，拒绝。
+4. `max_partitions=10` 的固定门已经跑满，`order_limit` 缺物理 limit/offset 与跨 shard 全局有序证明，微扫描与 morsel 改动没有可验证收益面，暂缓。
+5. 分片锁粒度与 RAM 容量属于架构取舍，缺少偏斜/容量微基准，暂缓。
+
+devs release 全门通过：配置默认值、partitioning 49/49、typed group 9/9、local topk 11/11、parallel 27/27、DQL 324/324、storage 全量、column batch 全绿；两轮固定门 `actual=10`、`result_stable=true`、`spill_rows=0`，结果仍为 `group_by_count [14|59]`、`distinct_limit [14]`。两轮耗时 30.54 / 37.91 ms 与 30.11 / 36.69 ms，生产默认 29.50 / 28.51 ms；与上一切片同量级，单轮波动不视为独立收益。两跳 5.0–5.6 ms、变长路径 4.8–5.8 ms 未退化。判定：只保留第 1 项；它移除每批一条确定性分配且不改变语义，其余项按证明门槛拒绝或暂缓。日志、JSON 与 EXPLAIN 见 `perf-data/parity/results/2026-11-24/parity-convergence/`。

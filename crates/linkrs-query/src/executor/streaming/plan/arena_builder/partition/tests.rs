@@ -6,7 +6,7 @@ use crate::executor::streaming::plan::types::InputContract;
 use crate::executor::streaming::{BlockingSpec, JoinSpec, SourceSpec};
 use crate::planning::plan::core::nodes::graph_operations::DedupNode;
 use crate::planning::plan::core::nodes::operation::filter_node::FilterNode;
-use crate::planning::plan::core::nodes::operation::sort_node::{SortItem, TopNNode};
+use crate::planning::plan::core::nodes::operation::sort_node::{LimitNode, SortItem, TopNNode};
 use crate::planning::plan::core::nodes::ScanVerticesNode;
 use crate::planning::plan::{PartitionSource, PartitionSpec};
 use linkrs_core::types::expr::expression_context::ExpressionAnalysisContext;
@@ -170,6 +170,46 @@ fn local_topk_pushed_shape_does_not_emit_unpushed_note() {
             .iter()
             .all(|note| !note.contains("local_topk:unpushed")),
         "pushed shape must not claim it was unpushed"
+    );
+    assert!(has_local_topk(&plan));
+}
+
+#[test]
+fn filter_above_distinct_topn_disables_local_topk() {
+    let node = simple_filter(distinct_topn_scan(vec![DataType::BigInt]));
+    let mut ctx = PhysicalPlanBuildContext::new();
+    ctx.partition_spec = Some(spec_with_two_ranges());
+    let exec_ctx = test_context();
+
+    let plan = PhysicalPlanBuilder::build(&node, &mut ctx, &exec_ctx).expect("build");
+
+    assert!(
+        ctx.diagnostics
+            .notes
+            .iter()
+            .any(|note| note == "local_topk:unpushed,reason=unsafe-global-tail"),
+        "a filter above TopN must disable the local TopK push"
+    );
+    assert!(!has_local_topk(&plan));
+}
+
+#[test]
+fn limit_above_distinct_topn_keeps_local_topk() {
+    let node = LimitNode::new(distinct_topn_scan(vec![DataType::BigInt]), 0, 10)
+        .expect("limit plan should build");
+    let node = PlanNodeEnum::Limit(node);
+    let mut ctx = PhysicalPlanBuildContext::new();
+    ctx.partition_spec = Some(spec_with_two_ranges());
+    let exec_ctx = test_context();
+
+    let plan = PhysicalPlanBuilder::build(&node, &mut ctx, &exec_ctx).expect("build");
+
+    assert!(
+        ctx.diagnostics
+            .notes
+            .iter()
+            .all(|note| !note.contains("local_topk:unpushed")),
+        "a prefix limit must not disable the local TopK push"
     );
     assert!(has_local_topk(&plan));
 }

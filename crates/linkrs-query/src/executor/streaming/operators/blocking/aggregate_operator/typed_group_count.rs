@@ -292,7 +292,10 @@ pub(crate) fn accumulate_packed_keys(
     weights: &[u64],
     multiplicity: u64,
 ) -> bool {
-    if !group_map.is_empty() || keys.is_empty() || weights.len() != keys.len() {
+    if !group_map.is_empty()
+        || keys.is_empty()
+        || (!weights.is_empty() && weights.len() != keys.len())
+    {
         return false;
     }
     let mut typed_keys = Vec::with_capacity(keys.len());
@@ -352,7 +355,8 @@ pub(crate) fn accumulate_packed_keys(
         });
     }
     let fast = state.as_mut().expect("typed group count initialized above");
-    for (key, weight) in typed_keys.into_iter().zip(weights) {
+    for (index, key) in typed_keys.into_iter().enumerate() {
+        let weight = weights.get(index).copied().unwrap_or(1);
         *fast.counts.entry(key).or_insert(0) += weight.saturating_mul(multiplicity);
     }
     true
@@ -579,6 +583,40 @@ mod tests {
             stored_count(group_map.get(&vec![Value::BigInt(7)])),
             Some(2)
         );
+    }
+
+    #[test]
+    fn packed_keys_omit_uniform_weights() {
+        let keys = vec![Value::BigInt(1), Value::BigInt(2)];
+        let group_map = HashMap::new();
+        let mut tracker = MemoryTracker::new(MemoryBudget::new(1024 * 1024));
+        let mut implicit = None;
+        assert!(accumulate_packed_keys(
+            &mut implicit,
+            &group_map,
+            &mut tracker,
+            ACCUMULATOR_OVERHEAD_BYTES,
+            &keys,
+            &[],
+            3,
+        ));
+        let implicit = implicit.expect("implicit weights initialize typed state");
+        assert_eq!(implicit.counts.get(&TypedGroupKey::I64(1)), Some(&3));
+        assert_eq!(implicit.counts.get(&TypedGroupKey::I64(2)), Some(&3));
+
+        let mut explicit = None;
+        assert!(accumulate_packed_keys(
+            &mut explicit,
+            &group_map,
+            &mut tracker,
+            ACCUMULATOR_OVERHEAD_BYTES,
+            &keys,
+            &[2, 5],
+            3,
+        ));
+        let explicit = explicit.expect("explicit weights initialize typed state");
+        assert_eq!(explicit.counts.get(&TypedGroupKey::I64(1)), Some(&6));
+        assert_eq!(explicit.counts.get(&TypedGroupKey::I64(2)), Some(&15));
     }
 
     #[test]

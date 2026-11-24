@@ -56,7 +56,7 @@ pub(crate) fn next_partial_aggregate(
         if let Some(rt) = ctx.runtime.as_ref() {
             rt.ensure_not_cancelled()?;
         }
-        if let Some(payload) = chunk.take_packed_expand() {
+        if let Some(mut payload) = chunk.take_packed_expand() {
             let direct = group_by_expressions.len() == 1
                 && matches!(&group_by_expressions[0], Expression::Variable(name) if name == &payload.key_name)
                 && aggregate_functions.len() == 1
@@ -84,8 +84,10 @@ pub(crate) fn next_partial_aggregate(
                 .slot_id(&payload.key_name)
                 .unwrap_or(width.saturating_sub(1));
             let null = Value::Null(NullType::Null);
+            let weights = std::mem::take(&mut payload.weights);
             let mut rows = Vec::with_capacity(payload.keys.len());
-            for (key, weight) in payload.keys.into_iter().zip(payload.weights) {
+            for (index, key) in payload.keys.into_iter().enumerate() {
+                let weight = weights.get(index).copied().unwrap_or(1);
                 let mut row = vec![null.clone(); width];
                 if slot < width {
                     row[slot] = key;

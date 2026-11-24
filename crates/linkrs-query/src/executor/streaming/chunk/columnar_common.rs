@@ -25,6 +25,7 @@ use linkrs_core::{EdgeHeader, Value};
 /// Narrow handoff from a packed expand to a partition-local blocking
 /// operator. Keys are the exact projected destination values the downstream
 /// key expression expects; each weight counts the edges folded into one key.
+/// An empty `weights` means every key has weight one.
 #[derive(Debug, Clone)]
 pub struct PackedExpandPayload {
     pub key_name: String,
@@ -39,6 +40,10 @@ impl PackedExpandPayload {
 
     pub fn is_empty(&self) -> bool {
         self.keys.is_empty()
+    }
+
+    pub fn weight(&self, index: usize) -> u64 {
+        self.weights.get(index).copied().unwrap_or(1)
     }
 }
 

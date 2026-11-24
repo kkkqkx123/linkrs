@@ -462,6 +462,22 @@ fn key_name_expr(chain: &PartitionedChain<'_>, key_name: &str) -> Option<Express
     None
 }
 
+/// Operators above a TopN are safe to keep only when they cannot need rows
+/// the TopN discarded: projections preserve rows, and a zero-offset Limit no
+/// larger than the TopN only trims its ordered prefix.
+fn safe_global_tail_after_topn(chain: &PartitionedChain<'_>, topn_limit: usize) -> bool {
+    chain.global.iter().skip(2).all(|node| match node {
+        PlanNodeEnum::Project(_) => true,
+        PlanNodeEnum::Limit(limit) => {
+            limit.offset() == 0
+                && u64::try_from(limit.count())
+                    .ok()
+                    .is_some_and(|count| count <= topn_limit as u64)
+        }
+        _ => false,
+    })
+}
+
 /// Single-key group aggregate whose following TopN sorts by that key. Every
 /// group key is unique after the partial aggregate, so keeping the best k
 /// rows per partition cannot remove a key needed by the global top k.
@@ -481,7 +497,7 @@ fn local_group_topn<'a>(
     else {
         return None;
     };
-    if n == 0 {
+    if n == 0 || !safe_global_tail_after_topn(chain, n as usize) {
         return None;
     }
     let key_name = match sort_expressions.as_slice() {
@@ -557,6 +573,17 @@ fn local_distinct_topn<'a>(chain: &'a PartitionedChain<'a>) -> LocalTopKDecision
         Ok(spec) => spec,
         Err(_) => return local_topk_unproven("invalid-topn-limit"),
     };
+    let BlockingSpec::TopN {
+        n,
+        sort_expressions,
+        sort_directions,
+    } = &spec
+    else {
+        return local_topk_unproven("unsupported-topn-spec");
+    };
+    if !safe_global_tail_after_topn(chain, *n as usize) {
+        return local_topk_unproven("unsafe-global-tail");
+    }
     let BlockingSpec::TopN {
         n,
         sort_expressions,

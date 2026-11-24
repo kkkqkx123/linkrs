@@ -62,6 +62,28 @@ impl LocalTopKDistinctState {
 
     /// Returns true when the key is retained and needs memory accounting.
     fn insert_key(&mut self, key: i64) -> bool {
+        if self.limit == 0 {
+            return false;
+        }
+        match self.direction {
+            SortDirection::Ascending => {
+                if self.heap.len() >= self.limit
+                    && self.heap.peek().is_some_and(|&worst| key >= worst)
+                {
+                    return false;
+                }
+            }
+            SortDirection::Descending => {
+                if self.reversed_heap.len() >= self.limit
+                    && self
+                        .reversed_heap
+                        .peek()
+                        .is_some_and(|&Reverse(worst)| key <= worst)
+                {
+                    return false;
+                }
+            }
+        }
         if self.seen_keys.contains(&key) {
             return false;
         }
@@ -69,35 +91,23 @@ impl LocalTopKDistinctState {
             SortDirection::Ascending => {
                 if self.heap.len() < self.limit {
                     self.heap.push(key);
-                    self.seen_keys.insert(key);
-                    return true;
+                } else if let Some(worst) = self.heap.pop() {
+                    self.seen_keys.remove(&worst);
+                    self.heap.push(key);
                 }
-                if let Some(&worst) = self.heap.peek() {
-                    if key < worst {
-                        self.heap.pop();
-                        self.seen_keys.remove(&worst);
-                        self.heap.push(key);
-                        self.seen_keys.insert(key);
-                    }
-                }
+                self.seen_keys.insert(key);
             }
             SortDirection::Descending => {
                 if self.reversed_heap.len() < self.limit {
                     self.reversed_heap.push(Reverse(key));
-                    self.seen_keys.insert(key);
-                    return true;
+                } else if let Some(Reverse(worst)) = self.reversed_heap.pop() {
+                    self.seen_keys.remove(&worst);
+                    self.reversed_heap.push(Reverse(key));
                 }
-                if let Some(&Reverse(worst)) = self.reversed_heap.peek() {
-                    if key > worst {
-                        self.reversed_heap.pop();
-                        self.seen_keys.remove(&worst);
-                        self.reversed_heap.push(Reverse(key));
-                        self.seen_keys.insert(key);
-                    }
-                }
+                self.seen_keys.insert(key);
             }
         }
-        false
+        true
     }
 
     fn accept_typed_keys(
@@ -604,6 +614,22 @@ mod tests {
                 vec![Value::BigInt(7)],
             ]
         );
+    }
+
+    #[test]
+    fn boundary_rejection_keeps_duplicates_and_ties() {
+        use crate::executor::base::MemoryBudget;
+        let mut tracker = MemoryTracker::new(MemoryBudget::default_budget());
+        let mut state = LocalTopKDistinctState::new(2, SortDirection::Ascending, "k".into());
+        state
+            .accept_typed_keys(
+                vec![Some(5), Some(1), Some(5), Some(1), Some(9)],
+                &mut tracker,
+            )
+            .expect("accept keys beyond the boundary");
+        state.emit_typed_batch();
+        let rows: Vec<Vec<Value>> = state.batch.rows().collect();
+        assert_eq!(rows, vec![vec![Value::BigInt(1)], vec![Value::BigInt(5)]]);
     }
 
     #[test]
