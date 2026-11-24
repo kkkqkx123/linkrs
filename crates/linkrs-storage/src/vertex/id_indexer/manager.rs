@@ -302,6 +302,19 @@ impl IdManager {
         self.core.lock().keys.get(index as usize)?.as_ref().cloned()
     }
 
+    /// Resolve several core-only reverse lookups under one lock. Output slots
+    /// stay aligned with `indices`; absent keys remain `None`.
+    pub fn get_keys(&self, indices: &[u32], out: &mut Vec<Option<IdKey>>) {
+        let core = self.core.lock();
+        out.clear();
+        out.reserve(indices.len());
+        out.extend(
+            indices
+                .iter()
+                .map(|&index| core.keys.get(index as usize).and_then(Clone::clone)),
+        );
+    }
+
     pub fn len(&self) -> usize {
         self.core.lock().live_ids.len()
     }

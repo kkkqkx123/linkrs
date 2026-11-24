@@ -171,12 +171,12 @@ impl GraphStorageContext {
                 let Some(table) = vertex_tables.get(&label) else {
                     return vec![None; internal_ids.len()];
                 };
-                internal_ids
-                    .iter()
-                    .map(|id| {
-                        table
-                            .get_external_id_raw(*id)
-                            .or_else(|| table.get_external_id(*id, ts))
+                let mut keys: Vec<Option<crate::vertex::IdKey>> = Vec::new();
+                table.get_external_ids_raw(internal_ids, &mut keys);
+                keys.into_iter()
+                    .zip(internal_ids)
+                    .map(|(key, id)| {
+                        key.or_else(|| table.get_external_id(*id, ts))
                             .and_then(|key| match key {
                                 crate::vertex::IdKey::Int(i) => VertexId::try_from_int64(i).ok(),
                                 crate::vertex::IdKey::Text(s) => VertexId::try_from_string(&s).ok(),

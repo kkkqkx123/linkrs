@@ -4,7 +4,7 @@ use crate::engine::graph_storage::context::GraphStorageContext;
 use crate::engine::graph_storage::ops::{
     route_vertex_id, serialize_properties, vertex_record_to_vertex, RoutedVertexId,
 };
-use linkrs_core::types::{TagInfo, VertexId};
+use linkrs_core::types::{LabelId, TagInfo, VertexId};
 use linkrs_core::vertex_edge_path::Tag;
 use linkrs_core::{StorageError, StorageResult, Value, Vertex};
 
@@ -458,6 +458,29 @@ pub(crate) fn get_vertex_property_columns_batch(
     ids: &[VertexId],
     properties: &[std::sync::Arc<str>],
 ) -> StorageResult<Vec<Option<Vec<Value>>>> {
+    get_vertex_property_columns_batch_impl(ctx, space, tag, ids, properties, None)
+}
+
+pub(crate) fn get_vertex_property_columns_with_handles_batch(
+    ctx: &GraphStorageContext,
+    space: &str,
+    tag: &str,
+    ids: &[VertexId],
+    properties: &[std::sync::Arc<str>],
+    handles: &[Option<(u32, LabelId)>],
+) -> StorageResult<Vec<Option<Vec<Value>>>> {
+    let handles = (handles.len() == ids.len()).then_some(handles);
+    get_vertex_property_columns_batch_impl(ctx, space, tag, ids, properties, handles)
+}
+
+fn get_vertex_property_columns_batch_impl(
+    ctx: &GraphStorageContext,
+    space: &str,
+    tag: &str,
+    ids: &[VertexId],
+    properties: &[std::sync::Arc<str>],
+    handles: Option<&[Option<(u32, LabelId)>]>,
+) -> StorageResult<Vec<Option<Vec<Value>>>> {
     if ids.is_empty() {
         return Ok(Vec::new());
     }
@@ -562,10 +585,16 @@ pub(crate) fn get_vertex_property_columns_batch(
                 let mut resolved = Vec::with_capacity(batchable.len());
                 for idx in &batchable {
                     let key = keys.get(*idx)?.as_ref()?;
-                    let internal = match key {
+                    let hinted = handles
+                        .and_then(|values| values.get(*idx))
+                        .copied()
+                        .flatten()
+                        .filter(|(_, label)| *label == label_id)
+                        .map(|(internal, _)| internal);
+                    let internal = hinted.or_else(|| match key {
                         crate::vertex::IdKey::Int(i) => table.get_internal_id_by_i64(*i, ts),
                         crate::vertex::IdKey::Text(s) => table.get_internal_id(s, ts),
-                    };
+                    });
                     resolved.push(internal);
                 }
                 Some(resolved)

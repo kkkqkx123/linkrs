@@ -13,11 +13,14 @@ use super::expand_buffer::visible_rows;
 
 /// Read the seed id array when the seed slot carries a vertex identity
 /// column, so seed parsing skips cloning and parsing the row value.
-/// Typed columns stay in lockstep with rows across selection and gather
-/// transforms, so the absolute row index addresses the id array directly.
+/// A topology scan also carries storage handles; their external id slice is
+/// the same identity in a different container. Typed columns stay in
+/// lockstep with rows across selection and gather transforms, so the
+/// absolute row index addresses the id array directly.
 pub(super) fn identity_seed_ids(chunk: &DataChunk, seed_slot: usize) -> Option<&[VertexId]> {
     match chunk.typed_column(seed_slot) {
         Some(TypedColumn::VertexIdentity(ids)) => Some(ids),
+        Some(TypedColumn::VertexHandle(handle)) => Some(&handle.ids),
         _ => None,
     }
 }

@@ -644,3 +644,27 @@ F1–F5 微基准在同一 2 万顶点数据集上记录。与设计文档基线
 最终固定门两轮 `group_by_count` 为 49.76 / 45.66 ms（基线 48.55 / 47.12），`distinct_limit` 为 38.85 / 44.39 ms（基线 42.71 / 42.04）；两轮中位数分别为 47.71 / 41.62 ms，基线为 47.83 / 42.38 ms。`expand_read_us` 两轮中位数分别由 164.92 降到 160.65 ms（-2.6%）、由 177.16 降到 171.96 ms（-2.9%），远未达 30% 门槛；`group_by_count ≤40 ms`、`distinct_limit ≤30 ms` 仍未通过。`actual=10`、`actual_partitions=10`、`result_stable=true`、`spill_rows=0` 保持成立。生产默认单轮 `group_by_count` 为 48.36 ms（基线 47.37），`distinct_limit` 为 42.03 ms（基线 38.02）属轮间波动；九条纯计数与 q1–q9 无实质回归。
 
 正确性门全绿：配置默认值 1/1、partitioning 49/49、typed group 8/8、local topk 10/10、`parallel_partition_execution` 27/27、DQL 324/324、storage lib 1415/1415、`column_batch_test` 13/13。判定：保留可验证收益的计时、标签解析复用与父批直写，最终门未达成；剩余成本集中在每批父端点的重复解析与可见性/分区调度抖动，不再叠加视图去重或身份绕行复杂度。原始日志、逐用例 JSON、EXPLAIN 与微基准见 `perf-data/parity/results/2026-11-23/expand-read-convergence/`。
+
+## 40. 父端点解析复用与分区偏斜复测（2026-11-23）
+
+按 `docs/plan/parent-endpoint-and-partition-jitter-design.md` 完成第二轮收敛。`identity_seed_ids` 现在直接读取 `VertexHandleColumn.ids`，rowless 与 row 两种种子入口都不再逐值把父端点转成 `Value::VertexId` 再解析；`Expand` 与 `ExpandAll` 的上下文都按算子生命周期持有缓存。新增只读 `TopologySchema`：space、vid 类型、布局版本与各边类型的标签/ID 在查询开始时解析一次，packed 批量读取直接消费该 DTO，布局版本不匹配才回退到存储层本地解析。parity JSON 与 gate 表格新增 `parallel_wall_us`、`parallel_work_us`、`partition_skew_ratio`，用于区分总工作增加与尾部分区变慢。
+
+devs release 编译通过，正确性门全绿。F1（2048 父）由上一轮 2927 us / 6.55 MB 降到 2722 us / 6.55 MB，约 7%；相对最初 3395 us / 8.68 MB 下降约 20% / 25%。F2 Out/In、F3 唯一率与 F4 读取形状无语义变化。
+
+固定门共记录两次完整 gate 与一轮三次直接回测，但 devs 外部负载期间 load average 为 5–12，`scan_read_us` 在 61–257 ms 间波动，`partition_skew_ratio` 在 1.14–1.49 间波动。`expand_read_us` 为 150–197 ms，与上一轮 160–215 ms 区间重叠，未取得设定的 10% 下降；`group_by_count ≤40 ms`、`distinct_limit ≤30 ms` 仍未同时通过。结果逐值一致、`actual=10`、`spill_rows=0`，生产默认单轮无稳定退化。判定：保留有微基准收益且无语义变化的解析复用与观测字段；偏斜主要受外部负载放大，暂不调整分区数、worker 数或通道容量。日志、逐用例 JSON、EXPLAIN 与微基准见 `perf-data/parity/results/2026-11-23/endpoint-skew-convergence/`。
+
+## 41. 父端点身份批量解析（2026-11-24）
+
+按 `docs/plan/parent-identity-batch-resolution-design.md` 实施三项收敛：`IdIndexer` 增加一次持锁的批量反查；分片拓扑-only 扫描在枚举父端点时同步解析外部 ID，不再逐行加锁 clone；packed 拓扑读取把唯一目的端按 label 合并后调用一次 `external_ids_by_internal_batch`，后者也改为批量反查。TTL、staged、allowlist、row 路径与悬空端点语义保持原状。
+
+devs release 编译通过，正确性门全绿。固定门两轮 `group_by_count` 为 43.71 / 42.36 ms，`distinct_limit` 为 37.93 / 37.82 ms，结果逐值一致、`actual=10`、`spill_rows=0`，`partition_skew_ratio` 为 1.18–1.33。扫描收益明确：`scan_read_us` 由上一轮 90–257 ms 降到 40–45 ms，`scan_visibility_us` 由 67–234 ms 降到 15–19 ms；`scan_enumerate_us` 升到 23–27 ms，说明原可见性计时的主体是逐行身份解码。微基准 F2 Out 从 7161 us 降到 5840 us，F3/F4 小幅改善，F1 从 2722 us 升到 3176 us，属分配与噪声混合结果。
+
+`expand_read_us` 仍为 172–193 ms，已经是当前唯一主导项，两条固定门仍未同时通过。判定：保留批量身份解析；下一步转向 packed expand 与局部聚合/TopK 直连，不再在身份解析上叠加改动。原始日志、逐用例 JSON、EXPLAIN 与微基准见 `perf-data/parity/results/2026-11-24/parent-identity-batch/`。
+
+## 42. 拓扑扁平化与目的端 handle 复用（2026-11-24）
+
+按分析依次实施两项。`out_topology_batch()` / `in_topology_batch()` 改为扁平 `entries + offsets`，先收集带父编号的 event，再按 prefix-sum scatter，消除每个父点一个 `Vec` 的分配形状；目标查询每父点仅一条边，约减少 215,488 次小堆分配。`PackedEdgeTopology` 增加 child-aligned 目的端 handle，`read_destinations()` 通过新增的 `get_vertex_property_columns_with_handles_batch()` 复用该 handle，跳过 external→internal 反查；目的端视图改为 `values + slots` 索引结构，不再逐边 clone `Vertex`。另外验证了 stable-sort 扁平化变体，虽然分配更低，但 F2 Out 从 6659 us 升到 11243 us、固定门也变差，已撤回。
+
+devs release 编译通过，正确性门全绿。固定门两轮 `group_by_count` 为 38.80 / 38.73 ms，`distinct_limit` 为 31.14 / 32.61 ms，逐值一致、`actual=10`、`spill_rows=0`。`expand_read_us` 从 172–193 ms 降到 124–161 ms，其中 topology 从 111–130 ms 降到 79–101 ms，destination 从 39–47 ms 降到 28–44 ms，view 从 18–20 ms 降到约 16 ms。`group_by_count ≤40 ms` 已达成；`distinct_limit ≤30 ms` 仍差 1–3 ms，三次直接回测为 32.88 / 34.20 / 33.41 ms，且 devs 负载仍为 5–12。
+
+判定：保留两项改动。packed expand 与局部聚合/TopK 直连涉及计划形状和 Exchange 契约，本轮不与身份收敛混合；在安静窗口确认 `distinct_limit` 仍不达标后再单独实施。原始日志、逐用例 JSON、EXPLAIN 与微基准见 `perf-data/parity/results/2026-11-24/expand-topology-flatten/`。

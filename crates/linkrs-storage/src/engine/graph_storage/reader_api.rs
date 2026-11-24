@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use linkrs_core::types::{EdgeTypeInfo, Index, SpaceInfo, TagInfo, VertexId};
+use linkrs_core::types::{EdgeTypeInfo, Index, LabelId, SpaceInfo, TagInfo, VertexId};
 use linkrs_core::{Edge, EdgeDirection, StorageError, Value, Vertex};
 
 use crate::cursor::{EdgeCursor, IndexCursor, IndexRow, IndexScanPlan, ScanOptions, VertexCursor};
@@ -156,9 +156,10 @@ impl StorageReader for GraphStorage {
         handles: Option<&[Option<(u32, u32)>]>,
         direction: linkrs_core::EdgeDirection,
         edge_types: &[String],
+        schema: &crate::TopologySchema,
     ) -> Result<crate::PackedEdgeTopology, StorageError> {
         reader::packed_node_edge_headers_batch(
-            &self.ctx, space, node_ids, handles, direction, edge_types,
+            &self.ctx, space, node_ids, handles, direction, edge_types, schema,
         )
     }
 
@@ -189,6 +190,19 @@ impl StorageReader for GraphStorage {
         properties: &[std::sync::Arc<str>],
     ) -> Result<Vec<Option<Vec<Value>>>, StorageError> {
         reader::get_vertex_property_columns_batch(&self.ctx, space, tag, ids, properties)
+    }
+
+    fn get_vertex_property_columns_with_handles_batch(
+        &self,
+        space: &str,
+        tag: &str,
+        ids: &[VertexId],
+        properties: &[std::sync::Arc<str>],
+        handles: &[Option<(u32, LabelId)>],
+    ) -> Result<Vec<Option<Vec<Value>>>, StorageError> {
+        reader::get_vertex_property_columns_with_handles_batch(
+            &self.ctx, space, tag, ids, properties, handles,
+        )
     }
 
     fn neighbor_dst_ids_batch(

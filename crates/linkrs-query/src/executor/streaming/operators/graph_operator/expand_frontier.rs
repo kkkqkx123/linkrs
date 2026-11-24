@@ -170,6 +170,7 @@ pub(super) fn expand_multi_hop_frontier(
         &all_dst,
         dst_bypass_opt.as_ref(),
         false,
+        None,
     )?
     .view;
     let mut kept: Vec<usize> = Vec::new();
@@ -466,6 +467,7 @@ pub(super) fn expand_variable_frontier(
         &all_dst,
         dst_bypass_opt.as_ref(),
         false,
+        None,
     )?
     .view;
     let mut kept: Vec<usize> = Vec::new();

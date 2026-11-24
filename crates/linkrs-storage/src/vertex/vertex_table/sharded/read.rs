@@ -327,6 +327,48 @@ impl ShardedVertexTable {
         ids
     }
 
+    /// Slice-restricted identity enumeration that resolves external ids while
+    /// each shard is already locked. The result preserves the global-id order
+    /// contract of [`Self::live_ids_in_slice`] and omits rows with no external
+    /// identity, matching the topology-only scan's output.
+    pub(crate) fn live_ids_in_slice_with_vids(
+        &self,
+        guard: &VisibilityGuard<'_>,
+        slice: &crate::cursor::ShardSlice,
+        universes: &[u32],
+        timings: &mut ScanTimings,
+    ) -> (Vec<u32>, Vec<VertexId>) {
+        let mut resolved: Vec<(u32, VertexId)> = Vec::new();
+        for (shard_idx, shard) in self.shards.iter().enumerate() {
+            let Some(universe) = universes.get(shard_idx) else {
+                continue;
+            };
+            let chunk = Self::slice_chunk(*universe, slice);
+            if chunk.is_empty() {
+                continue;
+            }
+            let table = shard.read();
+            let locals = table.live_ids_in_range(chunk, guard);
+            let mut keys: Vec<Option<IdKey>> = Vec::new();
+            let visibility_start = std::time::Instant::now();
+            table.get_external_ids_raw(&locals, &mut keys);
+            for (local, key) in locals.into_iter().zip(keys) {
+                if let Some(vid) = key.and_then(vertex_id_of) {
+                    resolved.push((self.encode_id(shard_idx, local), vid));
+                }
+            }
+            record_elapsed(visibility_start, &mut timings.scan_visibility_us);
+        }
+        resolved.sort_unstable_by_key(|&(id, _)| id);
+        let mut ids = Vec::with_capacity(resolved.len());
+        let mut vids = Vec::with_capacity(resolved.len());
+        for (id, vid) in resolved {
+            ids.push(id);
+            vids.push(vid);
+        }
+        (ids, vids)
+    }
+
     /// Column-major batch decode for paginated scans.
     ///
     /// Cursor-enumerated ids are already visible under the same guard, so
@@ -781,6 +823,25 @@ impl ShardedVertexTable {
         let (idx, local_id) = self.decode_id(global_id);
         let table = self.shards[idx].read();
         table.get_external_id_raw(local_id)
+    }
+
+    /// Resolve raw external ids for a batch of global internal ids. Each
+    /// shard is locked once and its reverse lookups share one index lock.
+    pub fn get_external_ids_raw(&self, global_ids: &[u32], out: &mut Vec<Option<IdKey>>) {
+        out.clear();
+        out.resize(global_ids.len(), None);
+        for (shard_idx, group) in self.group_by_shard(global_ids) {
+            if group.is_empty() {
+                continue;
+            }
+            let locals: Vec<u32> = group.iter().map(|&(_, local)| local).collect();
+            let table = self.shards[shard_idx].read();
+            let mut keys: Vec<Option<IdKey>> = Vec::new();
+            table.get_external_ids_raw(&locals, &mut keys);
+            for ((slot, _), key) in group.into_iter().zip(keys) {
+                out[slot] = key;
+            }
+        }
     }
 
     /// Total allocated vertex slots across all shards, including deleted but

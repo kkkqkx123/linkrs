@@ -85,6 +85,7 @@ import sys
 out = sys.argv[1]
 keys = (
     "name", "median_ms", "compile_median_ms", "typed_group_hits",
+    "partition_skew_ratio", "parallel_wall_us", "parallel_work_us",
     "local_topk_pushed", "scan_read_us", "scan_enumerate_us",
     "scan_visibility_us", "scan_decode_us", "scan_assemble_us",
     "scan_predicate_us", "expand_read_us",

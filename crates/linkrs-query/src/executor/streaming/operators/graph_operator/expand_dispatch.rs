@@ -47,6 +47,25 @@ impl ExpandCtx<'_> {
         }
         self.dst_tag_cache.clone().flatten()
     }
+
+    /// Resolve the packed topology schema once per operator instance.
+    /// Every batch of one execution reads at the same snapshot, so later
+    /// batches reuse the catalog decision instead of locking it again.
+    pub(super) fn topology_schema(
+        &mut self,
+        reader: &dyn QueryStorage,
+    ) -> Result<std::sync::Arc<crate::storage::TopologySchema>, QueryError> {
+        if let Some(schema) = &self.topology_schema {
+            return Ok(std::sync::Arc::clone(schema));
+        }
+        let schema = reader
+            .resolve_topology_schema(self.space_name, self.edge_types)
+            .map_err(|error| {
+                QueryError::execution(format!("resolve topology schema failed: {error}"))
+            })?;
+        self.topology_schema = Some(std::sync::Arc::clone(&schema));
+        Ok(schema)
+    }
 }
 
 /// The single agreed neighbor label for a closed loop, or `None` when the

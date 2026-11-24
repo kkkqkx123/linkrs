@@ -51,6 +51,9 @@ pub(super) struct ExpandCtx<'a> {
     /// Neighbor tag resolved once for this operator instance. The plan fixes
     /// space, edge types and direction, so every batch shares the result.
     pub(super) dst_tag_cache: Option<Option<String>>,
+    /// Edge-type schema used by packed topology reads, resolved once for the
+    /// whole execution under the query's fixed snapshot.
+    pub(super) topology_schema: Option<Arc<crate::storage::TopologySchema>>,
     /// Runtime used to report count-frontier fallbacks in EXPLAIN ANALYZE.
     pub(super) runtime: Option<Arc<ExecutionRuntime>>,
 }

@@ -98,6 +98,11 @@ impl IdIndexer {
         self.manager.get_key(index)
     }
 
+    /// Resolve several reverse lookups while holding the core lock once.
+    pub fn get_keys(&self, indices: &[u32], out: &mut Vec<Option<IdKey>>) {
+        self.manager.get_keys(indices, out);
+    }
+
     pub fn len(&self) -> usize {
         self.manager.len()
     }

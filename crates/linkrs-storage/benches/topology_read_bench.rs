@@ -241,6 +241,12 @@ fn main() {
     let storage = setup();
     let edge_types = vec![EDGE.to_string()];
     let no_types: Vec<String> = Vec::new();
+    let schema_filtered = storage
+        .resolve_topology_schema(SPACE, &edge_types)
+        .expect("filtered topology schema");
+    let schema_all = storage
+        .resolve_topology_schema(SPACE, &no_types)
+        .expect("all topology schema");
     let projected: Vec<Arc<str>> = vec![Arc::from("id")];
     let seeds = spread_seeds(SEED_COUNT);
     let dense_seeds = prefix_seeds(SEED_COUNT);
@@ -259,6 +265,7 @@ fn main() {
                     None,
                     EdgeDirection::Out,
                     &edge_types,
+                    &schema_filtered,
                 )
                 .expect("packed read")
         });
@@ -269,6 +276,7 @@ fn main() {
                 None,
                 EdgeDirection::Out,
                 &edge_types,
+                &schema_filtered,
             )
             .expect("packed read");
         assert_eq!(first.child_offsets.last().copied(), Some(children));
@@ -288,14 +296,19 @@ fn main() {
         (EdgeDirection::In, "in"),
         (EdgeDirection::Both, "both"),
     ] {
-        for (types, filtered) in [(&edge_types, "filtered"), (&no_types, "all")] {
+        for (types, schema, filtered) in [
+            (&edge_types, &schema_filtered, "filtered"),
+            (&no_types, &schema_all, "all"),
+        ] {
             let (samples, bytes) = measure(|| {
                 storage
-                    .get_packed_node_edge_headers_batch(SPACE, &seeds, None, direction, types)
+                    .get_packed_node_edge_headers_batch(
+                        SPACE, &seeds, None, direction, types, schema,
+                    )
                     .expect("packed read")
             });
             let first = storage
-                .get_packed_node_edge_headers_batch(SPACE, &seeds, None, direction, types)
+                .get_packed_node_edge_headers_batch(SPACE, &seeds, None, direction, types, schema)
                 .expect("packed read");
             let expected = if direction == EdgeDirection::Both {
                 children * 2
@@ -321,6 +334,7 @@ fn main() {
             None,
             EdgeDirection::Out,
             &edge_types,
+            &schema_filtered,
         )
         .expect("packed read");
     let mut destinations = Vec::with_capacity(packed.dst.len());
@@ -402,6 +416,7 @@ fn main() {
                 None,
                 EdgeDirection::Out,
                 &edge_types,
+                &schema_filtered,
             )
             .expect("packed read");
         let columns = storage

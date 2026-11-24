@@ -19,6 +19,39 @@ type LabelPair = (LabelId, LabelId);
 type EdgeEndpoints = Vec<(u32, u32, i64)>;
 type PartitionedEdges = Vec<(LabelPair, EdgeEndpoints)>;
 
+/// Parent-major topology entries with prefix offsets. One flat allocation
+/// replaces one child vector per parent, which matters for batches where most
+/// parents contribute a single edge.
+#[derive(Debug, Default)]
+pub(crate) struct PackedTopologyBatch {
+    pub entries: Vec<(LabelId, HotNbr)>,
+    pub offsets: Vec<usize>,
+}
+
+fn flatten_topology_events(
+    parent_count: usize,
+    events: Vec<(usize, LabelId, HotNbr)>,
+) -> PackedTopologyBatch {
+    let mut offsets = vec![0usize; parent_count + 1];
+    for &(parent, _, _) in &events {
+        offsets[parent + 1] += 1;
+    }
+    for index in 1..offsets.len() {
+        offsets[index] += offsets[index - 1];
+    }
+    let mut cursors = offsets[..parent_count].to_vec();
+    let mut slots: Vec<Option<(LabelId, HotNbr)>> = vec![None; events.len()];
+    for (parent, label, hot) in events {
+        let position = cursors[parent];
+        slots[position] = Some((label, hot));
+        cursors[parent] = position + 1;
+    }
+    PackedTopologyBatch {
+        entries: slots.into_iter().flatten().collect(),
+        offsets,
+    }
+}
+
 /// Project a stored internal endpoint id to its external `VertexId` using the
 /// edge table's owning label. Unresolved ids stay unchanged (dangling edge).
 pub(crate) fn endpoint_to_external(
@@ -1050,7 +1083,7 @@ impl GraphStorageContext {
         src_ids: &[VertexId],
         handles: Option<&[Option<(u32, LabelId)>]>,
         ts: Timestamp,
-    ) -> Vec<Vec<(LabelId, HotNbr)>> {
+    ) -> PackedTopologyBatch {
         let resolved: Vec<Option<(u32, LabelId)>> = match handles {
             Some(handles) => handles
                 .iter()
@@ -1067,7 +1100,7 @@ impl GraphStorageContext {
             .data_store
             .matching_edge_partition_arcs(edge_label);
         let gate = self.pending_gate();
-        let mut staged: Vec<Vec<(LabelId, HotNbr)>> = vec![Vec::new(); src_ids.len()];
+        let mut events: Vec<(usize, LabelId, HotNbr)> = Vec::new();
         for arc in &arcs {
             let table = self.persistent.data_store.read_edge_table(arc);
             if table.label() != edge_label {
@@ -1082,11 +1115,11 @@ impl GraphStorageContext {
                     continue;
                 }
                 for hot in table.out_topology_with_gate(*src_internal, ts, &gate) {
-                    staged[index].push((far_label, hot));
+                    events.push((index, far_label, hot));
                 }
             }
         }
-        staged
+        flatten_topology_events(src_ids.len(), events)
     }
 
     /// In-direction counterpart of [`Self::out_topology_batch`].
@@ -1096,14 +1129,14 @@ impl GraphStorageContext {
         dst_label: LabelId,
         dst_ids: &[VertexId],
         ts: Timestamp,
-    ) -> Vec<Vec<(LabelId, HotNbr)>> {
+    ) -> PackedTopologyBatch {
         let resolved = self.resolve_node_endpoints(dst_label, dst_ids, ts);
         let arcs = self
             .persistent
             .data_store
             .matching_edge_partition_arcs(edge_label);
         let gate = self.pending_gate();
-        let mut staged: Vec<Vec<(LabelId, HotNbr)>> = vec![Vec::new(); dst_ids.len()];
+        let mut events: Vec<(usize, LabelId, HotNbr)> = Vec::new();
         for arc in &arcs {
             let table = self.persistent.data_store.read_edge_table(arc);
             if table.label() != edge_label {
@@ -1118,11 +1151,11 @@ impl GraphStorageContext {
                     continue;
                 }
                 for hot in table.in_topology_with_gate(*dst_internal, ts, &gate) {
-                    staged[index].push((far_label, hot));
+                    events.push((index, far_label, hot));
                 }
             }
         }
-        staged
+        flatten_topology_events(dst_ids.len(), events)
     }
 
     /// Out-direction projected scan shared by the unbounded and limit

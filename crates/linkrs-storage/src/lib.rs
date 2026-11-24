@@ -39,7 +39,7 @@ pub use client::{
     StorageMaintenance, StorageOperationContext, StorageOperationContextOps, StoragePersistenceOps,
     StorageReader, StorageRecoveryOps, StorageSchemaContextOps, StorageSchemaOps,
     StorageSnapshotOps, StorageStats, StorageSyncContextOps, StorageTtlPurgeOps, StorageWriter,
-    TtlPurgeEntry,
+    TopologySchema, TtlPurgeEntry,
 };
 pub use cursor::{
     open_edge_scan, open_index_cursor, open_vertex_scan, ColumnValues, EdgeColumnBatch, EdgeCursor,

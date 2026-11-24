@@ -2,7 +2,7 @@
 
 use crate::cursor::{EdgeCursor, IndexCursor, IndexRow, IndexScanPlan, ScanOptions, VertexCursor};
 use crate::schema::{LabelVersionHistory, PropertyChange};
-use linkrs_core::types::{EdgeTypeInfo, Index, LabelId, SpaceInfo, TagInfo, VertexId};
+use linkrs_core::types::{DataType, EdgeTypeInfo, Index, LabelId, SpaceInfo, TagInfo, VertexId};
 use linkrs_core::{Edge, EdgeDirection, StorageError, Value, Vertex};
 use std::sync::Arc;
 
@@ -16,6 +16,79 @@ pub struct EdgeTopology {
     pub dst: VertexId,
     pub edge_type: Arc<str>,
     pub ranking: i64,
+}
+
+/// Per-edge-type schema needed by one topology-only adjacency read.
+#[derive(Debug, Clone)]
+pub(crate) struct TopologyTypeSchema {
+    pub(crate) name: Arc<str>,
+    pub(crate) type_id: u32,
+    pub(crate) edge_label: LabelId,
+    pub(crate) src_label: Option<LabelId>,
+    pub(crate) dst_label: Option<LabelId>,
+}
+
+/// Space and edge-type schema resolved once for a query's topology reads.
+///
+/// The layout version is part of the snapshot contract: a cached instance is
+/// only reusable while the physical layout is unchanged.
+#[derive(Debug, Clone)]
+pub struct TopologySchema {
+    pub(crate) space: String,
+    pub(crate) vid_type: DataType,
+    pub(crate) layout_version: u64,
+    pub(crate) entries: Vec<TopologyTypeSchema>,
+}
+
+impl TopologySchema {
+    /// Resolve through the public read API so non-native readers can build
+    /// the same DTO without exposing their internals.
+    pub fn resolve<R: StorageReader + ?Sized>(
+        reader: &R,
+        space: &str,
+        edge_types: &[String],
+    ) -> Result<Self, StorageError> {
+        let space_info = reader
+            .get_space(space)?
+            .ok_or_else(|| StorageError::not_found(format!("Space {space} not found")))?;
+        let mut entries = Vec::new();
+        for info in reader
+            .list_edge_types(space)?
+            .iter()
+            .filter(|info| edge_types.is_empty() || edge_types.contains(&info.edge_type_name))
+        {
+            let src_label = resolve_endpoint_tag_label(reader, space, &info.src_tag_name)?;
+            let dst_label = resolve_endpoint_tag_label(reader, space, &info.dst_tag_name)?;
+            entries.push(TopologyTypeSchema {
+                name: Arc::from(info.edge_type_name.as_str()),
+                type_id: entries.len() as u32,
+                edge_label: info.edge_type_id,
+                src_label,
+                dst_label,
+            });
+        }
+        Ok(Self {
+            space: space.to_string(),
+            vid_type: space_info.vid_type,
+            layout_version: reader.layout_version(),
+            entries,
+        })
+    }
+
+    pub(crate) fn matches(&self, space: &str, layout_version: u64) -> bool {
+        self.space == space && self.layout_version == layout_version
+    }
+}
+
+fn resolve_endpoint_tag_label<R: StorageReader + ?Sized>(
+    reader: &R,
+    space: &str,
+    tag: &str,
+) -> Result<Option<LabelId>, StorageError> {
+    if tag.is_empty() {
+        return Ok(Some(0));
+    }
+    Ok(reader.get_tag(space, tag)?.map(|info| info.tag_id))
 }
 
 /// Topology-only edges of one seed batch in parent-major order.
@@ -32,6 +105,9 @@ pub struct PackedEdgeTopology {
     pub edge_type_ids: Vec<u32>,
     pub edge_type_names: Vec<Arc<str>>,
     pub rankings: Vec<i64>,
+    /// Child-aligned storage hints for destination existence reads. `None`
+    /// means the far endpoint carries no usable storage row address.
+    pub destination_handles: Vec<Option<(u32, LabelId)>>,
 }
 
 impl PackedEdgeTopology {
@@ -107,6 +183,19 @@ pub trait StorageReader: Send + Sync + std::fmt::Debug {
     /// consumers then cannot use it to invalidate cached plans.
     fn layout_version(&self) -> u64 {
         0
+    }
+
+    /// Resolve the edge-type schema used by packed topology reads.
+    ///
+    /// Callers cache the result for one query execution and pass it back to
+    /// the batched reader, so concurrent partitions do not repeat catalog
+    /// lookups for the same plan constant.
+    fn resolve_topology_schema(
+        &self,
+        space: &str,
+        edge_types: &[String],
+    ) -> Result<Arc<TopologySchema>, StorageError> {
+        TopologySchema::resolve(self, space, edge_types).map(Arc::new)
     }
 
     /// Self-proven vertex-id domain covering a whole space.
@@ -302,6 +391,7 @@ pub trait StorageReader: Send + Sync + std::fmt::Debug {
         handles: Option<&[Option<(u32, LabelId)>]>,
         direction: EdgeDirection,
         edge_types: &[String],
+        _schema: &TopologySchema,
     ) -> Result<PackedEdgeTopology, StorageError> {
         let batches =
             self.get_node_edge_headers_batch(space, node_ids, handles, direction, edge_types)?;
@@ -394,6 +484,22 @@ pub trait StorageReader: Send + Sync + std::fmt::Debug {
                 })
             })
             .collect())
+    }
+
+    /// Property-column read that reuses storage row addresses captured by a
+    /// topology read. Adapters ignore the hints and use the ordinary batch
+    /// path; the native engine overrides this to skip external-id reverse
+    /// lookup while keeping the same visibility and TTL checks.
+    fn get_vertex_property_columns_with_handles_batch(
+        &self,
+        space: &str,
+        tag: &str,
+        ids: &[VertexId],
+        properties: &[Arc<str>],
+        handles: &[Option<(u32, LabelId)>],
+    ) -> Result<Vec<Option<Vec<Value>>>, StorageError> {
+        let _ = handles;
+        self.get_vertex_property_columns_batch(space, tag, ids, properties)
     }
 
     /// Whether any edge type reached by a topology fast path has TTL

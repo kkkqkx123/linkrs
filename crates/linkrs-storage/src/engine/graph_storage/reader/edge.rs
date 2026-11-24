@@ -1,6 +1,8 @@
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use crate::client::traits_reader::TopologyTypeSchema;
 use crate::edge::CsrBase;
 use crate::edge::EdgeRecord;
 use crate::engine::graph_storage::context::GraphStorageContext;
@@ -9,7 +11,7 @@ use crate::engine::graph_storage::ops::{
 };
 use crate::engine::params::EdgeOperationParams;
 use crate::EdgeTopology;
-use crate::{FrontierDegrees, PackedEdgeTopology};
+use crate::{FrontierDegrees, PackedEdgeTopology, TopologySchema};
 use linkrs_core::types::{EdgeTypeInfo, LabelId, Timestamp, VertexId};
 use linkrs_core::{Edge, EdgeDirection, StorageError, StorageResult, Value};
 
@@ -492,6 +494,70 @@ pub(crate) fn get_node_edges_projected_batch(
 /// shared topology identities. No property decode or `Edge` allocation is
 /// performed, which is the shape columnar expand needs when only endpoints
 /// and rank are consumed.
+fn resolve_topology_schema(
+    ctx: &GraphStorageContext,
+    space: &str,
+    edge_types: &[String],
+) -> StorageResult<TopologySchema> {
+    let space_info = ctx
+        .schema_manager()
+        .get_space(space)?
+        .ok_or_else(|| StorageError::not_found(format!("Space {} not found", space)))?;
+    let all = ctx.schema_manager().list_edge_types(space)?;
+    let mut entries = Vec::new();
+    for info in all
+        .iter()
+        .filter(|info| edge_types.is_empty() || edge_types.contains(&info.edge_type_name))
+    {
+        entries.push(TopologyTypeSchema {
+            name: Arc::from(info.edge_type_name.as_str()),
+            type_id: entries.len() as u32,
+            edge_label: info.edge_type_id,
+            src_label: endpoint_label_id(ctx, space, &info.src_tag_name)?,
+            dst_label: endpoint_label_id(ctx, space, &info.dst_tag_name)?,
+        });
+    }
+    Ok(TopologySchema {
+        space: space.to_string(),
+        vid_type: space_info.vid_type,
+        layout_version: ctx.layout_version(),
+        entries,
+    })
+}
+
+fn resolve_far_ids<I>(
+    ctx: &GraphStorageContext,
+    endpoints: I,
+    ts: Timestamp,
+) -> HashMap<(LabelId, u32), VertexId>
+where
+    I: IntoIterator<Item = (LabelId, u32)>,
+{
+    let mut distinct: HashSet<(LabelId, u32)> = HashSet::new();
+    for (label, endpoint) in endpoints {
+        if label != 0 {
+            distinct.insert((label, endpoint));
+        }
+    }
+    let mut by_label: HashMap<LabelId, Vec<u32>> = HashMap::new();
+    for (label, endpoint) in distinct {
+        by_label.entry(label).or_default().push(endpoint);
+    }
+    let capacity: usize = by_label.values().map(Vec::len).sum();
+    let mut resolved = HashMap::with_capacity(capacity);
+    for (label, mut ids) in by_label {
+        ids.sort_unstable();
+        let external = ctx.external_ids_by_internal_batch(label, &ids, ts);
+        for (endpoint, vid) in ids.into_iter().zip(external) {
+            resolved.insert(
+                (label, endpoint),
+                vid.unwrap_or_else(|| VertexId::from_u32(endpoint)),
+            );
+        }
+    }
+    resolved
+}
+
 pub(crate) fn packed_node_edge_headers_batch(
     ctx: &GraphStorageContext,
     space: &str,
@@ -499,18 +565,19 @@ pub(crate) fn packed_node_edge_headers_batch(
     handles: Option<&[Option<(u32, LabelId)>]>,
     direction: EdgeDirection,
     edge_types: &[String],
+    schema: &TopologySchema,
 ) -> StorageResult<PackedEdgeTopology> {
     record_schema_read(ctx, space);
-    let space_info = ctx
-        .schema_manager()
-        .get_space(space)?
-        .ok_or_else(|| StorageError::not_found(format!("Space {} not found", space)))?;
+    let schema = if schema.matches(space, ctx.layout_version()) {
+        Cow::Borrowed(schema)
+    } else {
+        Cow::Owned(resolve_topology_schema(ctx, space, edge_types)?)
+    };
     let normalized: Vec<VertexId> = src_ids
         .iter()
-        .map(|id| VertexId::normalize_for_vid_type(&space_info.vid_type, *id))
+        .map(|id| VertexId::normalize_for_vid_type(&schema.vid_type, *id))
         .collect::<Result<_, _>>()?;
-    let edge_types_all = ctx.schema_manager().list_edge_types(space)?;
-    if edge_types_all.is_empty() {
+    if schema.entries.is_empty() {
         let mut empty = PackedEdgeTopology {
             parents: normalized,
             ..PackedEdgeTopology::default()
@@ -527,48 +594,54 @@ pub(crate) fn packed_node_edge_headers_batch(
         parents: normalized.clone(),
         ..PackedEdgeTopology::default()
     };
-    let selected: Vec<&_> = edge_types_all
+    for entry in &schema.entries {
+        packed.intern_edge_type(&entry.name);
+    }
+
+    let endpoint_types: Vec<(u32, LabelId, LabelId, LabelId)> = schema
+        .entries
         .iter()
-        .filter(|info| edge_types.is_empty() || edge_types.contains(&info.edge_type_name))
+        .filter_map(|entry| {
+            Some((
+                entry.type_id,
+                entry.edge_label,
+                entry.src_label?,
+                entry.dst_label?,
+            ))
+        })
         .collect();
-    for info in &selected {
-        packed.intern_edge_type(&Arc::from(info.edge_type_name.as_str()));
-    }
-
-    let mut endpoint_types = Vec::with_capacity(selected.len());
-    for (type_id, edge_info) in selected.iter().enumerate() {
-        let Some(src_label_id) = endpoint_label_id(ctx, space, &edge_info.src_tag_name)? else {
-            continue;
-        };
-        let Some(dst_label_id) = endpoint_label_id(ctx, space, &edge_info.dst_tag_name)? else {
-            continue;
-        };
-        endpoint_types.push((type_id as u32, *edge_info, src_label_id, dst_label_id));
-    }
-
-    // Endpoint ids are resolved once per call. The cache is local so a later
-    // call at another snapshot cannot inherit an earlier translation.
-    let mut translated: HashMap<(LabelId, u32), VertexId> = HashMap::new();
-    let mut far_id = |label: LabelId, endpoint: u32| -> VertexId {
-        *translated
-            .entry((label, endpoint))
-            .or_insert_with(|| ctx.endpoint_to_external(label, VertexId::from_u32(endpoint), ts))
-    };
 
     if direction != EdgeDirection::Both {
         let outward = direction == EdgeDirection::Out;
         let mut batches_by_type = Vec::with_capacity(endpoint_types.len());
-        for (_, edge_info, src_label, dst_label) in &endpoint_types {
+        for (_, edge_label, src_label, dst_label) in &endpoint_types {
             let batches = if outward {
-                ctx.out_topology_batch(edge_info.edge_type_id, *src_label, &normalized, handles, ts)
+                ctx.out_topology_batch(*edge_label, *src_label, &normalized, handles, ts)
             } else {
-                ctx.in_topology_batch(edge_info.edge_type_id, *dst_label, &normalized, ts)
+                ctx.in_topology_batch(*edge_label, *dst_label, &normalized, ts)
             };
             batches_by_type.push(batches);
         }
+        // Endpoint ids are resolved once per call under one table lock per label.
+        let endpoints = batches_by_type.iter().flat_map(|batches| {
+            batches
+                .entries
+                .iter()
+                .map(|(label, hot)| (*label, hot.endpoint))
+        });
+        let far_ids = resolve_far_ids(ctx, endpoints, ts);
+        let far_id = |label: LabelId, endpoint: u32| -> VertexId {
+            if label == 0 {
+                return VertexId::from_u32(endpoint);
+            }
+            far_ids
+                .get(&(label, endpoint))
+                .copied()
+                .unwrap_or_else(|| VertexId::from_u32(endpoint))
+        };
         let total: usize = batches_by_type
             .iter()
-            .map(|batches| batches.iter().map(Vec::len).sum::<usize>())
+            .map(|batches| batches.entries.len())
             .sum();
         packed.src.reserve(total);
         packed.dst.reserve(total);
@@ -577,8 +650,10 @@ pub(crate) fn packed_node_edge_headers_batch(
         packed.child_offsets.push(0);
         for parent in 0..normalized.len() {
             for ((type_id, _, _, _), batches) in endpoint_types.iter().zip(&batches_by_type) {
-                for (far_label, hot) in &batches[parent] {
-                    let far = far_id(*far_label, hot.endpoint);
+                for &(far_label, hot) in
+                    &batches.entries[batches.offsets[parent]..batches.offsets[parent + 1]]
+                {
+                    let far = far_id(far_label, hot.endpoint);
                     let (src, dst) = if outward {
                         (normalized[parent], far)
                     } else {
@@ -588,6 +663,9 @@ pub(crate) fn packed_node_edge_headers_batch(
                     packed.dst.push(dst);
                     packed.edge_type_ids.push(*type_id);
                     packed.rankings.push(hot.rank);
+                    packed
+                        .destination_handles
+                        .push((far_label != 0).then_some((hot.endpoint, far_label)));
                 }
             }
             packed.child_offsets.push(packed.src.len());
@@ -609,22 +687,43 @@ pub(crate) fn packed_node_edge_headers_batch(
         rank: i64,
         type_id: u32,
         side: Side,
+        handle: Option<(u32, LabelId)>,
     }
+    let mut by_type = Vec::with_capacity(endpoint_types.len());
+    let mut endpoint_pairs: Vec<(LabelId, u32)> = Vec::new();
+    for (type_id, edge_label, src_label_id, dst_label_id) in &endpoint_types {
+        let out_batches =
+            ctx.out_topology_batch(*edge_label, *src_label_id, &normalized, handles, ts);
+        let in_batches = ctx.in_topology_batch(*edge_label, *dst_label_id, &normalized, ts);
+        for batches in [&out_batches, &in_batches] {
+            endpoint_pairs.extend(
+                batches
+                    .entries
+                    .iter()
+                    .map(|(label, hot)| (*label, hot.endpoint)),
+            );
+        }
+        by_type.push((*type_id, out_batches, in_batches));
+    }
+    let far_ids = resolve_far_ids(ctx, endpoint_pairs, ts);
+    let far_id = |label: LabelId, endpoint: u32| -> VertexId {
+        if label == 0 {
+            return VertexId::from_u32(endpoint);
+        }
+        far_ids
+            .get(&(label, endpoint))
+            .copied()
+            .unwrap_or_else(|| VertexId::from_u32(endpoint))
+    };
+
     let mut events: Vec<Event> = Vec::new();
     let mut seen: HashSet<(usize, VertexId, VertexId, i64)> = HashSet::new();
 
-    for (type_id, edge_info, src_label_id, dst_label_id) in &endpoint_types {
-        let out_batches = ctx.out_topology_batch(
-            edge_info.edge_type_id,
-            *src_label_id,
-            &normalized,
-            handles,
-            ts,
-        );
-        let in_batches =
-            ctx.in_topology_batch(edge_info.edge_type_id, *dst_label_id, &normalized, ts);
-        for (parent, (out_hots, in_hots)) in out_batches.into_iter().zip(in_batches).enumerate() {
-            for (far_label, hot) in out_hots {
+    for (type_id, out_batches, in_batches) in by_type {
+        for parent in 0..normalized.len() {
+            for &(far_label, hot) in
+                &out_batches.entries[out_batches.offsets[parent]..out_batches.offsets[parent + 1]]
+            {
                 let dst = far_id(far_label, hot.endpoint);
                 if !seen.insert((parent, normalized[parent], dst, hot.rank)) {
                     continue;
@@ -634,11 +733,14 @@ pub(crate) fn packed_node_edge_headers_batch(
                     far_label,
                     endpoint: hot.endpoint,
                     rank: hot.rank,
-                    type_id: *type_id,
+                    type_id,
                     side: Side::Out,
+                    handle: (far_label != 0).then_some((hot.endpoint, far_label)),
                 });
             }
-            for (far_label, hot) in in_hots {
+            for &(far_label, hot) in
+                &in_batches.entries[in_batches.offsets[parent]..in_batches.offsets[parent + 1]]
+            {
                 let src = far_id(far_label, hot.endpoint);
                 if !seen.insert((parent, src, normalized[parent], hot.rank)) {
                     continue;
@@ -648,8 +750,9 @@ pub(crate) fn packed_node_edge_headers_batch(
                     far_label,
                     endpoint: hot.endpoint,
                     rank: hot.rank,
-                    type_id: *type_id,
+                    type_id,
                     side: Side::In,
+                    handle: (far_label != 0).then_some((hot.endpoint, far_label)),
                 });
             }
         }
@@ -670,6 +773,7 @@ pub(crate) fn packed_node_edge_headers_batch(
     packed.dst = vec![VertexId::default(); total];
     packed.edge_type_ids = vec![0u32; total];
     packed.rankings = vec![0i64; total];
+    packed.destination_handles = vec![None; total];
     let mut cursors = packed.child_offsets[..normalized.len()].to_vec();
     for event in events {
         let far = far_id(event.far_label, event.endpoint);
@@ -683,6 +787,7 @@ pub(crate) fn packed_node_edge_headers_batch(
         packed.dst[position] = dst;
         packed.edge_type_ids[position] = event.type_id;
         packed.rankings[position] = event.rank;
+        packed.destination_handles[position] = event.handle;
     }
     Ok(packed)
 }
@@ -695,10 +800,11 @@ pub(crate) fn get_node_edge_headers_batch(
     direction: EdgeDirection,
     edge_types: &[String],
 ) -> StorageResult<Vec<Vec<EdgeTopology>>> {
-    Ok(
-        packed_node_edge_headers_batch(ctx, space, src_ids, handles, direction, edge_types)?
-            .to_batches(),
-    )
+    let schema = resolve_topology_schema(ctx, space, edge_types)?;
+    Ok(packed_node_edge_headers_batch(
+        ctx, space, src_ids, handles, direction, edge_types, &schema,
+    )?
+    .to_batches())
 }
 
 /// Lightweight batch neighbor read used by de-materialized expand hops

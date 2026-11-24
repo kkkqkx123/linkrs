@@ -7,7 +7,7 @@ use crate::executor::streaming::runtime::ColumnarStats;
 use crate::executor::streaming::slot::SlotLayout;
 use crate::storage::{EdgeTopology, PackedEdgeTopology, QueryStorage};
 use linkrs_core::error::QueryError;
-use linkrs_core::types::storage_ids::VertexId;
+use linkrs_core::types::{storage_ids::VertexId, LabelId};
 use linkrs_core::{Edge, EdgeDirection, EdgeHeader, Value, Vertex};
 
 use super::expand_dispatch::{
@@ -24,51 +24,69 @@ use super::ExpandCtx;
 /// preserve the batch timestamp, input order and visibility, with one entry
 /// per id and missing vertices marked absent so dangling edges drop the row.
 pub(super) enum DestinationView {
-    Vertices(Vec<Option<Vertex>>),
+    Vertices {
+        values: Vec<Option<Vertex>>,
+        slots: Vec<usize>,
+    },
     Properties {
         names: Vec<String>,
         present: Vec<bool>,
         values: Vec<Vec<Value>>,
+        slots: Vec<usize>,
     },
 }
 
 impl DestinationView {
     pub(super) fn len(&self) -> usize {
         match self {
-            Self::Vertices(vertices) => vertices.len(),
-            Self::Properties { present, .. } => present.len(),
+            Self::Vertices { slots, .. } | Self::Properties { slots, .. } => slots.len(),
+        }
+    }
+
+    fn slot(&self, index: usize) -> Option<usize> {
+        match self {
+            Self::Vertices { slots, .. } | Self::Properties { slots, .. } => {
+                slots.get(index).copied()
+            }
         }
     }
 
     pub(super) fn present(&self, index: usize) -> bool {
         match self {
-            Self::Vertices(vertices) => vertices.get(index).is_some_and(Option::is_some),
-            Self::Properties { present, .. } => present.get(index).copied().unwrap_or(false),
+            Self::Vertices { values, .. } => self
+                .slot(index)
+                .and_then(|slot| values.get(slot))
+                .is_some_and(Option::is_some),
+            Self::Properties { present, .. } => self
+                .slot(index)
+                .and_then(|slot| present.get(slot))
+                .copied()
+                .unwrap_or(false),
         }
     }
 
     pub(super) fn vertex(&self, index: usize) -> Option<&Vertex> {
         match self {
-            Self::Vertices(vertices) => vertices.get(index).and_then(|v| v.as_ref()),
+            Self::Vertices { values, .. } => self
+                .slot(index)
+                .and_then(|slot| values.get(slot))
+                .and_then(|value| value.as_ref()),
             Self::Properties { .. } => None,
         }
     }
 
     pub(super) fn property(&self, index: usize, name: &str) -> Value {
+        let slot = self.slot(index);
         match self {
-            Self::Vertices(vertices) => vertices
-                .get(index)
-                .and_then(|v| v.as_ref())
-                .and_then(|v| v.property_value(name))
+            Self::Vertices { values, .. } => slot
+                .and_then(|slot| values.get(slot))
+                .and_then(|value| value.as_ref())
+                .and_then(|value| value.property_value(name))
                 .unwrap_or(Value::Null(linkrs_core::NullType::Null)),
             Self::Properties { names, values, .. } => names
                 .iter()
                 .position(|item| item == name)
-                .and_then(|slot| {
-                    values
-                        .get(slot)
-                        .and_then(|column| column.get(index).cloned())
-                })
+                .and_then(|column| slot.and_then(|slot| values.get(column)?.get(slot).cloned()))
                 .unwrap_or(Value::Null(linkrs_core::NullType::Null)),
         }
     }
@@ -91,19 +109,26 @@ pub(super) fn read_destinations(
     ids: &[VertexId],
     dst_props: Option<&Vec<String>>,
     property_columns_only: bool,
+    handles: Option<&[Option<(u32, LabelId)>]>,
 ) -> Result<DestinationRead, QueryError> {
     // A hop emits one row per edge, but many edges share a destination.
     // Point lookups at one snapshot are pure, so fetch each distinct id once
     // and restore input order for the row assembly.
     let dedup_started = std::time::Instant::now();
     let mut unique = Vec::with_capacity(ids.len());
+    let mut unique_handles: Vec<Option<(u32, LabelId)>> = Vec::with_capacity(ids.len());
     let mut slots = Vec::with_capacity(ids.len());
     let mut index = std::collections::HashMap::new();
-    for id in ids {
-        let slot = *index.entry(*id).or_insert_with(|| {
+    for (edge, id) in ids.iter().enumerate() {
+        let slot = if let Some(&slot) = index.get(id) {
+            slot
+        } else {
+            let slot = unique.len();
+            index.insert(*id, slot);
             unique.push(*id);
-            unique.len() - 1
-        });
+            unique_handles.push(handles.and_then(|h| h.get(edge)).copied().flatten());
+            slot
+        };
         slots.push(slot);
     }
     let mut view_us = dedup_started.elapsed().as_micros() as u64;
@@ -119,12 +144,22 @@ pub(super) fn read_destinations(
                 .map(|s| std::sync::Arc::from(s.as_str()))
                 .collect();
             let read_started = std::time::Instant::now();
-            let columns = reader.get_vertex_property_columns_batch(
-                space_name,
-                dst_tag,
-                &unique,
-                &projection,
-            )?;
+            let columns = if handles.is_some() {
+                reader.get_vertex_property_columns_with_handles_batch(
+                    space_name,
+                    dst_tag,
+                    &unique,
+                    &projection,
+                    &unique_handles,
+                )?
+            } else {
+                reader.get_vertex_property_columns_batch(
+                    space_name,
+                    dst_tag,
+                    &unique,
+                    &projection,
+                )?
+            };
             let read_us = read_started.elapsed().as_micros() as u64;
             let present: Vec<bool> = columns.iter().map(Option::is_some).collect();
             let missing = present.iter().filter(|found| !**found).count();
@@ -137,20 +172,13 @@ pub(super) fn read_destinations(
                     values[slot].push(value);
                 }
             }
-            let mut edge_present = vec![false; ids.len()];
-            let mut edge_values: Vec<Vec<Value>> = vec![Vec::with_capacity(ids.len()); names.len()];
-            for (edge, slot) in slots.into_iter().enumerate() {
-                edge_present[edge] = present[slot];
-                for (column, value) in edge_values.iter_mut().zip(&values) {
-                    column.push(value[slot].clone());
-                }
-            }
             view_us += expansion_started.elapsed().as_micros() as u64;
             return Ok(DestinationRead {
                 view: DestinationView::Properties {
                     names,
-                    present: edge_present,
-                    values: edge_values,
+                    present,
+                    values,
+                    slots,
                 },
                 read_us,
                 view_us,
@@ -177,14 +205,10 @@ pub(super) fn read_destinations(
     };
     let read_us = read_started.elapsed().as_micros() as u64;
     let missing = vertices.iter().filter(|vertex| vertex.is_none()).count();
-    let expansion_started = std::time::Instant::now();
-    let view = DestinationView::Vertices(
-        slots
-            .into_iter()
-            .map(|slot| vertices[slot].clone())
-            .collect(),
-    );
-    view_us += expansion_started.elapsed().as_micros() as u64;
+    let view = DestinationView::Vertices {
+        values: vertices,
+        slots,
+    };
     Ok(DestinationRead {
         view,
         read_us,
@@ -367,6 +391,7 @@ pub(super) fn expand_single_step_columnar(
     let mut all_dst: Vec<VertexId> = Vec::new();
     let mut packed_edges: Option<PackedEdgeTopology> = None;
     if edge_empty && ctx.edge_required_props.is_some() && edge_bypass.is_empty() {
+        let topology_schema = ctx.topology_schema(reader)?;
         let read_started = std::time::Instant::now();
         let read = reader.get_packed_node_edge_headers_batch(
             space_name,
@@ -374,6 +399,7 @@ pub(super) fn expand_single_step_columnar(
             Some(&seed_handles),
             direction,
             edge_types,
+            topology_schema.as_ref(),
         );
         let read_us = read_started.elapsed().as_micros() as u64;
         if let Some(stats) = &stats {
@@ -462,6 +488,9 @@ pub(super) fn expand_single_step_columnar(
         &all_dst,
         dst_bypass_opt.as_ref(),
         rowless || dst_empty,
+        packed_edges
+            .as_ref()
+            .map(|packed| packed.destination_handles.as_slice()),
     );
     let dest_us = dest_started.elapsed().as_micros() as u64;
     let read = read?;

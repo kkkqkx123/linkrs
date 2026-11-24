@@ -79,6 +79,8 @@ struct QueryDiagnostics {
     typed_group_hits: u64,
     typed_group_fallbacks: u64,
     partition_skew_ratio: f64,
+    parallel_wall_us: u64,
+    parallel_work_us: u64,
     local_topk_pushed: u64,
     local_topk_unpushed: u64,
     scan_read_us: u64,
@@ -167,6 +169,16 @@ fn partition_skew_ratio(text: &str) -> f64 {
     } else {
         max as f64 / min as f64
     }
+}
+
+/// Read a microsecond `key=<n>us` field from an EXPLAIN line.
+fn explain_metric_us(text: &str, key: &str) -> Option<u64> {
+    text.lines().find_map(|line| {
+        line.split(',').map(str::trim).find_map(|field| {
+            let value = field.strip_prefix(key)?.strip_prefix('=')?.trim();
+            value.strip_suffix("us")?.trim().parse().ok()
+        })
+    })
 }
 
 fn count_occurrences(text: &str, needle: &str) -> u64 {
@@ -1063,6 +1075,8 @@ fn cmd_run(args: &[String]) {
                 typed_group_fallbacks: explain_metric(&explain_text, "typed_group_fallbacks")
                     .unwrap_or(0),
                 partition_skew_ratio: partition_skew_ratio(&explain_text),
+                parallel_wall_us: explain_metric_us(&explain_text, "wall_time").unwrap_or(0),
+                parallel_work_us: explain_metric_us(&explain_text, "work_time").unwrap_or(0),
                 local_topk_pushed: count_occurrences(&explain_text, "local_topk:pushed"),
                 local_topk_unpushed: count_occurrences(&explain_text, "local_topk:unpushed"),
                 scan_read_us: explain_metric(&explain_text, "scan_read_us").unwrap_or(0),
@@ -1169,6 +1183,8 @@ fn patch_resource_result(
         "partition_skew_ratio",
         diagnostics.partition_skew_ratio,
     );
+    set_json_u64(&mut text, "parallel_wall_us", diagnostics.parallel_wall_us);
+    set_json_u64(&mut text, "parallel_work_us", diagnostics.parallel_work_us);
     set_json_u64(
         &mut text,
         "local_topk_pushed",
@@ -1392,6 +1408,8 @@ fn write_run_result(
     json.push_str("  \"typed_group_hits\": 0,\n");
     json.push_str("  \"typed_group_fallbacks\": 0,\n");
     json.push_str("  \"partition_skew_ratio\": 0.0,\n");
+    json.push_str("  \"parallel_wall_us\": 0,\n");
+    json.push_str("  \"parallel_work_us\": 0,\n");
     json.push_str("  \"local_topk_pushed\": 0,\n");
     json.push_str("  \"local_topk_unpushed\": 0,\n");
     json.push_str("  \"scan_read_us\": 0,\n");

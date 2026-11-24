@@ -40,6 +40,27 @@ pub(super) fn handle(
     // chunk turns the shared lock word into cross-worker contention with no
     // snapshot benefit, since every chunk already reads at one timestamp.
     let reader_guard = storage.as_ref().map(|storage_lock| storage_lock.read());
+    let mut ctx = ExpandCtx {
+        space_name,
+        dst_tag,
+        edge_types,
+        direction,
+        filter_expr,
+        col_names_template: Vec::new(),
+        cancel_token: cancel_token.clone(),
+        path_semantic: None,
+        edge_required_props: None,
+        dst_required_props: None,
+        closed_loop: false,
+        skip_rows: false,
+        emit_raw_ids: false,
+        lightweight_source: false,
+        include_empty_paths: false,
+        ttl_active: None,
+        dst_tag_cache: None,
+        topology_schema: None,
+        runtime: count_runtime.clone(),
+    };
     while let Some(chunk) = input.advance()? {
         if let Some(reader) = reader_guard.as_deref() {
             if let Some(output) = expand_dispatch::expand_on_chunk(
@@ -48,26 +69,7 @@ pub(super) fn handle(
                 reader,
                 Vec::new(),
                 1,
-                &mut ExpandCtx {
-                    space_name,
-                    dst_tag,
-                    edge_types,
-                    direction,
-                    filter_expr,
-                    col_names_template: Vec::new(),
-                    cancel_token: cancel_token.clone(),
-                    path_semantic: None,
-                    edge_required_props: None,
-                    dst_required_props: None,
-                    closed_loop: false,
-                    skip_rows: false,
-                    emit_raw_ids: false,
-                    lightweight_source: false,
-                    include_empty_paths: false,
-                    ttl_active: None,
-                    dst_tag_cache: None,
-                    runtime: count_runtime.clone(),
-                },
+                &mut ctx,
             )? {
                 return Ok(Some(output));
             }
@@ -225,6 +227,7 @@ pub(super) fn handle_all(
                         include_empty_paths,
                         ttl_active: None,
                         dst_tag_cache: None,
+                        topology_schema: None,
                         runtime: count_runtime.clone(),
                     },
                 )?;
@@ -256,6 +259,7 @@ pub(super) fn handle_all(
                 include_empty_paths,
                 ttl_active: None,
                 dst_tag_cache: None,
+                topology_schema: None,
                 runtime: count_runtime.clone(),
             };
             let expand_result = if let Some(limits) = step_limits.clone() {

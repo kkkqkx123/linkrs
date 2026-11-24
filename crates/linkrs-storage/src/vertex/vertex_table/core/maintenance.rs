@@ -49,6 +49,16 @@ impl VertexTable {
         self.id_indexer.get_key(internal_id)
     }
 
+    /// Resolve a batch of raw external ids without timestamp checks.
+    pub fn get_external_ids_raw(&self, internal_ids: &[u32], out: &mut Vec<Option<IdKey>>) {
+        if !self.is_open.load(Ordering::Acquire) {
+            out.clear();
+            out.resize(internal_ids.len(), None);
+            return;
+        }
+        self.id_indexer.get_keys(internal_ids, out);
+    }
+
     /// Declared data type of the column `name`, if it exists in the schema.
     pub fn data_type_of(&self, name: &str) -> Option<linkrs_core::types::DataType> {
         self.columns.data_type_of(name)

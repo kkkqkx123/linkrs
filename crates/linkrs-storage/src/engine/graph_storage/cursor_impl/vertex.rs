@@ -50,6 +50,8 @@ pub(crate) struct GraphVertexCursor {
     current_label: Option<LabelId>,
     /// Live internal ids of the current table, in scan order.
     pending_ids: Vec<u32>,
+    /// External ids aligned with `pending_ids` for fused topology-only scans.
+    pending_vids: Vec<VertexId>,
     /// Index into `pending_ids`.
     pending_idx: usize,
     limit: Option<usize>,
@@ -203,6 +205,7 @@ impl GraphVertexCursor {
             current_table: None,
             current_label: None,
             pending_ids: Vec::new(),
+            pending_vids: Vec::new(),
             pending_idx: 0,
             limit: options.limit,
             offset_remaining: options.offset,
@@ -278,6 +281,7 @@ impl GraphVertexCursor {
         self.current_table = None;
         self.current_label = None;
         self.pending_ids.clear();
+        self.pending_vids.clear();
         self.pending_idx = 0;
         self.staged_rows.clear();
         self.staged_idx = 0;
@@ -308,6 +312,7 @@ impl GraphVertexCursor {
                     })
                     .collect();
                 self.pending_ids = ids;
+                self.pending_vids.clear();
                 self.ids_verified = false;
                 self.current_label = Some(*label_id);
                 self.current_table = Some(Arc::clone(table));
@@ -332,13 +337,35 @@ impl GraphVertexCursor {
                 .slice
                 .as_ref()
                 .map(|slice| (slice, table.shard_universes()));
-            let ids: Vec<u32> = match owned.as_ref() {
-                Some((slice, universes)) => table.live_ids_in_slice(guard, slice, universes),
-                None => table.live_ids(guard),
+            let fuse_identity =
+                self.topology_only && self.table_ttl(label_id).is_none() && owned.is_some();
+            let (mut ids, mut vids) = match owned.as_ref() {
+                Some((slice, universes)) if fuse_identity => {
+                    table.live_ids_in_slice_with_vids(guard, slice, universes, &mut self.timings)
+                }
+                Some((slice, universes)) => {
+                    (table.live_ids_in_slice(guard, slice, universes), Vec::new())
+                }
+                None => (table.live_ids(guard), Vec::new()),
+            };
+            if !merge.dropped_ids.is_empty() {
+                let keep: Vec<bool> = ids
+                    .iter()
+                    .map(|id| !merge.dropped_ids.contains(id))
+                    .collect();
+                ids = ids
+                    .into_iter()
+                    .zip(keep.iter().copied())
+                    .filter_map(|(id, retained)| retained.then_some(id))
+                    .collect();
+                if vids.len() == keep.len() {
+                    vids = vids
+                        .into_iter()
+                        .zip(keep.into_iter())
+                        .filter_map(|(vid, retained)| retained.then_some(vid))
+                        .collect();
+                }
             }
-            .into_iter()
-            .filter(|id| !merge.dropped_ids.contains(id))
-            .collect();
             let staged_rows: Vec<StagedRow> = match owned.as_ref() {
                 None => merge.rows,
                 Some((slice, universes)) => merge
@@ -351,6 +378,7 @@ impl GraphVertexCursor {
                 self.current_label = Some(label_id);
                 self.ids_verified = true;
                 self.pending_ids = ids;
+                self.pending_vids = vids;
                 self.staged_rows = staged_rows;
                 self.current_table = Some(Arc::clone(table));
                 return;
@@ -569,15 +597,22 @@ impl GraphVertexCursor {
                     self.current_table = None;
                     self.current_label = None;
                     self.pending_ids.clear();
+                    self.pending_vids.clear();
                     self.pending_idx = 0;
                     self.staged_rows.clear();
                     self.staged_idx = 0;
                     continue;
                 }
 
-                let end = (self.pending_idx + (batch_size - internal_ids.len()))
-                    .min(self.pending_ids.len());
-                let ids = &self.pending_ids[self.pending_idx..end];
+                let start = self.pending_idx;
+                let end = (start + (batch_size - internal_ids.len())).min(self.pending_ids.len());
+                let ids = &self.pending_ids[start..end];
+                let resolved_vids: Option<Vec<VertexId>> =
+                    if self.pending_vids.len() == self.pending_ids.len() {
+                        Some(self.pending_vids[start..end].to_vec())
+                    } else {
+                        None
+                    };
                 self.pending_idx = end;
 
                 let Some(table) = self.current_table.clone() else {
@@ -588,23 +623,31 @@ impl GraphVertexCursor {
                 // 1/P of the window, and decoding the rest only to drop it
                 // repeats every sibling fragment's work.
                 let ranged: Vec<u32>;
-                let ids: &[u32] = match self.id_range.as_ref() {
+                let ranged_vids: Vec<VertexId>;
+                let (ids, resolved_vids) = match self.id_range.as_ref() {
                     Some(range) => {
-                        let provenance = self.id_provenance();
-                        let (topo_ids, topo_vids) =
-                            table.scan_topology(ids, &guard, provenance, &mut self.timings);
-                        ranged = topo_ids
-                            .into_iter()
-                            .zip(topo_vids)
-                            .filter_map(|(id, vid)| {
-                                vid.as_int64()
-                                    .filter(|v| (range.start..range.end).contains(v))
-                                    .map(|_| id)
-                            })
-                            .collect();
-                        &ranged
+                        let (topo_ids, topo_vids) = if let Some(window) = resolved_vids {
+                            (ids.to_vec(), window)
+                        } else {
+                            let provenance = self.id_provenance();
+                            table.scan_topology(ids, &guard, provenance, &mut self.timings)
+                        };
+                        let mut kept_ids = Vec::new();
+                        let mut kept_vids = Vec::new();
+                        for (id, vid) in topo_ids.into_iter().zip(topo_vids) {
+                            if vid
+                                .as_int64()
+                                .is_some_and(|v| (range.start..range.end).contains(&v))
+                            {
+                                kept_ids.push(id);
+                                kept_vids.push(vid);
+                            }
+                        }
+                        ranged = kept_ids;
+                        ranged_vids = kept_vids;
+                        (&ranged[..], Some(ranged_vids))
                     }
-                    None => ids,
+                    None => (ids, resolved_vids),
                 };
                 let label_id = self.current_label;
                 let tag_name = label_id
@@ -666,9 +709,12 @@ impl GraphVertexCursor {
                 // decode path, filters on the TTL column, and strips the
                 // helper column back out below.
                 if self.topology_only && run_ttl.is_none() {
-                    let provenance = self.id_provenance();
-                    let (run_internal, run_vids) =
-                        table.scan_topology(&candidates, &guard, provenance, &mut self.timings);
+                    let (run_internal, run_vids) = if let Some(window) = resolved_vids {
+                        (candidates.clone(), window)
+                    } else {
+                        let provenance = self.id_provenance();
+                        table.scan_topology(&candidates, &guard, provenance, &mut self.timings)
+                    };
                     if run_internal.is_empty() {
                         continue;
                     }
@@ -1002,6 +1048,7 @@ impl GraphVertexCursor {
                     self.current_table = None;
                     self.current_label = None;
                     self.pending_ids.clear();
+                    self.pending_vids.clear();
                     self.pending_idx = 0;
                     self.staged_rows.clear();
                     self.staged_idx = 0;
