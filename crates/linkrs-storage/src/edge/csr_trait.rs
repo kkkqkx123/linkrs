@@ -243,6 +243,13 @@ pub trait MutableCsrTrait: CsrBase {
         out.extend_from_slice(&self.physical_edges_of(src_vid));
     }
 
+    /// Warm the adjacency head metadata of one row without changing it.
+    ///
+    /// A read-only cache hint: callers may issue it for lookahead rows before
+    /// walking them. Formats without separate head columns no-op. The hint
+    /// never decides visibility and never alters edge order or identity.
+    fn prefetch_head(&self, _src_vid: u32) {}
+
     /// Whether one vertex holds any physically stored entry.
     fn has_physical_entries(&self, _vid: u32) -> bool {
         false

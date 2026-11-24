@@ -122,6 +122,10 @@ impl MutableCsrTrait for MutableCsr {
         MutableCsr::fill_physical_into(self, src_vid, out)
     }
 
+    fn prefetch_head(&self, src_vid: u32) {
+        MutableCsr::prefetch_head(self, src_vid)
+    }
+
     fn has_physical_entries(&self, vid: u32) -> bool {
         MutableCsr::has_physical_entries(self, vid)
     }

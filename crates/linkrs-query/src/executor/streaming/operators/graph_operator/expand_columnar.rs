@@ -308,6 +308,115 @@ pub(super) fn edge_neighbor(edge: &Edge, seed: &VertexId, direction: EdgeDirecti
     }
 }
 
+/// Project a packed endpoint onto the declared primary-key value type.
+fn identity_key_value(vid: VertexId, data_type: &linkrs_core::DataType) -> Option<Value> {
+    let id = vid.as_int64()?;
+    match data_type {
+        linkrs_core::DataType::BigInt => Some(Value::BigInt(id)),
+        linkrs_core::DataType::Int => i32::try_from(id).ok().map(Value::Int),
+        linkrs_core::DataType::SmallInt => i16::try_from(id).ok().map(Value::SmallInt),
+        _ => None,
+    }
+}
+
+/// Identity-key fast path for one packed expand batch.
+///
+/// The plan proves that the demanded destination property is the declared
+/// primary key, so the endpoint id from the topology scan is the key itself.
+/// Destinations are still checked for snapshot visibility, but their property
+/// columns are not read and no per-edge key array is built. `None` declines
+/// the fast path so the ordinary typed assembly remains authoritative.
+fn expand_packed_identity(
+    reader: &dyn crate::storage::QueryStorage,
+    space_name: &str,
+    dst_tag: &str,
+    packed: &PackedEdgeTopology,
+    direction: linkrs_core::EdgeDirection,
+    key_name: &str,
+    identity_type: &linkrs_core::DataType,
+    seed_count: usize,
+    stats: Option<&ColumnarStats>,
+    output_layout: Arc<crate::executor::streaming::slot::SlotLayout>,
+) -> Result<Option<ColumnarOutcome>, QueryError> {
+    use linkrs_core::EdgeDirection;
+
+    let far_ids: &[VertexId] = match direction {
+        EdgeDirection::Out => &packed.dst,
+        EdgeDirection::In => &packed.src,
+        _ => return Ok(None),
+    };
+    if far_ids.len() != packed.destination_handles.len() {
+        return Ok(None);
+    }
+    let mut unique = Vec::with_capacity(far_ids.len());
+    let mut handles = Vec::with_capacity(far_ids.len());
+    let mut weights: Vec<u64> = Vec::with_capacity(far_ids.len());
+    let mut slots: std::collections::HashMap<VertexId, usize> = std::collections::HashMap::new();
+    for (id, handle) in far_ids.iter().zip(&packed.destination_handles) {
+        let slot = match slots.get(id) {
+            Some(&slot) => slot,
+            None => {
+                let slot = unique.len();
+                slots.insert(*id, slot);
+                unique.push(*id);
+                handles.push(*handle);
+                weights.push(0);
+                slot
+            }
+        };
+        weights[slot] += 1;
+    }
+    let Some(keys) = unique
+        .iter()
+        .map(|id| identity_key_value(*id, identity_type))
+        .collect::<Option<Vec<Value>>>()
+    else {
+        return Ok(None);
+    };
+    if let Some(stats) = stats {
+        stats.record_expand_topology_counts(seed_count as u64, far_ids.len() as u64);
+    }
+    let read_started = std::time::Instant::now();
+    let presence = reader.get_vertex_property_columns_with_handles_batch(
+        space_name,
+        dst_tag,
+        &unique,
+        &[],
+        &handles,
+    )?;
+    let read_us = read_started.elapsed().as_micros() as u64;
+    let present: Vec<bool> = presence.iter().map(Option::is_some).collect();
+    let missing = present.iter().filter(|found| !**found).count();
+
+    let view_started = std::time::Instant::now();
+    let mut out_keys = Vec::with_capacity(unique.len());
+    let mut out_weights = Vec::with_capacity(unique.len());
+    for (index, found) in present.iter().enumerate() {
+        if *found {
+            out_keys.push(keys[index].clone());
+            out_weights.push(weights[index]);
+        }
+    }
+    let view_us = view_started.elapsed().as_micros() as u64;
+    if let Some(stats) = stats {
+        stats.record_expand_read_us(read_us);
+        stats.record_expand_phases(0, read_us, 0, view_us, 0);
+        stats.record_expand_destination_counts(unique.len() as u64, missing as u64);
+        stats.record_expand_output_rows(out_keys.len() as u64);
+    }
+    if out_keys.is_empty() {
+        return Ok(Some(ColumnarOutcome::Empty));
+    }
+    let payload = PackedExpandPayload {
+        key_name: key_name.to_string(),
+        keys: out_keys,
+        weights: out_weights,
+    };
+    Ok(Some(ColumnarOutcome::Produced(
+        DataChunk::new_packed_expand(output_layout, payload),
+    )))
+}
+
 /// Single-step columnar assembly for closed-loop materialized hops.
 ///
 /// Uses a projected edge read (topology only when no edge properties are
@@ -407,6 +516,36 @@ pub(super) fn expand_single_step_columnar(
             stats.record_expand_phases(read_us, 0, 0, 0, 0);
         }
         let packed = read?;
+        let identity_key = ctx
+            .packed_key_name
+            .clone()
+            .zip(ctx.packed_identity_type.clone());
+        if let Some((key_name, identity_type)) = identity_key {
+            let key_property = key_name.rsplit('.').next().unwrap_or(&key_name);
+            if dst_bypass.len() == 1 && dst_bypass[0] == key_property {
+                if packed.dst.is_empty() && ctx.include_empty_paths {
+                    return Ok(ColumnarOutcome::Declined);
+                }
+                let planned_tag = ctx.dst_tag.to_string();
+                let runtime_tag = ctx.resolved_dst_tag(reader);
+                if runtime_tag.as_deref() == Some(planned_tag.as_str()) && !planned_tag.is_empty() {
+                    if let Some(outcome) = expand_packed_identity(
+                        reader,
+                        space_name,
+                        &planned_tag,
+                        &packed,
+                        direction,
+                        &key_name,
+                        &identity_type,
+                        seed_vids.len(),
+                        stats.as_deref(),
+                        Arc::clone(&output_layout),
+                    )? {
+                        return Ok(outcome);
+                    }
+                }
+            }
+        }
         for parent in 0..packed.parent_count() {
             let parent_vid = packed.parents[parent];
             for index in packed.child_range(parent) {
@@ -529,7 +668,7 @@ pub(super) fn expand_single_step_columnar(
             (None, false)
         };
         if rowless && eligible {
-            let keys = kept
+            let keys: Vec<Value> = kept
                 .iter()
                 .map(|&index| match direct {
                     Some(property) => destinations.property(index, property),
@@ -541,6 +680,7 @@ pub(super) fn expand_single_step_columnar(
                 .collect();
             let payload = PackedExpandPayload {
                 key_name: key_name.to_string(),
+                weights: vec![1; keys.len()],
                 keys,
             };
             if let Some(stats) = &stats {

@@ -1,7 +1,7 @@
 //! Immutable configuration for graph traversal operators.
 
 use linkrs_core::types::expr::Expression;
-use linkrs_core::{EdgeDirection, Value};
+use linkrs_core::{DataType, EdgeDirection, Value};
 
 use crate::parser::ast::pattern::PathSemantic;
 
@@ -46,6 +46,10 @@ pub enum GraphSpec {
         /// Destination property name consumed directly by a partition-local
         /// blocking operator. Set only for the narrow packed handoff shape.
         packed_key_name: Option<String>,
+        /// Declared primary-key type proving that the packed destination id
+        /// equals the handed-off key value. A plan without this proof keeps
+        /// the ordinary property-column read.
+        packed_identity_type: Option<DataType>,
         /// Single-label closed loop proven by the planner syntactically and
         /// re-verified against storage at execution with row fallback.
         closed_loop: bool,

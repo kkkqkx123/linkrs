@@ -19,36 +19,33 @@ type LabelPair = (LabelId, LabelId);
 type EdgeEndpoints = Vec<(u32, u32, i64)>;
 type PartitionedEdges = Vec<(LabelPair, EdgeEndpoints)>;
 
-/// Parent-major topology entries with prefix offsets. One flat allocation
-/// replaces one child vector per parent, which matters for batches where most
-/// parents contribute a single edge.
+/// Parent-major topology entries with prefix offsets. The scan appends each
+/// parent's visible edges in one run, so no event buffer or scatter cursor is
+/// needed between the CSR walk and the packed arrays.
 #[derive(Debug, Default)]
 pub(crate) struct PackedTopologyBatch {
     pub entries: Vec<(LabelId, HotNbr)>,
     pub offsets: Vec<usize>,
 }
 
-fn flatten_topology_events(
-    parent_count: usize,
-    events: Vec<(usize, LabelId, HotNbr)>,
-) -> PackedTopologyBatch {
-    let mut offsets = vec![0usize; parent_count + 1];
-    for &(parent, _, _) in &events {
-        offsets[parent + 1] += 1;
+impl PackedTopologyBatch {
+    fn new(parent_count: usize) -> Self {
+        Self {
+            entries: Vec::new(),
+            offsets: vec![0usize; parent_count + 1],
+        }
     }
-    for index in 1..offsets.len() {
-        offsets[index] += offsets[index - 1];
+
+    fn push(&mut self, parent: usize, label: LabelId, hot: HotNbr) {
+        self.entries.push((label, hot));
+        self.offsets[parent + 1] += 1;
     }
-    let mut cursors = offsets[..parent_count].to_vec();
-    let mut slots: Vec<Option<(LabelId, HotNbr)>> = vec![None; events.len()];
-    for (parent, label, hot) in events {
-        let position = cursors[parent];
-        slots[position] = Some((label, hot));
-        cursors[parent] = position + 1;
-    }
-    PackedTopologyBatch {
-        entries: slots.into_iter().flatten().collect(),
-        offsets,
+
+    fn finish(mut self) -> Self {
+        for index in 1..self.offsets.len() {
+            self.offsets[index] += self.offsets[index - 1];
+        }
+        self
     }
 }
 
@@ -797,21 +794,24 @@ impl GraphStorageContext {
             .data_store
             .matching_edge_partition_arcs(edge_label);
         let gate = self.pending_gate();
+        let mut tables = Vec::new();
         for arc in &arcs {
             let table = self.persistent.data_store.read_edge_table(arc);
             if table.label() != edge_label {
                 continue;
             }
-            let far_label = table.dst_label();
-            for (index, seed) in resolved.iter().enumerate() {
-                let Some((src_internal, actual_src)) = seed else {
-                    continue;
-                };
+            tables.push((table.dst_label(), table));
+        }
+        for (index, seed) in resolved.iter().enumerate() {
+            let Some((src_internal, actual_src)) = seed else {
+                continue;
+            };
+            for (far_label, table) in &tables {
                 if table.src_label() != *actual_src {
                     continue;
                 }
                 table.visit_out_with_gate(*src_internal, ts, &gate, |nbr| {
-                    f(index, *src_internal, far_label, nbr)
+                    f(index, *src_internal, *far_label, nbr)
                 });
             }
         }
@@ -841,21 +841,24 @@ impl GraphStorageContext {
             .data_store
             .matching_edge_partition_arcs(edge_label);
         let gate = self.pending_gate();
+        let mut tables = Vec::new();
         for arc in &arcs {
             let table = self.persistent.data_store.read_edge_table(arc);
             if table.label() != edge_label {
                 continue;
             }
-            let far_label = table.src_label();
-            for (index, seed) in resolved.iter().enumerate() {
-                let Some((dst_internal, actual_dst)) = seed else {
-                    continue;
-                };
+            tables.push((table.src_label(), table));
+        }
+        for (index, seed) in resolved.iter().enumerate() {
+            let Some((dst_internal, actual_dst)) = seed else {
+                continue;
+            };
+            for (far_label, table) in &tables {
                 if table.dst_label() != *actual_dst {
                     continue;
                 }
                 table.visit_in_with_gate(*dst_internal, ts, &gate, |nbr| {
-                    f(index, *dst_internal, far_label, nbr)
+                    f(index, *dst_internal, *far_label, nbr)
                 });
             }
         }
@@ -1084,6 +1087,34 @@ impl GraphStorageContext {
         handles: Option<&[Option<(u32, LabelId)>]>,
         ts: Timestamp,
     ) -> PackedTopologyBatch {
+        self.out_topology_batch_impl(edge_label, src_label, src_ids, handles, ts, 0)
+    }
+
+    /// A/B variant that warms the adjacency heads of lookahead parents from
+    /// the endpoints already resolved for this scan. Production callers use
+    /// [`Self::out_topology_batch`]; the benchmark uses this to isolate the
+    /// cache hint from a second parent resolution.
+    pub fn out_topology_batch_prefetched(
+        &self,
+        edge_label: LabelId,
+        src_label: LabelId,
+        src_ids: &[VertexId],
+        handles: Option<&[Option<(u32, LabelId)>]>,
+        ts: Timestamp,
+        prefetch_ahead: usize,
+    ) -> PackedTopologyBatch {
+        self.out_topology_batch_impl(edge_label, src_label, src_ids, handles, ts, prefetch_ahead)
+    }
+
+    fn out_topology_batch_impl(
+        &self,
+        edge_label: LabelId,
+        src_label: LabelId,
+        src_ids: &[VertexId],
+        handles: Option<&[Option<(u32, LabelId)>]>,
+        ts: Timestamp,
+        prefetch_ahead: usize,
+    ) -> PackedTopologyBatch {
         let resolved: Vec<Option<(u32, LabelId)>> = match handles {
             Some(handles) => handles
                 .iter()
@@ -1100,26 +1131,42 @@ impl GraphStorageContext {
             .data_store
             .matching_edge_partition_arcs(edge_label);
         let gate = self.pending_gate();
-        let mut events: Vec<(usize, LabelId, HotNbr)> = Vec::new();
+        let mut tables = Vec::new();
         for arc in &arcs {
             let table = self.persistent.data_store.read_edge_table(arc);
             if table.label() != edge_label {
                 continue;
             }
-            let far_label = table.dst_label();
-            for (index, seed) in resolved.iter().enumerate() {
-                let Some((src_internal, actual_src)) = seed else {
-                    continue;
-                };
+            tables.push((table.dst_label(), table));
+        }
+        let mut packed = PackedTopologyBatch::new(src_ids.len());
+        let mut hots = Vec::new();
+        for (index, seed) in resolved.iter().enumerate() {
+            if prefetch_ahead > 0 {
+                if let Some(Some((ahead_internal, ahead_label))) =
+                    resolved.get(index + prefetch_ahead)
+                {
+                    for (_, table) in &tables {
+                        if table.src_label() == *ahead_label {
+                            table.prefetch_out_head(*ahead_internal);
+                        }
+                    }
+                }
+            }
+            let Some((src_internal, actual_src)) = seed else {
+                continue;
+            };
+            for (far_label, table) in &tables {
                 if table.src_label() != *actual_src {
                     continue;
                 }
-                for hot in table.out_topology_with_gate(*src_internal, ts, &gate) {
-                    events.push((index, far_label, hot));
+                table.out_topology_with_gate(*src_internal, ts, &gate, &mut hots);
+                for &hot in &hots {
+                    packed.push(index, *far_label, hot);
                 }
             }
         }
-        flatten_topology_events(src_ids.len(), events)
+        packed.finish()
     }
 
     /// In-direction counterpart of [`Self::out_topology_batch`].
@@ -1130,32 +1177,71 @@ impl GraphStorageContext {
         dst_ids: &[VertexId],
         ts: Timestamp,
     ) -> PackedTopologyBatch {
+        self.in_topology_batch_impl(edge_label, dst_label, dst_ids, ts, 0)
+    }
+
+    /// A/B counterpart of [`Self::out_topology_batch_prefetched`].
+    pub fn in_topology_batch_prefetched(
+        &self,
+        edge_label: LabelId,
+        dst_label: LabelId,
+        dst_ids: &[VertexId],
+        ts: Timestamp,
+        prefetch_ahead: usize,
+    ) -> PackedTopologyBatch {
+        self.in_topology_batch_impl(edge_label, dst_label, dst_ids, ts, prefetch_ahead)
+    }
+
+    fn in_topology_batch_impl(
+        &self,
+        edge_label: LabelId,
+        dst_label: LabelId,
+        dst_ids: &[VertexId],
+        ts: Timestamp,
+        prefetch_ahead: usize,
+    ) -> PackedTopologyBatch {
         let resolved = self.resolve_node_endpoints(dst_label, dst_ids, ts);
         let arcs = self
             .persistent
             .data_store
             .matching_edge_partition_arcs(edge_label);
         let gate = self.pending_gate();
-        let mut events: Vec<(usize, LabelId, HotNbr)> = Vec::new();
+        let mut tables = Vec::new();
         for arc in &arcs {
             let table = self.persistent.data_store.read_edge_table(arc);
             if table.label() != edge_label {
                 continue;
             }
-            let far_label = table.src_label();
-            for (index, seed) in resolved.iter().enumerate() {
-                let Some((dst_internal, actual_dst)) = seed else {
-                    continue;
-                };
+            tables.push((table.src_label(), table));
+        }
+        let mut packed = PackedTopologyBatch::new(dst_ids.len());
+        let mut hots = Vec::new();
+        for (index, seed) in resolved.iter().enumerate() {
+            if prefetch_ahead > 0 {
+                if let Some(Some((ahead_internal, ahead_label))) =
+                    resolved.get(index + prefetch_ahead)
+                {
+                    for (_, table) in &tables {
+                        if table.dst_label() == *ahead_label {
+                            table.prefetch_in_head(*ahead_internal);
+                        }
+                    }
+                }
+            }
+            let Some((dst_internal, actual_dst)) = seed else {
+                continue;
+            };
+            for (far_label, table) in &tables {
                 if table.dst_label() != *actual_dst {
                     continue;
                 }
-                for hot in table.in_topology_with_gate(*dst_internal, ts, &gate) {
-                    events.push((index, far_label, hot));
+                table.in_topology_with_gate(*dst_internal, ts, &gate, &mut hots);
+                for &hot in &hots {
+                    packed.push(index, *far_label, hot);
                 }
             }
         }
-        flatten_topology_events(dst_ids.len(), events)
+        packed.finish()
     }
 
     /// Out-direction projected scan shared by the unbounded and limit

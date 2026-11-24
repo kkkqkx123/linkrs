@@ -684,3 +684,29 @@ devs release 编译通过，正确性门全绿；最终轮 EXPLAIN 显示 `expan
 devs release 编译通过，正确性门全绿。EXPLAIN 显示每分区 `LocalTopKRows` 输出 10 行，Exchange 从约 11,554 行降到 100 行，`actual=10`、`result_stable=true`、`spill_rows=0`。固定门两轮 `group_by_count` 为 39.59 / 33.89 ms，`distinct_limit` 为 37.95 / 32.80 ms；生产默认单轮为 31.86 / 29.51 ms。结果逐值一致，无额外近似或配置放开。
 
 判定：保留 `LocalTopKRows`。原始日志、逐用例 JSON、EXPLAIN 与微基准见 `perf-data/parity/results/2026-11-24/group-by-local-topk/`。
+
+## 45. packed 拓扑直写与身份键直通回测（2026-11-24）
+
+按 `docs/plan/packed-topology-direct-write-and-key-passthrough.md` 依次实施三项改动。`out_topology_batch` / `in_topology_batch` 改为按父直接写 `entries + offsets`，调用方复用一个 `HotNbr` 缓冲，删除 event 收集与散射；`visit_out_nbrs_batched` / `visit_in_nbrs_batched` 同样按父遍历，`frontier_degree_batch` 在邻居回调里直接写父连续 endpoint staging 并累计度数，删除 `NeighborEvent` 与散射游标。计划期身份证明落在现有分区链构建处：只有单一边类型、单跳、无过滤/path 语义、分组键映射回目的端唯一被需求的属性、且该属性是目的端标签声明的第一个属性（本存储的主键、等于外部身份）并属于整数类型时才放行；不按列名猜测，`local_topk:pushed:runtime` 不作为证明。身份成立时 packed 展开直接把目的端 `VertexId` 转成声明类型的键值，目的端读取退化为存在性检查；同一唯一键的若干边折叠为 `PackedExpandPayload` 的权重，`PartialAggregate` 一次累加，`LocalTopKDistinct` 只取唯一键。非身份形状保持原属性列读取与逐边路径。
+
+devs release 编译通过，正确性门全绿：配置默认值 1/1、partitioning 49/49、typed group 8/8、local topk 10/10、`parallel_partition_execution` 27/27、DQL 324/324、storage lib 1415/1415、`column_batch_test` 13/13。结果逐值一致，`group_by_count` 仍为 `[14|59]`、`distinct_limit` 仍为 `[14]`，两轮固定门均 `actual=10`、`actual_partitions=10`、`result_stable=true`、`spill_rows=0`，生产默认 `actual=8`。EXPLAIN 中 `expand_output_rows` 由 215488 降到 30473，`expand_output_us=0`，`typed_group_hits=110`；全局 `Distinct` / `TopN` 与 Exchange 契约未变。
+
+固定门两轮 `group_by_count` 为 35.08 / 27.78 ms（中位 31.43 ms，基线 39.59 / 33.89），`distinct_limit` 为 30.97 / 28.06 ms（中位 29.51 ms，基线 37.95 / 32.80）；两轮都下降，但都未同时满足“两轮均 ≤30 ms”的中间门，第一轮 `distinct_limit` 仅超 0.97 ms。生产默认单轮为 27.59 / 25.10 ms（基线 31.86 / 29.51），九条纯计数仍在 0.15–0.66 ms。`join_two_hop` 为 9.90 / 5.52 ms（第一轮高值未复现，第二轮与生产默认 5.57 ms 接近基线），`variable_path_count` 为 5.15 / 5.55 ms，结果分别为 `382018` / `400153` 且逐值不变。`expand_read_us` 固定门两轮由 131–197 ms 降到 101–109 ms，生产默认降到 73–77 ms；`expand_topology_read_us` 仍为 61–95 ms，是展开内部主导项。
+
+同数据集微基准相对本切片前基线：F1（2048 父）3821 us / 11.65 MB 降到 3042 us / 6.32 MB（时间 -20%、分配 -46%），F2 Out 6638 us / 15.37 MB 降到 5863 us / 10.05 MB（-12% / -35%），F5 5182 us / 13.06 MB 降到 4149 us / 7.74 MB（-20% / -41%）。时间降幅没有达到切片一设定的 25%，但分配与端到端均有一致收益，故保留直写；不把它描述为已跨过门槛。
+
+条件性 CSR 预取与微批排序没有进入本轮：前三项改动后拓扑读取仍是主导项，但本轮没有该预取变体的 F1/F5 ≥15% 与固定门 ≥10% 的 A/B 证据，按方案不引入无证明的局部性复杂度。判定：保留三项有可测收益且结果稳定的改动；`group_by_count ≤30 ms`、`distinct_limit` 两轮均 ≤30 ms 与 `join_two_hop ≤4 ms` 仍未达成，不用放宽并行、近似或截断换取门槛。日志、逐用例 JSON、EXPLAIN 与微基准见 `perf-data/parity/results/2026-11-24/packed-direct-write-key-passthrough/`。
+
+## 46. 条件性 CSR 预取的证明方法与语义复核（2026-11-24）
+
+上一节没有采纳 CSR 预取，因为缺少证明。本节补齐证明口径与验证代码：预取只能作为只读缓存提示，先在同一二进制的微基准里做 A/B，再决定是否进入生产路径。性能门沿用 F1/F5 至少 15% 时间下降且分配不增加、固定门端到端至少 10% 下降；语义门要求提示前后 `PackedEdgeTopology` 的 `parents`、`child_offsets`、`src`、`dst`、`edge_type_ids`、共享类型名、`rankings` 与 `destination_handles` 逐字段相等，CSR 的 `dump()` 不变，且 `visit_hot` 顺序不变。微批排序若被引入，还必须用原槽位映射恢复父顺序与行顺序；本轮没有引入排序，因此不存在重排风险。
+
+验证代码落在原模块：`MutableCsrTrait::prefetch_head` 默认无操作，`MutableCsr` 用 `black_box` 读 offset/degree 两列预热头部，`MappedFrozen` 预热行长度与偏移头；`CsrVariant` / `CsrShardSet` 只做分派，`EdgeStore` 增加带 leg 存在性判断的包装。首版 benchmark 通过只读 `StorageReader::prefetch_topology_heads` 在 packed 读取之前单独发提示，但父端点被解析两次、边表锁被获取两次，分配也随之增加；该 A/B 测到的是“重复解析 + 提示”，不是提示本身，因此已撤掉该 API，改为在 `out_topology_batch` / `in_topology_batch` 内复用本次扫描已解析的端点与已持有的表锁，以 `prefetch_ahead` 参数实现 A/B。生产入口仍传 0。`topology_read_bench.rs` 新增 F1 512/2048/4096 的密集与分散父批、F5 的“packed + head hint”对照，并逐字段断言预取前后 packed 输出相等；`csr_variant/tests.rs` 新增 `prefetch_head_is_read_only`，覆盖多行、多边的 `visit_hot` 序列与 `dump()` 不变。
+
+首版外置提示的退化（F1 2048 为 3026→3304 us、F5 为 4356→4631 us，分配也上升）主要来自重复端点解析与重复表锁，不能归因于预取。改为扫描内复用后分配完全相同，但结果仍不支持采纳：F1 密集 2048 为 3248→3295 us（+1.4%，噪声）、F5 为 4303→4276 us（-0.6%，噪声），而 F1 分散 2048 为 8496→10169 us（+19.7%）。原因是当前提示用 `black_box` 阻塞读两列头部，分散父批上每个提示都是真实 load，且与紧随其后的行读取没有形成有效重叠；标签判断与 lookahead 循环也增加了指令数。这只能否定当前黑盒读候选，不能否定真正的非阻塞预取指令，但后者尚未实现，也没有 ≥15% 证据。判定：拒绝该候选，生产拓扑读取路径保持上一节的按父直写；验证 API 与基准保留，用于后续有真实预取指令或局部性证据时重测。构建、storage 原有 1415/1415 与新增 `prefetch_head_is_read_only` 1/1、微基准均通过。
+
+随后实现了 x86_64 非阻塞 `_mm_prefetch(_MM_HINT_T0)` 候选，只提示 offset/degree 两个头部 cache line，其他目标空实现；unsafe 边界与语义在 `docs/archive/unsafe.md` 中记录，生产入口仍为 0。`topology_read_bench.rs` 对 lookahead 4/8/16/32 做扫描，逐字段 packed 输出断言与 `prefetch_head_is_read_only` 均通过。devs 结果显示没有可采纳收益：F1 密集 2048 基线 2983 us，四个距离分别为 3018/3020/3016/3017 us；F1 分散 2048 基线 5698 us，分别为 5701/5702/5704/5783 us；F5 基线 4222 us，hint=4/8/16/32 为 4170/4477/4520/4204 us，唯一轻微正向也在噪声范围内，远未达到 15% 门。分配量与基线完全一致。按预设门槛，已删除 unsafe intrinsic，把 `prefetch_head` 恢复为有文档的空实现，仅保留 A/B 钩子与验证；不需要修改生产读取入口，也不存在因预取引入的语义变更。
+
+当前保留实现仍有三项可量化但已被收益覆盖的额外开销：`PackedExpandPayload` 每键多带一个 `u64` 权重（Distinct 路径不用，约 244 KB/批），身份快路径仍需一次按目的端 ID 的哈希去重与一次存在性读取（存在性结果仍为 `Vec<Option<Vec<Value>>>`，空投影产生空 Vec），按父直写与父优先邻居遍历会在整批父点上持有边表读锁。三者分别换来一次累加、展开输出从 215488 行降到 30473 行，以及取消 event/scatter；固定门与微基准均显示净收益，且没有结果漂移，因此不回退第 45 节的三项改动。两跳的 `join_two_hop` 9.90 ms 是单轮高值，第二轮 5.52 ms、生产默认 5.57 ms 与基线同量级，也不构成回退依据。
+
+语义复核另发现并修正一处真实问题：身份直通在运行时 `resolved_dst_tag()` 返回 `None` 时仍可能回退到计划期 `dst_tag`，若目录在计划与执行之间漂移，目的端存在性检查会落在不同标签上，身份证明随之失效。现在只有在运行时标签解析成功且等于计划标签、并且计划标签非空时才允许直通，否则继续走原属性列读取。`linkrs-query` partitioning 49/49 通过；修正后固定门单轮 `group_by_count` 29.87 ms、`distinct_limit` 26.46 ms，结果仍为 `[14|59]` / `[14]`，`result_stable=true`、`actual=10`、`spill_rows=0`，EXPLAIN 仍显示 `expand_output_rows=30473` 且身份直通未被关闭。结论：预取候选本身无语义问题但未证明有收益；当前保留的身份直通与直写路径在补齐标签守卫后未发现语义漂移。日志、EXPLAIN 与逐用例 JSON 见 `perf-data/parity/results/2026-11-24/csr-prefetch-proof/`。

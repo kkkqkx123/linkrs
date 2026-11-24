@@ -59,6 +59,7 @@ pub(super) fn handle(
         ttl_active: None,
         dst_tag_cache: None,
         packed_key_name: None,
+        packed_identity_type: None,
         topology_schema: None,
         runtime: count_runtime.clone(),
     };
@@ -140,6 +141,7 @@ pub(super) fn handle_all(
         edge_required_props,
         dst_required_props,
         packed_key_name,
+        packed_identity_type,
         closed_loop,
         skip_rows,
         include_empty_paths,
@@ -166,6 +168,7 @@ pub(super) fn handle_all(
     let edge_required_props = edge_required_props.clone();
     let dst_required_props = dst_required_props.clone();
     let packed_key_name = packed_key_name.clone();
+    let packed_identity_type = packed_identity_type.clone();
     let closed_loop = *closed_loop;
     let include_empty_paths = *include_empty_paths;
     let mut skip_rows = *skip_rows;
@@ -231,6 +234,7 @@ pub(super) fn handle_all(
                         ttl_active: None,
                         dst_tag_cache: None,
                         packed_key_name: packed_key_name.clone(),
+                        packed_identity_type: packed_identity_type.clone(),
                         topology_schema: None,
                         runtime: count_runtime.clone(),
                     },
@@ -264,6 +268,7 @@ pub(super) fn handle_all(
                 ttl_active: None,
                 dst_tag_cache: None,
                 packed_key_name: packed_key_name.clone(),
+                packed_identity_type: packed_identity_type.clone(),
                 topology_schema: None,
                 runtime: count_runtime.clone(),
             };

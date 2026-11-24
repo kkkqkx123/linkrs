@@ -279,16 +279,20 @@ pub(crate) fn try_accumulate(
     true
 }
 
-/// Accumulate keys handed directly from a packed expand. Each key is one
-/// counted edge, so no row or typed-column materialization is needed.
+/// Accumulate keys handed directly from a packed expand. A weight folds the
+/// edges sharing one unique key into one contribution, so no row or
+/// typed-column materialization is needed.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn accumulate_packed_keys(
     state: &mut Option<TypedGroupCount>,
     group_map: &HashMap<RowKey, Vec<AggregateAccumulator>>,
     memory_tracker: &mut MemoryTracker,
     group_overhead: usize,
     keys: &[Value],
+    weights: &[u64],
+    multiplicity: u64,
 ) -> bool {
-    if !group_map.is_empty() || keys.is_empty() {
+    if !group_map.is_empty() || keys.is_empty() || weights.len() != keys.len() {
         return false;
     }
     let mut typed_keys = Vec::with_capacity(keys.len());
@@ -348,8 +352,8 @@ pub(crate) fn accumulate_packed_keys(
         });
     }
     let fast = state.as_mut().expect("typed group count initialized above");
-    for key in typed_keys {
-        *fast.counts.entry(key).or_insert(0) += 1;
+    for (key, weight) in typed_keys.into_iter().zip(weights) {
+        *fast.counts.entry(key).or_insert(0) += weight.saturating_mul(multiplicity);
     }
     true
 }

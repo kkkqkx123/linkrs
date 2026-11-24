@@ -567,6 +567,46 @@ pub(crate) fn packed_node_edge_headers_batch(
     edge_types: &[String],
     schema: &TopologySchema,
 ) -> StorageResult<PackedEdgeTopology> {
+    packed_node_edge_headers_batch_impl(
+        ctx, space, src_ids, handles, direction, edge_types, schema, 0,
+    )
+}
+
+/// A/B entry point used by the storage microbenchmark. The hint shares the
+/// scan's resolved endpoints and table guards, so it measures the adjacency
+/// head warm-up itself rather than a second endpoint resolution.
+pub(crate) fn packed_node_edge_headers_batch_prefetched(
+    ctx: &GraphStorageContext,
+    space: &str,
+    src_ids: &[VertexId],
+    handles: Option<&[Option<(u32, LabelId)>]>,
+    direction: EdgeDirection,
+    edge_types: &[String],
+    schema: &TopologySchema,
+    prefetch_ahead: usize,
+) -> StorageResult<PackedEdgeTopology> {
+    packed_node_edge_headers_batch_impl(
+        ctx,
+        space,
+        src_ids,
+        handles,
+        direction,
+        edge_types,
+        schema,
+        prefetch_ahead,
+    )
+}
+
+fn packed_node_edge_headers_batch_impl(
+    ctx: &GraphStorageContext,
+    space: &str,
+    src_ids: &[VertexId],
+    handles: Option<&[Option<(u32, LabelId)>]>,
+    direction: EdgeDirection,
+    edge_types: &[String],
+    schema: &TopologySchema,
+    prefetch_ahead: usize,
+) -> StorageResult<PackedEdgeTopology> {
     record_schema_read(ctx, space);
     let schema = if schema.matches(space, ctx.layout_version()) {
         Cow::Borrowed(schema)
@@ -616,9 +656,22 @@ pub(crate) fn packed_node_edge_headers_batch(
         let mut batches_by_type = Vec::with_capacity(endpoint_types.len());
         for (_, edge_label, src_label, dst_label) in &endpoint_types {
             let batches = if outward {
-                ctx.out_topology_batch(*edge_label, *src_label, &normalized, handles, ts)
+                ctx.out_topology_batch_prefetched(
+                    *edge_label,
+                    *src_label,
+                    &normalized,
+                    handles,
+                    ts,
+                    prefetch_ahead,
+                )
             } else {
-                ctx.in_topology_batch(*edge_label, *dst_label, &normalized, ts)
+                ctx.in_topology_batch_prefetched(
+                    *edge_label,
+                    *dst_label,
+                    &normalized,
+                    ts,
+                    prefetch_ahead,
+                )
             };
             batches_by_type.push(batches);
         }
@@ -692,9 +745,21 @@ pub(crate) fn packed_node_edge_headers_batch(
     let mut by_type = Vec::with_capacity(endpoint_types.len());
     let mut endpoint_pairs: Vec<(LabelId, u32)> = Vec::new();
     for (type_id, edge_label, src_label_id, dst_label_id) in &endpoint_types {
-        let out_batches =
-            ctx.out_topology_batch(*edge_label, *src_label_id, &normalized, handles, ts);
-        let in_batches = ctx.in_topology_batch(*edge_label, *dst_label_id, &normalized, ts);
+        let out_batches = ctx.out_topology_batch_prefetched(
+            *edge_label,
+            *src_label_id,
+            &normalized,
+            handles,
+            ts,
+            prefetch_ahead,
+        );
+        let in_batches = ctx.in_topology_batch_prefetched(
+            *edge_label,
+            *dst_label_id,
+            &normalized,
+            ts,
+            prefetch_ahead,
+        );
         for batches in [&out_batches, &in_batches] {
             endpoint_pairs.extend(
                 batches
@@ -989,13 +1054,14 @@ pub(crate) fn frontier_degree_batch(
         return portable_frontier_degrees(ctx, space, src_ids, direction, edge_types);
     }
     let (edge_label, src_label, dst_label) = resolved[0];
-    #[derive(Clone, Copy)]
-    struct NeighborEvent {
-        parent: usize,
-        label: LabelId,
-        endpoint: u32,
-    }
-    let mut events: Vec<NeighborEvent> = Vec::new();
+    let neighbor_label = if direction == EdgeDirection::Out {
+        dst_label
+    } else {
+        src_label
+    };
+    let mut offsets = vec![0usize; src_ids.len() + 1];
+    let mut raw_endpoints = Vec::new();
+    let mut foreign_label = false;
     if direction == EdgeDirection::Out {
         ctx.visit_out_nbrs_batched(
             edge_label,
@@ -1004,11 +1070,9 @@ pub(crate) fn frontier_degree_batch(
             src_ids,
             ts,
             |index, _, label, nbr| {
-                events.push(NeighborEvent {
-                    parent: index,
-                    label,
-                    endpoint: nbr.endpoint,
-                });
+                foreign_label |= label != neighbor_label;
+                raw_endpoints.push(nbr.endpoint);
+                offsets[index + 1] += 1;
             },
         );
     } else {
@@ -1019,41 +1083,19 @@ pub(crate) fn frontier_degree_batch(
             src_ids,
             ts,
             |index, _, label, nbr| {
-                events.push(NeighborEvent {
-                    parent: index,
-                    label,
-                    endpoint: nbr.endpoint,
-                });
+                foreign_label |= label != neighbor_label;
+                raw_endpoints.push(nbr.endpoint);
+                offsets[index + 1] += 1;
             },
         );
     }
-    let mut direct = vec![0usize; src_ids.len()];
-    for event in &events {
-        direct[event.parent] += 1;
-    }
-    let neighbor_label = if direction == EdgeDirection::Out {
-        dst_label
-    } else {
-        src_label
-    };
-    if events.iter().any(|event| event.label != neighbor_label) {
+    if foreign_label {
         return portable_frontier_degrees(ctx, space, src_ids, direction, edge_types);
     }
-
-    // Counting scatter keeps parent-major order without one Vec per parent.
-    let mut offsets = Vec::with_capacity(src_ids.len() + 1);
-    offsets.push(0);
-    for count in &direct {
-        let last = *offsets.last().expect("offsets start at zero");
-        offsets.push(last + count);
+    for index in 1..offsets.len() {
+        offsets[index] += offsets[index - 1];
     }
-    let mut raw_endpoints = vec![0u32; events.len()];
-    let mut cursors = offsets[..src_ids.len()].to_vec();
-    for event in events {
-        let position = cursors[event.parent];
-        cursors[event.parent] = position + 1;
-        raw_endpoints[position] = event.endpoint;
-    }
+    let direct: Vec<usize> = offsets.windows(2).map(|pair| pair[1] - pair[0]).collect();
 
     // Keep the portable path's dangling-neighbor visibility with one batched
     // resolution, then record the same read keys when a recorder is active.

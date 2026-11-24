@@ -69,6 +69,8 @@ pub(crate) fn next_partial_aggregate(
                     memory_tracker,
                     aggregate_functions.len() * ACCUMULATOR_OVERHEAD_BYTES,
                     &payload.keys,
+                    &payload.weights,
+                    chunk.multiplicity(),
                 )
             {
                 if let Some(rt) = ctx.runtime.as_ref() {
@@ -83,12 +85,14 @@ pub(crate) fn next_partial_aggregate(
                 .unwrap_or(width.saturating_sub(1));
             let null = Value::Null(NullType::Null);
             let mut rows = Vec::with_capacity(payload.keys.len());
-            for key in payload.keys {
+            for (key, weight) in payload.keys.into_iter().zip(payload.weights) {
                 let mut row = vec![null.clone(); width];
                 if slot < width {
                     row[slot] = key;
                 }
-                rows.push(row);
+                for _ in 0..weight {
+                    rows.push(row.clone());
+                }
             }
             chunk.rows = rows;
             chunk.typed_columns = None;

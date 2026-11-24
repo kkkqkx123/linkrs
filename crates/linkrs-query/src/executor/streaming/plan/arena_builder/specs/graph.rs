@@ -792,7 +792,7 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_expand_all_spec
     node: &crate::planning::plan::core::nodes::traversal::traversal_node::ExpandAllNode,
     _exec_ctx: &ExecutionContext,
 ) -> Result<GraphSpec, PlanBuildError> {
-    build_expand_all_spec_with_flags(node, _exec_ctx, node.count_only(), None)
+    build_expand_all_spec_with_flags(node, _exec_ctx, node.count_only(), None, None)
 }
 
 pub(in crate::executor::streaming::plan::arena_builder) fn build_expand_all_spec_with_flags(
@@ -800,6 +800,7 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_expand_all_spec
     _exec_ctx: &ExecutionContext,
     count_only: bool,
     packed_key_name: Option<String>,
+    packed_identity_type: Option<linkrs_core::DataType>,
 ) -> Result<GraphSpec, PlanBuildError> {
     Ok(GraphSpec::ExpandAll {
         edge_types: node.edge_types().to_vec(),
@@ -820,6 +821,7 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_expand_all_spec
         edge_required_props: node.edge_required_props().map(<[String]>::to_vec),
         dst_required_props: node.dst_required_props().map(<[String]>::to_vec),
         packed_key_name,
+        packed_identity_type,
         closed_loop: node.closed_loop(),
         skip_rows: node.skip_rows(),
         include_empty_paths: node.include_empty_paths(),

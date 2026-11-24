@@ -27,6 +27,14 @@ impl MutableCsr {
         &self.hot_list[start..end]
     }
 
+    /// Reserved read-only cache-hint slot for adjacency-head A/B runs.
+    ///
+    /// The non-blocking intrinsic candidate was measured and did not clear
+    /// the adoption gate, so the shipped implementation stays a no-op. The
+    /// hook remains so a future hint can be tested without changing scan
+    /// call sites, visibility or edge order.
+    pub fn prefetch_head(&self, _src_vid: u32) {}
+
     /// Primary hot plus cold slices of one row, locked to the same window.
     pub(super) fn primary_pair(&self, src_idx: usize) -> (&[HotNbr], &[ColdStamps]) {
         let (start, end) = self.primary_window(src_idx);

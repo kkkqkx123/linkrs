@@ -53,6 +53,8 @@ pub(super) struct ExpandCtx<'a> {
     pub(super) dst_tag_cache: Option<Option<String>>,
     /// Destination property name handed directly to a local blocking operator.
     pub(super) packed_key_name: Option<String>,
+    /// Declared identity type backing the direct key handoff.
+    pub(super) packed_identity_type: Option<linkrs_core::DataType>,
     /// Edge-type schema used by packed topology reads, resolved once for the
     /// whole execution under the query's fixed snapshot.
     pub(super) topology_schema: Option<Arc<crate::storage::TopologySchema>>,
@@ -116,6 +118,7 @@ pub enum GraphOperatorKind {
         edge_required_props: Option<Vec<String>>,
         dst_required_props: Option<Vec<String>>,
         packed_key_name: Option<String>,
+        packed_identity_type: Option<linkrs_core::DataType>,
         closed_loop: bool,
         skip_rows: bool,
         include_empty_paths: bool,
@@ -268,6 +271,7 @@ impl GraphOperator {
                 edge_required_props,
                 dst_required_props,
                 packed_key_name,
+                packed_identity_type,
                 closed_loop,
                 skip_rows,
                 include_empty_paths,
@@ -289,6 +293,7 @@ impl GraphOperator {
                 edge_required_props: edge_required_props.clone(),
                 dst_required_props: dst_required_props.clone(),
                 packed_key_name: packed_key_name.clone(),
+                packed_identity_type: packed_identity_type.clone(),
                 closed_loop: *closed_loop,
                 skip_rows: *skip_rows,
                 include_empty_paths: *include_empty_paths,

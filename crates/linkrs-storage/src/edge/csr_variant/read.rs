@@ -80,6 +80,21 @@ impl CsrVariant {
         }
     }
 
+    /// Warm one row's adjacency head metadata when the form has such heads.
+    ///
+    /// The hint is read-only: it neither changes the stored bytes nor decides
+    /// visibility. Forms without a separate head column no-op.
+    pub fn prefetch_head(&self, src_vid: u32) {
+        match self {
+            CsrVariant::Multiple(csr) => csr.prefetch_head(src_vid),
+            CsrVariant::Single(csr) => csr.prefetch_head(src_vid),
+            CsrVariant::Pure(csr) => csr.prefetch_head(src_vid),
+            CsrVariant::Bundled(csr) => csr.prefetch_head(src_vid),
+            CsrVariant::Frozen(csr) => csr.prefetch_head(src_vid),
+            CsrVariant::None { .. } => {}
+        }
+    }
+
     /// Fill a caller buffer with every physically stored entry of one vertex.
     ///
     /// Same content as the allocating trait accessor, without the per-vertex

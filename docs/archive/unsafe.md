@@ -226,3 +226,4 @@ unsafe fn edges_of_avx2(&self, src: VertexId, ts: Timestamp) -> Vec<Nbr> {
 2. **安全性可控**：通过边界检查和运行时检测确保安全
 3. **标准实践**：这是高性能 Rust 代码的标准模式
 4. **硬件支持**：现代 CPU 普遍支持 AVX2 指令集
+

@@ -19,6 +19,7 @@ use crate::planning::plan::core::nodes::base::plan_node_traits::{
 use crate::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode;
 use linkrs_core::types::expr::Expression;
 use linkrs_core::types::operators::AggregateFunction;
+use linkrs_core::DataType;
 
 /// Result of decomposing the logical root into a partitionable chain.
 pub(super) struct PartitionedChain<'a> {
@@ -146,7 +147,9 @@ pub(super) fn build_partition_local_fragments(
     exec_ctx: &ExecutionContext,
 ) -> Result<Vec<FragmentId>, PlanBuildError> {
     let mut partition_fids = Vec::with_capacity(spec.partition_count());
-    let packed_key_name = packed_expand_key(chain);
+    let packed_key = packed_expand_key(chain, exec_ctx);
+    let packed_key_name = packed_key.as_ref().map(|key| key.name.clone());
+    let packed_identity_type = packed_key.and_then(|key| key.identity_type);
     let packed_expand_id = chain
         .local
         .iter()
@@ -241,6 +244,7 @@ pub(super) fn build_partition_local_fragments(
                         exec_ctx,
                         expand.count_only(),
                         direct_key,
+                        packed_identity_type.clone(),
                     )?;
                     fid = ArenaPlanAssembler::push_graph_op(
                         operators,
@@ -339,32 +343,123 @@ fn local_topk_unproven<'a>(reason: &str) -> LocalTopKDecision<'a> {
 
 /// Destination property consumed directly by a partition-local blocking
 /// operator. Only single-key count and local distinct TopK shapes qualify.
-fn packed_expand_key(chain: &PartitionedChain<'_>) -> Option<String> {
-    if let Some((_, spec)) = local_distinct_topn(chain).pushed {
-        if let BlockingSpec::LocalTopKDistinct { key_name, .. } = spec {
-            return Some(key_name);
+struct PackedKeyHandoff {
+    name: String,
+    identity_type: Option<DataType>,
+}
+
+fn packed_expand_key(
+    chain: &PartitionedChain<'_>,
+    exec_ctx: &ExecutionContext,
+) -> Option<PackedKeyHandoff> {
+    let name = if let Some((_, spec)) = local_distinct_topn(chain).pushed {
+        let BlockingSpec::LocalTopKDistinct { key_name, .. } = spec else {
+            return None;
+        };
+        key_name
+    } else {
+        let (partial, _) = split_aggregate(chain.aggregate_split?);
+        let BlockingSpec::PartialAggregate {
+            group_by_expressions,
+            aggregate_functions,
+            aggregate_filters,
+            ..
+        } = partial
+        else {
+            return None;
+        };
+        if aggregate_filters.iter().any(Option::is_some)
+            || aggregate_functions.len() != 1
+            || !matches!(aggregate_functions[0].0, AggregateFunction::Count)
+        {
+            return None;
         }
-    }
-    let (partial, _) = split_aggregate(chain.aggregate_split?);
-    let BlockingSpec::PartialAggregate {
-        group_by_expressions,
-        aggregate_functions,
-        aggregate_filters,
-        ..
-    } = partial
-    else {
-        return None;
+        match group_by_expressions.as_slice() {
+            [Expression::Variable(name)] => name.clone(),
+            _ => return None,
+        }
     };
-    if aggregate_filters.iter().any(Option::is_some)
-        || aggregate_functions.len() != 1
-        || !matches!(aggregate_functions[0].0, AggregateFunction::Count)
+    Some(PackedKeyHandoff {
+        identity_type: packed_identity_type(chain, exec_ctx, &name),
+        name,
+    })
+}
+
+/// Prove that the handed-off key is the destination's declared primary key
+/// and that it is the only demanded destination property. The primary key
+/// mirrors the external vertex id by DDL contract, so the packed endpoint id
+/// can then stand in for the property read. No proof means no bypass.
+fn packed_identity_type(
+    chain: &PartitionedChain<'_>,
+    exec_ctx: &ExecutionContext,
+    key_name: &str,
+) -> Option<DataType> {
+    let expand = chain.local.iter().rev().find_map(|op| match *op {
+        PlanNodeEnum::ExpandAll(expand) => Some(expand),
+        _ => None,
+    })?;
+    if expand.any_edge_type()
+        || expand.edge_types().len() != 1
+        || expand.step_limit().unwrap_or(1) != 1
+        || expand.step_limits().is_some()
+        || expand.filter().is_some()
+        || expand.path_semantic().is_some()
     {
         return None;
     }
-    match group_by_expressions.as_slice() {
-        [Expression::Variable(name)] => Some(name.clone()),
+    let dst_var = expand.col_names().get(2)?.as_str();
+    let dst_tag = expand.dst_tag()?;
+    if dst_tag.is_empty() {
+        return None;
+    }
+    let key_expr = key_name_expr(chain, key_name)?;
+    let (variable, property) = match &key_expr {
+        Expression::Property { object, property } => {
+            let Expression::Variable(variable) = object.as_ref() else {
+                return None;
+            };
+            (variable.as_str(), property.as_str())
+        }
+        _ => return None,
+    };
+    if variable != dst_var {
+        return None;
+    }
+    let dst_props = expand.dst_required_props()?;
+    if dst_props.len() != 1 || dst_props[0].as_str() != property {
+        return None;
+    }
+    let space = exec_ctx.space_name.as_deref()?;
+    let reader = exec_ctx.storage.as_ref()?.read();
+    let tag = reader.get_tag(space, dst_tag).ok()??;
+    let primary = tag.properties.first()?;
+    if primary.name != property {
+        return None;
+    }
+    match primary.data_type {
+        DataType::SmallInt | DataType::Int | DataType::BigInt => Some(primary.data_type.clone()),
         _ => None,
     }
+}
+
+/// Resolve the grouping key back to its projected expression so an alias
+/// cannot be mistaken for a declared identity column.
+fn key_name_expr(chain: &PartitionedChain<'_>, key_name: &str) -> Option<Expression> {
+    for op in chain.local.iter().rev() {
+        let PlanNodeEnum::Project(project) = op else {
+            continue;
+        };
+        for column in project.columns() {
+            if column.alias != key_name {
+                continue;
+            }
+            return column
+                .expression
+                .expression()
+                .map(|meta| meta.inner().clone());
+        }
+    }
+    None
 }
 
 /// Single-key group aggregate whose following TopN sorts by that key. Every

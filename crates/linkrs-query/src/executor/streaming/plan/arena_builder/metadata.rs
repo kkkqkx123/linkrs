@@ -1177,6 +1177,7 @@ mod tests {
             edge_required_props: edge_props,
             dst_required_props: dst_props,
             packed_key_name: None,
+            packed_identity_type: None,
             closed_loop: true,
             skip_rows: true,
             include_empty_paths: false,

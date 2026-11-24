@@ -24,11 +24,12 @@ use linkrs_core::{EdgeHeader, Value};
 
 /// Narrow handoff from a packed expand to a partition-local blocking
 /// operator. Keys are the exact projected destination values the downstream
-/// key expression expects; aggregate contributions are one per key.
+/// key expression expects; each weight counts the edges folded into one key.
 #[derive(Debug, Clone)]
 pub struct PackedExpandPayload {
     pub key_name: String,
     pub keys: Vec<Value>,
+    pub weights: Vec<u64>,
 }
 
 impl PackedExpandPayload {
