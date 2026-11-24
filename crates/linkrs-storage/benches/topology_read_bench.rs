@@ -1,8 +1,9 @@
-//! Batch topology read microbenchmark.
+//! Batch topology and destination read microbenchmark.
 //!
 //! Measures the storage work behind one columnar expand batch: adjacency
-//! materialization, per-edge endpoint translation, and the lean degree-only
-//! path. No parser, planner or execution pipeline is involved.
+//! materialization, per-edge endpoint translation, destination deduplication
+//! and the flat property views used by the query engine. No parser, planner
+//! or execution pipeline is involved.
 //!
 //! Run with:
 //!   cargo bench -p linkrs-storage --bench topology_read_bench
@@ -12,6 +13,7 @@ use linkrs_core::vertex_edge_path::Tag;
 use linkrs_core::{DataType, Edge, EdgeDirection, Value, Vertex};
 use linkrs_storage::{GraphStorage, StorageReader, StorageSchemaOps, StorageWriter};
 use std::alloc::{GlobalAlloc, Layout, System};
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
@@ -43,6 +45,8 @@ const EDGE: &str = "Link";
 const VERTEX_COUNT: i64 = 20_000;
 const EDGES_PER_VERTEX: usize = 16;
 const SEED_COUNT: usize = 2048;
+const BATCH_SIZES: [usize; 3] = [512, 2048, 4096];
+const UNIQUE_RATES: [usize; 3] = [100, 50, 10];
 const ITERATIONS: usize = 20;
 
 fn setup() -> GraphStorage {
@@ -106,183 +110,332 @@ fn setup() -> GraphStorage {
     storage
 }
 
+fn vid(id: i64) -> VertexId {
+    VertexId::try_from_int64(id).expect("valid vertex id")
+}
+
+/// The dense prefix keeps F1/F4/F5 comparable with earlier packed-read runs.
+fn prefix_seeds(count: usize) -> Vec<VertexId> {
+    (0..count).map(|i| vid(i as i64)).collect()
+}
+
+/// Seeds spread across the whole key space so every direction has work.
+fn spread_seeds(count: usize) -> Vec<VertexId> {
+    let stride = VERTEX_COUNT as usize / count;
+    (0..count).map(|i| vid((i * stride) as i64)).collect()
+}
+
 fn median_us(samples: &[u128]) -> u128 {
     let mut values = samples.to_vec();
     values.sort_unstable();
     values[values.len() / 2]
 }
 
-fn report(label: &str, samples: Vec<u128>, bytes: u128, children: usize) {
+/// Every reported figure is per measured call: median wall time, allocated
+/// bytes, and the same bytes normalized by topology rows and unique dests.
+fn report(label: &str, samples: Vec<u128>, bytes: u128, edges: usize, unique: usize) {
     let us = median_us(&samples);
+    let bytes_per_edge = if edges == 0 { 0 } else { bytes / edges as u128 };
+    let bytes_per_unique = if unique == 0 {
+        0
+    } else {
+        bytes / unique as u128
+    };
     println!(
-        "{label:<28} {us:>8} us  {ns_per_parent:>7} ns/parent  {bytes:>10} B/call  {bytes_per_parent:>8} B/parent  children={children}",
-        ns_per_parent = us.saturating_mul(1000) / SEED_COUNT as u128,
-        bytes_per_parent = bytes / SEED_COUNT as u128,
+        "{label:<30} {us:>8} us  {bytes:>10} B/call  {bytes_per_edge:>9} B/edge  {bytes_per_unique:>13} B/unique-dest  edges={edges} unique={unique}",
     );
 }
 
-fn main() {
-    println!("== batch topology read microbenchmark ==");
-    let storage = setup();
-    let seeds: Vec<VertexId> = (0..SEED_COUNT as i64)
-        .map(|id| VertexId::try_from_int64(id).expect("valid vertex id"))
-        .collect();
-    let edge_types = vec![EDGE.to_string()];
-    let no_types: Vec<String> = Vec::new();
-    let children = SEED_COUNT * EDGES_PER_VERTEX;
-    println!("seeds={SEED_COUNT}, edges/seed={EDGES_PER_VERTEX}");
-
-    let mut packed_samples = Vec::with_capacity(ITERATIONS);
-    let mut packed_bytes = 0u128;
+fn measure<T>(mut operation: impl FnMut() -> T) -> (Vec<u128>, u128) {
+    let mut samples = Vec::with_capacity(ITERATIONS);
+    let mut bytes = 0u128;
     for _ in 0..ITERATIONS {
         let before = ALLOCATED_BYTES.load(Ordering::Relaxed);
         let start = Instant::now();
-        let packed = storage
+        let value = operation();
+        samples.push(start.elapsed().as_micros());
+        bytes += ALLOCATED_BYTES
+            .load(Ordering::Relaxed)
+            .saturating_sub(before) as u128;
+        std::hint::black_box(value);
+    }
+    (samples, bytes / ITERATIONS as u128)
+}
+
+/// Emulate the query view: collapse repeated ids to one storage lookup, then
+/// expand cached values back into input order. The split timings show whether
+/// the storage read or the view assembly dominates.
+fn destination_view(
+    storage: &GraphStorage,
+    ids: &[VertexId],
+    projection: &[Arc<str>],
+) -> (u64, u64, usize, usize) {
+    let dedup_started = Instant::now();
+    let mut unique = Vec::with_capacity(ids.len());
+    let mut slots = Vec::with_capacity(ids.len());
+    let mut index = HashMap::new();
+    for id in ids {
+        let slot = *index.entry(*id).or_insert_with(|| {
+            unique.push(*id);
+            unique.len() - 1
+        });
+        slots.push(slot);
+    }
+    let mut view_us = dedup_started.elapsed().as_micros() as u64;
+
+    let read_started = Instant::now();
+    let columns = storage
+        .get_vertex_property_columns_batch(SPACE, TAG, &unique, projection)
+        .expect("property column read");
+    let read_us = read_started.elapsed().as_micros() as u64;
+    let present: Vec<bool> = columns.iter().map(Option::is_some).collect();
+    let missing = present.iter().filter(|found| !**found).count();
+    let names = projection.len();
+
+    let expansion_started = Instant::now();
+    let mut values: Vec<Vec<Value>> = vec![Vec::with_capacity(unique.len()); names];
+    for column in columns {
+        let row = column.unwrap_or_else(|| vec![Value::Null(linkrs_core::NullType::Null); names]);
+        for (slot, value) in row.into_iter().enumerate() {
+            values[slot].push(value);
+        }
+    }
+    let mut edge_present = vec![false; ids.len()];
+    let mut edge_values: Vec<Vec<Value>> = vec![Vec::with_capacity(ids.len()); names];
+    for (edge, slot) in slots.into_iter().enumerate() {
+        edge_present[edge] = present[slot];
+        for (column, value) in edge_values.iter_mut().zip(&values) {
+            column.push(value[slot].clone());
+        }
+    }
+    std::hint::black_box((edge_present, edge_values));
+    view_us += expansion_started.elapsed().as_micros() as u64;
+    (read_us, view_us, unique.len(), missing)
+}
+
+fn measure_destination_view(
+    storage: &GraphStorage,
+    ids: &[VertexId],
+    projection: &[Arc<str>],
+) -> (Vec<u128>, Vec<u128>, Vec<u128>, u128) {
+    let mut totals = Vec::with_capacity(ITERATIONS);
+    let mut reads = Vec::with_capacity(ITERATIONS);
+    let mut views = Vec::with_capacity(ITERATIONS);
+    let mut bytes = 0u128;
+    for _ in 0..ITERATIONS {
+        let before = ALLOCATED_BYTES.load(Ordering::Relaxed);
+        let start = Instant::now();
+        let (read_us, view_us, _, _) = destination_view(storage, ids, projection);
+        totals.push(start.elapsed().as_micros());
+        reads.push(read_us as u128);
+        views.push(view_us as u128);
+        bytes += ALLOCATED_BYTES
+            .load(Ordering::Relaxed)
+            .saturating_sub(before) as u128;
+    }
+    (totals, reads, views, bytes / ITERATIONS as u128)
+}
+
+fn main() {
+    println!("== batch topology and destination read microbenchmark ==");
+    let storage = setup();
+    let edge_types = vec![EDGE.to_string()];
+    let no_types: Vec<String> = Vec::new();
+    let projected: Vec<Arc<str>> = vec![Arc::from("id")];
+    let seeds = spread_seeds(SEED_COUNT);
+    let dense_seeds = prefix_seeds(SEED_COUNT);
+
+    println!("vertices={VERTEX_COUNT}, edges/vertex={EDGES_PER_VERTEX}, iterations={ITERATIONS}");
+
+    println!("-- F1 packed topology by parent batch --");
+    for &count in &BATCH_SIZES {
+        let parents = prefix_seeds(count);
+        let children = count * EDGES_PER_VERTEX;
+        let (samples, bytes) = measure(|| {
+            storage
+                .get_packed_node_edge_headers_batch(
+                    SPACE,
+                    &parents,
+                    None,
+                    EdgeDirection::Out,
+                    &edge_types,
+                )
+                .expect("packed read")
+        });
+        let first = storage
             .get_packed_node_edge_headers_batch(
                 SPACE,
-                &seeds,
+                &parents,
                 None,
                 EdgeDirection::Out,
                 &edge_types,
             )
             .expect("packed read");
-        packed_samples.push(start.elapsed().as_micros());
-        assert_eq!(packed.child_offsets.last().copied(), Some(children));
-        packed_bytes += ALLOCATED_BYTES
-            .load(Ordering::Relaxed)
-            .saturating_sub(before) as u128;
+        assert_eq!(first.child_offsets.last().copied(), Some(children));
+        report(
+            &format!("F1 packed batch={count}"),
+            samples,
+            bytes,
+            children,
+            0,
+        );
     }
+
+    println!("-- F2 direction and edge-type filtering --");
+    let children = SEED_COUNT * EDGES_PER_VERTEX;
+    for (direction, name) in [
+        (EdgeDirection::Out, "out"),
+        (EdgeDirection::In, "in"),
+        (EdgeDirection::Both, "both"),
+    ] {
+        for (types, filtered) in [(&edge_types, "filtered"), (&no_types, "all")] {
+            let (samples, bytes) = measure(|| {
+                storage
+                    .get_packed_node_edge_headers_batch(SPACE, &seeds, None, direction, types)
+                    .expect("packed read")
+            });
+            let first = storage
+                .get_packed_node_edge_headers_batch(SPACE, &seeds, None, direction, types)
+                .expect("packed read");
+            let expected = if direction == EdgeDirection::Both {
+                children * 2
+            } else {
+                children
+            };
+            assert_eq!(first.child_offsets.last().copied(), Some(expected));
+            report(
+                &format!("F2 {name} {filtered}"),
+                samples,
+                bytes,
+                children,
+                0,
+            );
+        }
+    }
+
+    println!("-- F3 destination uniqueness --");
+    let packed = storage
+        .get_packed_node_edge_headers_batch(
+            SPACE,
+            &dense_seeds,
+            None,
+            EdgeDirection::Out,
+            &edge_types,
+        )
+        .expect("packed read");
+    let mut destinations = Vec::with_capacity(packed.dst.len());
+    let mut seen = HashSet::new();
+    for id in &packed.dst {
+        if seen.insert(*id) {
+            destinations.push(*id);
+        }
+    }
+    assert!(destinations.len() >= SEED_COUNT);
+    for &rate in &UNIQUE_RATES {
+        let unique_target = (SEED_COUNT * rate / 100).max(1);
+        let ids: Vec<VertexId> = (0..SEED_COUNT)
+            .map(|i| destinations[i % unique_target])
+            .collect();
+        let (samples, reads, views, bytes) = measure_destination_view(&storage, &ids, &projected);
+        let unique = ids.iter().collect::<HashSet<_>>().len();
+        report(
+            &format!("F3 unique {rate}%"),
+            samples,
+            bytes,
+            ids.len(),
+            unique,
+        );
+        println!(
+            "    storage_read={} us, view_assembly={} us",
+            median_us(&reads),
+            median_us(&views),
+        );
+    }
+
+    println!("-- F4 destination read shapes --");
+    let (samples, bytes) = measure(|| {
+        storage
+            .get_vertex_property_columns_batch(SPACE, TAG, &dense_seeds, &[])
+            .expect("existence read")
+    });
     report(
-        "packed_headers (current)",
-        packed_samples,
-        packed_bytes / ITERATIONS as u128,
-        children,
+        "F4 existence",
+        samples,
+        bytes,
+        dense_seeds.len(),
+        dense_seeds.len(),
     );
 
-    let mut legacy_samples = Vec::with_capacity(ITERATIONS);
-    let mut legacy_bytes = 0u128;
-    for _ in 0..ITERATIONS {
-        let before = ALLOCATED_BYTES.load(Ordering::Relaxed);
-        let start = Instant::now();
-        let batches = storage
-            .get_node_edge_headers_batch(SPACE, &seeds, None, EdgeDirection::Out, &edge_types)
-            .expect("legacy header read");
-        legacy_samples.push(start.elapsed().as_micros());
-        assert_eq!(batches.iter().map(Vec::len).sum::<usize>(), children);
-        legacy_bytes += ALLOCATED_BYTES
-            .load(Ordering::Relaxed)
-            .saturating_sub(before) as u128;
-    }
+    let (samples, bytes) = measure(|| {
+        storage
+            .get_vertex_property_columns_batch(SPACE, TAG, &dense_seeds, &projected)
+            .expect("property column read")
+    });
     report(
-        "per_parent_headers",
-        legacy_samples,
-        legacy_bytes / ITERATIONS as u128,
-        children,
+        "F4 property column",
+        samples,
+        bytes,
+        dense_seeds.len(),
+        dense_seeds.len(),
     );
 
-    let mut neighbor_samples = Vec::with_capacity(ITERATIONS);
-    let mut neighbor_bytes = 0u128;
-    for _ in 0..ITERATIONS {
-        let before = ALLOCATED_BYTES.load(Ordering::Relaxed);
-        let start = Instant::now();
-        let batches = storage
-            .neighbor_dst_ids_batch(SPACE, &seeds, EdgeDirection::Out, &no_types)
-            .expect("neighbor read");
-        neighbor_samples.push(start.elapsed().as_micros());
-        assert_eq!(batches.iter().map(Vec::len).sum::<usize>(), children);
-        neighbor_bytes += ALLOCATED_BYTES
-            .load(Ordering::Relaxed)
-            .saturating_sub(before) as u128;
-    }
+    let (samples, bytes) = measure(|| {
+        storage
+            .get_vertices_batch(SPACE, TAG, &dense_seeds)
+            .expect("full vertex read")
+    });
     report(
-        "neighbor_ids (lean)",
-        neighbor_samples,
-        neighbor_bytes / ITERATIONS as u128,
-        children,
+        "F4 full entity",
+        samples,
+        bytes,
+        dense_seeds.len(),
+        dense_seeds.len(),
     );
 
-    let mut degree_samples = Vec::with_capacity(ITERATIONS);
-    let mut degree_bytes = 0u128;
-    for _ in 0..ITERATIONS {
-        let before = ALLOCATED_BYTES.load(Ordering::Relaxed);
-        let start = Instant::now();
-        let degrees = storage
-            .out_degree_batch(SPACE, &seeds, EdgeDirection::Out, &no_types)
-            .expect("degree read");
-        degree_samples.push(start.elapsed().as_micros());
-        assert_eq!(degrees.iter().sum::<usize>(), children);
-        degree_bytes += ALLOCATED_BYTES
-            .load(Ordering::Relaxed)
-            .saturating_sub(before) as u128;
-    }
-    report(
-        "out_degree (count only)",
-        degree_samples,
-        degree_bytes / ITERATIONS as u128,
-        children,
-    );
-
-    let projected: Vec<Arc<str>> = vec![Arc::from("id")];
-    let mut full_vertex_samples = Vec::with_capacity(ITERATIONS);
-    let mut full_vertex_bytes = 0u128;
-    for _ in 0..ITERATIONS {
-        let before = ALLOCATED_BYTES.load(Ordering::Relaxed);
-        let start = Instant::now();
-        let vertices = storage
-            .get_vertices_batch(SPACE, TAG, &seeds)
-            .expect("full vertex read");
-        full_vertex_samples.push(start.elapsed().as_micros());
-        assert_eq!(vertices.len(), SEED_COUNT);
-        full_vertex_bytes += ALLOCATED_BYTES
-            .load(Ordering::Relaxed)
-            .saturating_sub(before) as u128;
-    }
-    report(
-        "destination full vertex",
-        full_vertex_samples,
-        full_vertex_bytes / ITERATIONS as u128,
-        SEED_COUNT,
-    );
-
-    let mut vertex_proj_samples = Vec::with_capacity(ITERATIONS);
-    let mut vertex_proj_bytes = 0u128;
-    for _ in 0..ITERATIONS {
-        let before = ALLOCATED_BYTES.load(Ordering::Relaxed);
-        let start = Instant::now();
-        let vertices = storage
-            .get_vertices_projected_batch(SPACE, TAG, &seeds, &projected)
-            .expect("projected vertex read");
-        vertex_proj_samples.push(start.elapsed().as_micros());
-        assert_eq!(vertices.len(), SEED_COUNT);
-        vertex_proj_bytes += ALLOCATED_BYTES
-            .load(Ordering::Relaxed)
-            .saturating_sub(before) as u128;
-    }
-    report(
-        "destination projected id",
-        vertex_proj_samples,
-        vertex_proj_bytes / ITERATIONS as u128,
-        SEED_COUNT,
-    );
-
-    let mut column_samples = Vec::with_capacity(ITERATIONS);
-    let mut column_bytes = 0u128;
-    for _ in 0..ITERATIONS {
-        let before = ALLOCATED_BYTES.load(Ordering::Relaxed);
-        let start = Instant::now();
+    println!("-- F5 packed plus destination --");
+    let dest_ids: Vec<VertexId> = packed.dst[..SEED_COUNT].to_vec();
+    let (samples, bytes) = measure(|| {
+        let topology = storage
+            .get_packed_node_edge_headers_batch(
+                SPACE,
+                &dense_seeds,
+                None,
+                EdgeDirection::Out,
+                &edge_types,
+            )
+            .expect("packed read");
         let columns = storage
-            .get_vertex_property_columns_batch(SPACE, TAG, &seeds, &projected)
+            .get_vertex_property_columns_batch(SPACE, TAG, &dest_ids, &projected)
             .expect("property column read");
-        column_samples.push(start.elapsed().as_micros());
-        assert_eq!(columns.len(), SEED_COUNT);
-        column_bytes += ALLOCATED_BYTES
-            .load(Ordering::Relaxed)
-            .saturating_sub(before) as u128;
-    }
+        (topology.child_offsets.len(), columns.len())
+    });
     report(
-        "destination property column",
-        column_samples,
-        column_bytes / ITERATIONS as u128,
-        SEED_COUNT,
+        "F5 packed + destination",
+        samples,
+        bytes,
+        children,
+        dest_ids.len(),
     );
+
+    println!("-- existing reference cases --");
+    let (samples, bytes) = measure(|| {
+        storage
+            .get_node_edge_headers_batch(SPACE, &dense_seeds, None, EdgeDirection::Out, &edge_types)
+            .expect("legacy header read")
+    });
+    report("per_parent_headers", samples, bytes, children, 0);
+
+    let (samples, bytes) = measure(|| {
+        storage
+            .neighbor_dst_ids_batch(SPACE, &dense_seeds, EdgeDirection::Out, &no_types)
+            .expect("neighbor read")
+    });
+    report("neighbor_ids (lean)", samples, bytes, children, 0);
+
+    let (samples, bytes) = measure(|| {
+        storage
+            .out_degree_batch(SPACE, &dense_seeds, EdgeDirection::Out, &no_types)
+            .expect("degree read")
+    });
+    report("out_degree (count only)", samples, bytes, children, 0);
 }

@@ -48,6 +48,9 @@ pub(super) struct ExpandCtx<'a> {
     /// fixes the edge-type set, so the flag is constant for the operator and
     /// is computed at most once per `ExpandCtx`.
     pub(super) ttl_active: Option<bool>,
+    /// Neighbor tag resolved once for this operator instance. The plan fixes
+    /// space, edge types and direction, so every batch shares the result.
+    pub(super) dst_tag_cache: Option<Option<String>>,
     /// Runtime used to report count-frontier fallbacks in EXPLAIN ANALYZE.
     pub(super) runtime: Option<Arc<ExecutionRuntime>>,
 }

@@ -153,4 +153,4 @@ allow_partition_metadata_count = false
 
 基线子计时之和占 `scan_read_us` 的 96%–98%；固定门基线枚举为 262–463 ms、重复可见性复核为 102–262 ms，目标用例 `scan_decode_us=0`，确认阶段一走拓扑-only 扫描。最终回测中两轮 `scan_read_us` 降为 87–120 ms（基线 492–700 ms，降约 82%）；`group_by_count` 为 53.34 / 58.04 ms、`distinct_limit` 为 47.67 / 39.84 ms；生产默认单轮为 55.53 / 38.38 ms，九条纯计数无实质回归。正确性门全绿，并新增枚举后提交快照回归用例。
 
-最终门中的 `group_by_count` ≤40 ms 与 `distinct_limit` ≤30 ms 尚未同时达成；剩余自耗时转向展开读取。按第 4 节护栏不扩大并行放行面、不引入近似，保留已验证的扫描改动集合。完整数据见 `perf-data/parity/results/2026-11-23/scan-visibility-decode-remediation/`。
+最终门中的 `group_by_count` ≤40 ms 与 `distinct_limit` ≤30 ms 尚未同时达成；剩余自耗时转向展开读取。按第 4 节护栏不扩大并行放行面、不引入近似，保留已验证的扫描改动集合。下一阶段任务见 `docs/plan/expand-read-and-gate-convergence-design.md`。完整数据见 `perf-data/parity/results/2026-11-23/scan-visibility-decode-remediation/`。

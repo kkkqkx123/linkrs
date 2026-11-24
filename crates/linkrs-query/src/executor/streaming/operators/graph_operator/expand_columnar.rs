@@ -3,6 +3,7 @@ use std::sync::Arc;
 use crate::executor::streaming::chunk::{
     gather_typed_column, DataChunk, EdgeHeaderColumn, TypedColumn,
 };
+use crate::executor::streaming::runtime::ColumnarStats;
 use crate::executor::streaming::slot::SlotLayout;
 use crate::storage::{EdgeTopology, PackedEdgeTopology, QueryStorage};
 use linkrs_core::error::QueryError;
@@ -10,8 +11,8 @@ use linkrs_core::types::storage_ids::VertexId;
 use linkrs_core::{Edge, EdgeDirection, EdgeHeader, Value, Vertex};
 
 use super::expand_dispatch::{
-    bypass_column, closed_loop_dst_tag, edge_bypass_value, edge_projection, has_bypass_conflict,
-    hop_bypass, ColumnarOutcome,
+    bypass_column, edge_bypass_value, edge_projection, has_bypass_conflict, hop_bypass,
+    ColumnarOutcome,
 };
 use super::expand_seeds::{identity_seed_handles, parse_seeds, seed_slot};
 use super::ExpandCtx;
@@ -73,6 +74,16 @@ impl DestinationView {
     }
 }
 
+/// Destination read result with its storage-only and view-only costs kept
+/// separate for EXPLAIN attribution.
+pub(super) struct DestinationRead {
+    pub(super) view: DestinationView,
+    pub(super) read_us: u64,
+    pub(super) view_us: u64,
+    pub(super) unique: usize,
+    pub(super) missing: usize,
+}
+
 pub(super) fn read_destinations(
     reader: &dyn QueryStorage,
     space_name: &str,
@@ -80,10 +91,11 @@ pub(super) fn read_destinations(
     ids: &[VertexId],
     dst_props: Option<&Vec<String>>,
     property_columns_only: bool,
-) -> Result<DestinationView, QueryError> {
+) -> Result<DestinationRead, QueryError> {
     // A hop emits one row per edge, but many edges share a destination.
     // Point lookups at one snapshot are pure, so fetch each distinct id once
     // and restore input order for the row assembly.
+    let dedup_started = std::time::Instant::now();
     let mut unique = Vec::with_capacity(ids.len());
     let mut slots = Vec::with_capacity(ids.len());
     let mut index = std::collections::HashMap::new();
@@ -94,6 +106,8 @@ pub(super) fn read_destinations(
         });
         slots.push(slot);
     }
+    let mut view_us = dedup_started.elapsed().as_micros() as u64;
+    let unique_count = unique.len();
 
     if property_columns_only {
         if let Some(props) = dst_props {
@@ -104,13 +118,17 @@ pub(super) fn read_destinations(
                 .iter()
                 .map(|s| std::sync::Arc::from(s.as_str()))
                 .collect();
+            let read_started = std::time::Instant::now();
             let columns = reader.get_vertex_property_columns_batch(
                 space_name,
                 dst_tag,
                 &unique,
                 &projection,
             )?;
+            let read_us = read_started.elapsed().as_micros() as u64;
             let present: Vec<bool> = columns.iter().map(Option::is_some).collect();
+            let missing = present.iter().filter(|found| !**found).count();
+            let expansion_started = std::time::Instant::now();
             let mut values: Vec<Vec<Value>> = vec![Vec::with_capacity(unique.len()); names.len()];
             for column in columns {
                 let row = column
@@ -127,14 +145,22 @@ pub(super) fn read_destinations(
                     column.push(value[slot].clone());
                 }
             }
-            return Ok(DestinationView::Properties {
-                names,
-                present: edge_present,
-                values: edge_values,
+            view_us += expansion_started.elapsed().as_micros() as u64;
+            return Ok(DestinationRead {
+                view: DestinationView::Properties {
+                    names,
+                    present: edge_present,
+                    values: edge_values,
+                },
+                read_us,
+                view_us,
+                unique: unique_count,
+                missing,
             });
         }
     }
 
+    let read_started = std::time::Instant::now();
     let vertices = match dst_props {
         Some(props) if !props.is_empty() => {
             let mut sorted = props.clone();
@@ -149,12 +175,23 @@ pub(super) fn read_destinations(
         Some(_) => reader.get_vertices_projected_batch(space_name, dst_tag, &unique, &[])?,
         None => reader.get_vertices_batch(space_name, dst_tag, &unique)?,
     };
-    Ok(DestinationView::Vertices(
+    let read_us = read_started.elapsed().as_micros() as u64;
+    let missing = vertices.iter().filter(|vertex| vertex.is_none()).count();
+    let expansion_started = std::time::Instant::now();
+    let view = DestinationView::Vertices(
         slots
             .into_iter()
             .map(|slot| vertices[slot].clone())
             .collect(),
-    ))
+    );
+    view_us += expansion_started.elapsed().as_micros() as u64;
+    Ok(DestinationRead {
+        view,
+        read_us,
+        view_us,
+        unique: unique_count,
+        missing,
+    })
 }
 
 /// Explicit layout lockstep check: typed arms and row width must match the
@@ -308,6 +345,8 @@ pub(super) fn expand_single_step_columnar(
     if seed_vids.is_empty() {
         return Ok(ColumnarOutcome::Empty);
     }
+    let stats: Option<std::sync::Arc<ColumnarStats>> =
+        ctx.runtime.as_ref().map(|runtime| runtime.columnar_stats());
     let projection = edge_projection(ctx.edge_required_props.as_deref());
     let projection_ref = projection.as_deref();
     let edge_empty = matches!(ctx.edge_required_props.as_ref(), Some(v) if v.is_empty());
@@ -337,8 +376,9 @@ pub(super) fn expand_single_step_columnar(
             edge_types,
         );
         let read_us = read_started.elapsed().as_micros() as u64;
-        if let Some(runtime) = ctx.runtime.as_ref() {
-            runtime.columnar_stats().record_expand_read_us(read_us);
+        if let Some(stats) = &stats {
+            stats.record_expand_read_us(read_us);
+            stats.record_expand_phases(read_us, 0, 0, 0, 0);
         }
         let packed = read?;
         for parent in 0..packed.parent_count() {
@@ -370,8 +410,9 @@ pub(super) fn expand_single_step_columnar(
             projection_ref,
         );
         let read_us = read_started.elapsed().as_micros() as u64;
-        if let Some(runtime) = ctx.runtime.as_ref() {
-            runtime.columnar_stats().record_expand_read_us(read_us);
+        if let Some(stats) = &stats {
+            stats.record_expand_read_us(read_us);
+            stats.record_expand_phases(read_us, 0, 0, 0, 0);
         }
         let edge_batches = read?;
         for (seed_idx, (vid, edges)) in seed_vids.iter().zip(edge_batches.iter()).enumerate() {
@@ -392,6 +433,9 @@ pub(super) fn expand_single_step_columnar(
             }
         }
     }
+    if let Some(stats) = &stats {
+        stats.record_expand_topology_counts(seed_vids.len() as u64, all_dst.len() as u64);
+    }
     if all_dst.is_empty() {
         // OPTIONAL MATCH must preserve seeds with no reachable neighbour.
         // The columnar path has no pending hops to project; decline so the
@@ -401,8 +445,14 @@ pub(super) fn expand_single_step_columnar(
         }
         return Ok(ColumnarOutcome::Empty);
     }
-    let dst_tag_owned = closed_loop_dst_tag(reader, space_name, edge_types, direction, ctx.dst_tag)
+    let tag_started = std::time::Instant::now();
+    let dst_tag_owned = ctx
+        .resolved_dst_tag(reader)
         .unwrap_or_else(|| ctx.dst_tag.to_string());
+    let tag_us = tag_started.elapsed().as_micros() as u64;
+    if let Some(stats) = &stats {
+        stats.record_expand_phases(0, 0, tag_us, 0, 0);
+    }
     let dst_tag = dst_tag_owned.as_str();
     let dest_started = std::time::Instant::now();
     let read = read_destinations(
@@ -414,19 +464,31 @@ pub(super) fn expand_single_step_columnar(
         rowless || dst_empty,
     );
     let dest_us = dest_started.elapsed().as_micros() as u64;
-    if let Some(runtime) = ctx.runtime.as_ref() {
-        runtime.columnar_stats().record_expand_read_us(dest_us);
+    let read = read?;
+    if let Some(stats) = &stats {
+        stats.record_expand_read_us(dest_us);
+        stats.record_expand_phases(0, read.read_us, 0, read.view_us, 0);
+        stats.record_expand_destination_counts(read.unique as u64, read.missing as u64);
     }
-    let destinations = read?;
+    let destinations = read.view;
+    let view_started = std::time::Instant::now();
     let mut kept: Vec<usize> = Vec::with_capacity(all_dst.len());
     for i in 0..destinations.len() {
         if destinations.present(i) {
             kept.push(i);
         }
     }
+    let view_us = view_started.elapsed().as_micros() as u64;
+    if let Some(stats) = &stats {
+        stats.record_expand_phases(0, 0, 0, view_us, 0);
+    }
     if kept.is_empty() {
+        if let Some(stats) = &stats {
+            stats.record_expand_output_rows(0);
+        }
         return Ok(ColumnarOutcome::Empty);
     }
+    let output_started = std::time::Instant::now();
 
     if rowless {
         let mut edge_src = Vec::with_capacity(kept.len());
@@ -507,6 +569,10 @@ pub(super) fn expand_single_step_columnar(
         check_rowless_lockstep(&output_layout, &typed, kept.len())?;
         let mut out = DataChunk::new_with_layout(Vec::new(), output_layout);
         out.typed_columns = Some(typed);
+        if let Some(stats) = &stats {
+            stats.record_expand_phases(0, 0, 0, 0, output_started.elapsed().as_micros() as u64);
+            stats.record_expand_output_rows(kept.len() as u64);
+        }
         return Ok(ColumnarOutcome::Produced(out));
     }
 
@@ -583,6 +649,10 @@ pub(super) fn expand_single_step_columnar(
         gather_indices.push(seed_positions[seed_idx]);
     }
     if out_rows.is_empty() {
+        if let Some(stats) = &stats {
+            stats.record_expand_phases(0, 0, 0, 0, output_started.elapsed().as_micros() as u64);
+            stats.record_expand_output_rows(0);
+        }
         return Ok(ColumnarOutcome::Empty);
     }
     check_output_layout(
@@ -659,5 +729,9 @@ pub(super) fn expand_single_step_columnar(
     }
     check_row_lockstep(&output_layout, &typed, &out.rows)?;
     out.typed_columns = Some(typed);
+    if let Some(stats) = &stats {
+        stats.record_expand_phases(0, 0, 0, 0, output_started.elapsed().as_micros() as u64);
+        stats.record_expand_output_rows(out.rows.len() as u64);
+    }
     Ok(ColumnarOutcome::Produced(out))
 }

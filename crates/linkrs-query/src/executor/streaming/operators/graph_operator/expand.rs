@@ -65,6 +65,7 @@ pub(super) fn handle(
                     lightweight_source: false,
                     include_empty_paths: false,
                     ttl_active: None,
+                    dst_tag_cache: None,
                     runtime: count_runtime.clone(),
                 },
             )? {
@@ -223,6 +224,7 @@ pub(super) fn handle_all(
                         lightweight_source,
                         include_empty_paths,
                         ttl_active: None,
+                        dst_tag_cache: None,
                         runtime: count_runtime.clone(),
                     },
                 )?;
@@ -253,6 +255,7 @@ pub(super) fn handle_all(
                 lightweight_source,
                 include_empty_paths,
                 ttl_active: None,
+                dst_tag_cache: None,
                 runtime: count_runtime.clone(),
             };
             let expand_result = if let Some(limits) = step_limits.clone() {
@@ -264,9 +267,7 @@ pub(super) fn handle_all(
                         None | Some(crate::parser::ast::pattern::PathSemantic::Walk)
                     )
                     && closed_loop
-                    && expand_dispatch::is_closed_loop_storage(
-                        reader, space_name, edge_types, direction, dst_tag,
-                    );
+                    && ctx.resolved_dst_tag(reader).is_some();
                 if var_eligible {
                     match expand_frontier::expand_variable_frontier(
                         &chunk,
@@ -305,9 +306,7 @@ pub(super) fn handle_all(
                         None | Some(crate::parser::ast::pattern::PathSemantic::Walk)
                     )
                     && closed_loop
-                    && expand_dispatch::is_closed_loop_storage(
-                        reader, space_name, edge_types, direction, dst_tag,
-                    );
+                    && ctx.resolved_dst_tag(reader).is_some();
                 if multi_eligible {
                     match expand_frontier::expand_multi_hop_frontier(
                         &chunk,
@@ -339,12 +338,7 @@ pub(super) fn handle_all(
                     )?
                 }
             } else if use_fast_path {
-                if !emit_raw_ids
-                    && closed_loop
-                    && expand_dispatch::is_closed_loop_storage(
-                        reader, space_name, edge_types, direction, dst_tag,
-                    )
-                {
+                if !emit_raw_ids && closed_loop && ctx.resolved_dst_tag(reader).is_some() {
                     match expand_columnar::expand_single_step_columnar(
                         &chunk,
                         Arc::clone(&op.output_layout),

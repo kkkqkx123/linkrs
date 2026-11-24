@@ -15,8 +15,8 @@ use super::expand_columnar::{
     check_output_layout, check_rowless_lockstep, edge_neighbor, read_destinations,
 };
 use super::expand_dispatch::{
-    bypass_column, closed_loop_dst_tag, edge_bypass_value, edge_projection, expand_on_chunk,
-    has_bypass_conflict, hop_bypass, is_closed_loop_storage, ColumnarOutcome,
+    bypass_column, edge_bypass_value, edge_projection, expand_on_chunk, has_bypass_conflict,
+    hop_bypass, ColumnarOutcome,
 };
 use super::expand_seeds::{
     identity_seed_ids, materialize_rowless_rows, parse_seeds, seed_slot, seed_vid,
@@ -49,13 +49,7 @@ pub(super) fn expand_multi_hop_frontier(
             return Ok(ColumnarOutcome::Declined);
         }
     }
-    if !is_closed_loop_storage(
-        reader,
-        ctx.space_name,
-        ctx.edge_types,
-        ctx.direction,
-        ctx.dst_tag,
-    ) {
+    if ctx.resolved_dst_tag(reader).is_none() {
         return Ok(ColumnarOutcome::Declined);
     }
     // Intermediate hops read raw CSR adjacency, which cannot evaluate TTL;
@@ -165,14 +159,9 @@ pub(super) fn expand_multi_hop_frontier(
     if pending.is_empty() {
         return Ok(ColumnarOutcome::Empty);
     }
-    let tail_tag_owned = closed_loop_dst_tag(
-        reader,
-        ctx.space_name,
-        ctx.edge_types,
-        ctx.direction,
-        ctx.dst_tag,
-    )
-    .unwrap_or_else(|| ctx.dst_tag.to_string());
+    let tail_tag_owned = ctx
+        .resolved_dst_tag(reader)
+        .unwrap_or_else(|| ctx.dst_tag.to_string());
     let tail_tag = tail_tag_owned.as_str();
     let destinations = read_destinations(
         reader,
@@ -181,7 +170,8 @@ pub(super) fn expand_multi_hop_frontier(
         &all_dst,
         dst_bypass_opt.as_ref(),
         false,
-    )?;
+    )?
+    .view;
     let mut kept: Vec<usize> = Vec::new();
     for i in 0..destinations.len() {
         if destinations.present(i) {
@@ -333,13 +323,7 @@ pub(super) fn expand_variable_frontier(
             return Ok(ColumnarOutcome::Declined);
         }
     }
-    if !is_closed_loop_storage(
-        reader,
-        ctx.space_name,
-        ctx.edge_types,
-        ctx.direction,
-        ctx.dst_tag,
-    ) {
+    if ctx.resolved_dst_tag(reader).is_none() {
         return Ok(ColumnarOutcome::Declined);
     }
     // Non-emitting depths advance the frontier by raw neighbor ids, which
@@ -471,14 +455,9 @@ pub(super) fn expand_variable_frontier(
     if pending.is_empty() {
         return Ok(ColumnarOutcome::Empty);
     }
-    let var_tag_owned = closed_loop_dst_tag(
-        reader,
-        ctx.space_name,
-        ctx.edge_types,
-        ctx.direction,
-        ctx.dst_tag,
-    )
-    .unwrap_or_else(|| ctx.dst_tag.to_string());
+    let var_tag_owned = ctx
+        .resolved_dst_tag(reader)
+        .unwrap_or_else(|| ctx.dst_tag.to_string());
     let var_tag = var_tag_owned.as_str();
     let destinations = read_destinations(
         reader,
@@ -487,7 +466,8 @@ pub(super) fn expand_variable_frontier(
         &all_dst,
         dst_bypass_opt.as_ref(),
         false,
-    )?;
+    )?
+    .view;
     let mut kept: Vec<usize> = Vec::new();
     for i in 0..destinations.len() {
         if destinations.present(i) {
@@ -670,7 +650,7 @@ pub(super) fn expand_count_only(
         && !ttl_active
         && !ctx.include_empty_paths
         && ctx.closed_loop
-        && is_closed_loop_storage(reader, space_name, edge_types, direction, ctx.dst_tag);
+        && ctx.resolved_dst_tag(reader).is_some();
     if unsupported_range || ttl_active || ctx.include_empty_paths || !storage_closed {
         let reason = if unsupported_range {
             "count frontier: unsupported step range"

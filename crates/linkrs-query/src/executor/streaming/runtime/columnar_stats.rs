@@ -147,6 +147,28 @@ pub struct ColumnarStats {
     pub scan_predicate_us: AtomicU64,
     /// Wall-clock microseconds spent in columnar adjacency and destination reads.
     pub expand_read_us: AtomicU64,
+    /// Packed adjacency read inside a columnar expand batch.
+    pub expand_topology_read_us: AtomicU64,
+    /// Destination batch read inside a columnar expand batch.
+    pub expand_destination_read_us: AtomicU64,
+    /// Neighbor tag resolution before the destination read.
+    pub expand_tag_resolve_us: AtomicU64,
+    /// Destination deduplication, existence view and edge-order expansion.
+    pub expand_view_us: AtomicU64,
+    /// Typed or row output assembly after existence filtering.
+    pub expand_output_us: AtomicU64,
+    /// Number of batched columnar expand calls.
+    pub expand_parent_batches: AtomicU64,
+    /// Number of parent vertices processed by columnar expand.
+    pub expand_parents: AtomicU64,
+    /// Number of topology rows produced by columnar expand.
+    pub expand_events: AtomicU64,
+    /// Number of distinct destination ids read per batch.
+    pub expand_unique_destinations: AtomicU64,
+    /// Number of distinct destinations missing at the read timestamp.
+    pub expand_missing_destinations: AtomicU64,
+    /// Number of rows emitted by columnar expand.
+    pub expand_output_rows: AtomicU64,
 }
 
 impl Default for ColumnarStats {
@@ -176,6 +198,17 @@ impl Default for ColumnarStats {
             scan_assemble_us: AtomicU64::new(0),
             scan_predicate_us: AtomicU64::new(0),
             expand_read_us: AtomicU64::new(0),
+            expand_topology_read_us: AtomicU64::new(0),
+            expand_destination_read_us: AtomicU64::new(0),
+            expand_tag_resolve_us: AtomicU64::new(0),
+            expand_view_us: AtomicU64::new(0),
+            expand_output_us: AtomicU64::new(0),
+            expand_parent_batches: AtomicU64::new(0),
+            expand_parents: AtomicU64::new(0),
+            expand_events: AtomicU64::new(0),
+            expand_unique_destinations: AtomicU64::new(0),
+            expand_missing_destinations: AtomicU64::new(0),
+            expand_output_rows: AtomicU64::new(0),
         }
     }
 }
@@ -247,6 +280,46 @@ impl ColumnarStats {
     /// Add columnar expand read time for one batch.
     pub fn record_expand_read_us(&self, micros: u64) {
         self.expand_read_us.fetch_add(micros, Ordering::Relaxed);
+    }
+
+    /// Add the disjoint phases of one columnar expand batch.
+    pub fn record_expand_phases(
+        &self,
+        topology_us: u64,
+        destination_us: u64,
+        tag_us: u64,
+        view_us: u64,
+        output_us: u64,
+    ) {
+        self.expand_topology_read_us
+            .fetch_add(topology_us, Ordering::Relaxed);
+        self.expand_destination_read_us
+            .fetch_add(destination_us, Ordering::Relaxed);
+        self.expand_tag_resolve_us
+            .fetch_add(tag_us, Ordering::Relaxed);
+        self.expand_view_us.fetch_add(view_us, Ordering::Relaxed);
+        self.expand_output_us
+            .fetch_add(output_us, Ordering::Relaxed);
+    }
+
+    /// Record the topology cardinality of one columnar expand batch.
+    pub fn record_expand_topology_counts(&self, parents: u64, events: u64) {
+        self.expand_parent_batches.fetch_add(1, Ordering::Relaxed);
+        self.expand_parents.fetch_add(parents, Ordering::Relaxed);
+        self.expand_events.fetch_add(events, Ordering::Relaxed);
+    }
+
+    /// Record the destination cardinality of one columnar expand batch.
+    pub fn record_expand_destination_counts(&self, unique: u64, missing: u64) {
+        self.expand_unique_destinations
+            .fetch_add(unique, Ordering::Relaxed);
+        self.expand_missing_destinations
+            .fetch_add(missing, Ordering::Relaxed);
+    }
+
+    /// Record the number of rows emitted by one columnar expand batch.
+    pub fn record_expand_output_rows(&self, rows: u64) {
+        self.expand_output_rows.fetch_add(rows, Ordering::Relaxed);
     }
 
     /// Record a chunk handed downstream with a selection vector.
@@ -390,6 +463,17 @@ pub struct ColumnarStatsSnapshot {
     pub scan_assemble_us: u64,
     pub scan_predicate_us: u64,
     pub expand_read_us: u64,
+    pub expand_topology_read_us: u64,
+    pub expand_destination_read_us: u64,
+    pub expand_tag_resolve_us: u64,
+    pub expand_view_us: u64,
+    pub expand_output_us: u64,
+    pub expand_parent_batches: u64,
+    pub expand_parents: u64,
+    pub expand_events: u64,
+    pub expand_unique_destinations: u64,
+    pub expand_missing_destinations: u64,
+    pub expand_output_rows: u64,
 }
 
 impl ColumnarStatsSnapshot {
@@ -418,6 +502,17 @@ impl ColumnarStatsSnapshot {
             scan_assemble_us: stats.scan_assemble_us.load(Ordering::Relaxed),
             scan_predicate_us: stats.scan_predicate_us.load(Ordering::Relaxed),
             expand_read_us: stats.expand_read_us.load(Ordering::Relaxed),
+            expand_topology_read_us: stats.expand_topology_read_us.load(Ordering::Relaxed),
+            expand_destination_read_us: stats.expand_destination_read_us.load(Ordering::Relaxed),
+            expand_tag_resolve_us: stats.expand_tag_resolve_us.load(Ordering::Relaxed),
+            expand_view_us: stats.expand_view_us.load(Ordering::Relaxed),
+            expand_output_us: stats.expand_output_us.load(Ordering::Relaxed),
+            expand_parent_batches: stats.expand_parent_batches.load(Ordering::Relaxed),
+            expand_parents: stats.expand_parents.load(Ordering::Relaxed),
+            expand_events: stats.expand_events.load(Ordering::Relaxed),
+            expand_unique_destinations: stats.expand_unique_destinations.load(Ordering::Relaxed),
+            expand_missing_destinations: stats.expand_missing_destinations.load(Ordering::Relaxed),
+            expand_output_rows: stats.expand_output_rows.load(Ordering::Relaxed),
         }
     }
 
@@ -456,7 +551,7 @@ impl ColumnarStatsSnapshot {
     /// Human-readable one-line summary for PROFILE output.
     pub fn summary(&self) -> String {
         format!(
-            "columnar_hits={}, misses={}, hit_rate={:.3}, typed_hit_rate={:.3}, b_path_hits={}, wasted_builds={}, typed_group_hits={}, typed_group_fallbacks={}, scan_read_us={}, scan_enumerate_us={}, scan_visibility_us={}, scan_decode_us={}, scan_assemble_us={}, scan_predicate_us={}, expand_read_us={}, selection_attached={}, selection_materialized={}, selection_pushed={}, column_block_hits={}, multiplicity_expanded={}, spill_rows={}, spill_bytes={}, spill_runs={}, batch_outlets={}",
+            "columnar_hits={}, misses={}, hit_rate={:.3}, typed_hit_rate={:.3}, b_path_hits={}, wasted_builds={}, typed_group_hits={}, typed_group_fallbacks={}, scan_read_us={}, scan_enumerate_us={}, scan_visibility_us={}, scan_decode_us={}, scan_assemble_us={}, scan_predicate_us={}, expand_read_us={}, expand_topology_read_us={}, expand_destination_read_us={}, expand_tag_resolve_us={}, expand_view_us={}, expand_output_us={}, expand_parent_batches={}, expand_parents={}, expand_events={}, expand_unique_destinations={}, expand_missing_destinations={}, expand_output_rows={}, selection_attached={}, selection_materialized={}, selection_pushed={}, column_block_hits={}, multiplicity_expanded={}, spill_rows={}, spill_bytes={}, spill_runs={}, batch_outlets={}",
             self.columnar_hits,
             self.columnar_misses,
             self.hit_rate(),
@@ -472,6 +567,17 @@ impl ColumnarStatsSnapshot {
             self.scan_assemble_us,
             self.scan_predicate_us,
             self.expand_read_us,
+            self.expand_topology_read_us,
+            self.expand_destination_read_us,
+            self.expand_tag_resolve_us,
+            self.expand_view_us,
+            self.expand_output_us,
+            self.expand_parent_batches,
+            self.expand_parents,
+            self.expand_events,
+            self.expand_unique_destinations,
+            self.expand_missing_destinations,
+            self.expand_output_rows,
             self.selection_attached,
             self.selection_materialized,
             self.selection_pushed,

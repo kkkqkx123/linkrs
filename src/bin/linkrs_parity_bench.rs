@@ -88,6 +88,17 @@ struct QueryDiagnostics {
     scan_assemble_us: u64,
     scan_predicate_us: u64,
     expand_read_us: u64,
+    expand_topology_read_us: u64,
+    expand_destination_read_us: u64,
+    expand_tag_resolve_us: u64,
+    expand_view_us: u64,
+    expand_output_us: u64,
+    expand_parent_batches: u64,
+    expand_parents: u64,
+    expand_events: u64,
+    expand_unique_destinations: u64,
+    expand_missing_destinations: u64,
+    expand_output_rows: u64,
 }
 
 fn directory_size_bytes(path: &Path) -> u64 {
@@ -1062,6 +1073,33 @@ fn cmd_run(args: &[String]) {
                 scan_assemble_us: explain_metric(&explain_text, "scan_assemble_us").unwrap_or(0),
                 scan_predicate_us: explain_metric(&explain_text, "scan_predicate_us").unwrap_or(0),
                 expand_read_us: explain_metric(&explain_text, "expand_read_us").unwrap_or(0),
+                expand_topology_read_us: explain_metric(&explain_text, "expand_topology_read_us")
+                    .unwrap_or(0),
+                expand_destination_read_us: explain_metric(
+                    &explain_text,
+                    "expand_destination_read_us",
+                )
+                .unwrap_or(0),
+                expand_tag_resolve_us: explain_metric(&explain_text, "expand_tag_resolve_us")
+                    .unwrap_or(0),
+                expand_view_us: explain_metric(&explain_text, "expand_view_us").unwrap_or(0),
+                expand_output_us: explain_metric(&explain_text, "expand_output_us").unwrap_or(0),
+                expand_parent_batches: explain_metric(&explain_text, "expand_parent_batches")
+                    .unwrap_or(0),
+                expand_parents: explain_metric(&explain_text, "expand_parents").unwrap_or(0),
+                expand_events: explain_metric(&explain_text, "expand_events").unwrap_or(0),
+                expand_unique_destinations: explain_metric(
+                    &explain_text,
+                    "expand_unique_destinations",
+                )
+                .unwrap_or(0),
+                expand_missing_destinations: explain_metric(
+                    &explain_text,
+                    "expand_missing_destinations",
+                )
+                .unwrap_or(0),
+                expand_output_rows: explain_metric(&explain_text, "expand_output_rows")
+                    .unwrap_or(0),
             };
             let parallel_ok =
                 !required_parallel.contains(&target.name) || has_parallel_execution(&explain_text);
@@ -1160,6 +1198,45 @@ fn patch_resource_result(
         diagnostics.scan_predicate_us,
     );
     set_json_u64(&mut text, "expand_read_us", diagnostics.expand_read_us);
+    set_json_u64(
+        &mut text,
+        "expand_topology_read_us",
+        diagnostics.expand_topology_read_us,
+    );
+    set_json_u64(
+        &mut text,
+        "expand_destination_read_us",
+        diagnostics.expand_destination_read_us,
+    );
+    set_json_u64(
+        &mut text,
+        "expand_tag_resolve_us",
+        diagnostics.expand_tag_resolve_us,
+    );
+    set_json_u64(&mut text, "expand_view_us", diagnostics.expand_view_us);
+    set_json_u64(&mut text, "expand_output_us", diagnostics.expand_output_us);
+    set_json_u64(
+        &mut text,
+        "expand_parent_batches",
+        diagnostics.expand_parent_batches,
+    );
+    set_json_u64(&mut text, "expand_parents", diagnostics.expand_parents);
+    set_json_u64(&mut text, "expand_events", diagnostics.expand_events);
+    set_json_u64(
+        &mut text,
+        "expand_unique_destinations",
+        diagnostics.expand_unique_destinations,
+    );
+    set_json_u64(
+        &mut text,
+        "expand_missing_destinations",
+        diagnostics.expand_missing_destinations,
+    );
+    set_json_u64(
+        &mut text,
+        "expand_output_rows",
+        diagnostics.expand_output_rows,
+    );
     let _ = fs::write(path, text);
 }
 
@@ -1324,6 +1401,17 @@ fn write_run_result(
     json.push_str("  \"scan_assemble_us\": 0,\n");
     json.push_str("  \"scan_predicate_us\": 0,\n");
     json.push_str("  \"expand_read_us\": 0,\n");
+    json.push_str("  \"expand_topology_read_us\": 0,\n");
+    json.push_str("  \"expand_destination_read_us\": 0,\n");
+    json.push_str("  \"expand_tag_resolve_us\": 0,\n");
+    json.push_str("  \"expand_view_us\": 0,\n");
+    json.push_str("  \"expand_output_us\": 0,\n");
+    json.push_str("  \"expand_parent_batches\": 0,\n");
+    json.push_str("  \"expand_parents\": 0,\n");
+    json.push_str("  \"expand_events\": 0,\n");
+    json.push_str("  \"expand_unique_destinations\": 0,\n");
+    json.push_str("  \"expand_missing_destinations\": 0,\n");
+    json.push_str("  \"expand_output_rows\": 0,\n");
     json.push_str("  \"spill_rows\": 0\n}\n");
     let path = out_dir.join(format!("{}.json", bench.name.replace('/', "_")));
     fs::write(&path, json).ok();

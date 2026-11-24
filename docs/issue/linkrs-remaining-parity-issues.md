@@ -631,4 +631,16 @@ devs release 编译通过；local topk 3/3、typed group 5/5、并行分区 27/2
 
 正确性门全绿：配置默认值 1/1、partitioning 49/49、typed group 8/8、local topk 10/10、`parallel_partition_execution` 27/27、DQL 324/324、storage lib 1415/1415，新增 `column_batch_test` 13/13（含“枚举后、解码前提交”的快照回归）。`linkrs-config` lib 单测仍因 devs 离线缺少 `serial_test v3.5.0` 未启动，配置默认值继续由 partitioning 断言覆盖。
 
-判定：扫描自耗时与端到端中位数均显著下降，但 `group_by_count` ≤40 ms、`distinct_limit` ≤30 ms 的最终门尚未同时达成；剩余主因已转为展开读取与固定门抖动（`expand_read_us` 在两轮间为 160–230 ms）。不扩大并行放行面、不引入近似，也不保留未达标的解码改动。原始日志、逐用例 JSON、EXPLAIN 与微基准见 `perf-data/parity/results/2026-11-23/scan-visibility-decode-remediation/`。
+判定：扫描自耗时与端到端中位数均显著下降，但 `group_by_count` ≤40 ms、`distinct_limit` ≤30 ms 的最终门尚未同时达成；剩余主因已转为展开读取与固定门抖动（`expand_read_us` 在两轮间为 160–230 ms）。不扩大并行放行面、不引入近似，也不保留未达标的解码改动。下一阶段以展开读取拆分为主线，设计见 `docs/plan/expand-read-and-gate-convergence-design.md`。原始日志、逐用例 JSON、EXPLAIN 与微基准见 `perf-data/parity/results/2026-11-23/scan-visibility-decode-remediation/`。
+
+## 39. 展开读取拆分与门收敛回测（2026-11-23）
+
+按 `docs/plan/expand-read-and-gate-convergence-design.md` 在 devs 完成仅计时基线、排序去重实验版与最终版三轮固定门。子计时与计数进入 `ColumnarStats`、EXPLAIN、parity JSON；五字段与事件计数解释了 `expand_read_us` 的量级与波动：基线两轮中 `expand_topology_read_us` 为 88.57–120.54 ms（约 59%–67%）、`expand_destination_read_us` 为 41.62–60.42 ms、`expand_view_us` 为 15.99–17.04 ms、`expand_output_us` 为 12.29–13.39 ms，`expand_tag_resolve_us` 低于 0.1 ms。两条用例均为 110 个父批、215488 个事件/输出行、30473 个唯一目的端，缺失目的端为 0；拓扑读取确定为主导项。
+
+采纳的改动有三项：目的端标签解析在单次执行的 `ExpandCtx` 内缓存；`read_destinations` 的计时拆成存储读取与视图装配；`packed_node_edge_headers_batch` 的 Out/In 分支按父直接写入紧凑数组，取消 `Event` 中转、计数数组与散射游标，端点翻译仍只在本次调用内复用。排序聚合替代 `HashMap` 的实验版使固定门 `expand_view_us` 从 16–17 ms 升到 26–28 ms、F3=10% 唯一率的视图装配从 116 us 升到 217 us，`expand_read_us` 没有下降；按“视图装配无收益则回退”恢复原有逐边哈希去重。目的端身份绕行未实现：目的端读取不是主导项，且当前计划没有主键身份证明，不为缩短代码路径引入按列名猜测。父批大小也未改默认值。
+
+F1–F5 微基准在同一 2 万顶点数据集上记录。与设计文档基线 3395 us / 8.68 MB（2048 父）相比，最终 F1 为 2927 us / 6.55 MB，时间下降 14%、分配下降约 25%，未达 25% 时间门槛；512 / 4096 父分别为 757 us / 1.64 MB 与 5844 us / 13.10 MB。F2 中 Out/In 为 7.57 / 7.99 ms，Both 仍为 36.63 ms 并保留去重事件路径；F3 的 100% / 50% / 10% 唯一率视图装配为 337 / 223 / 121 us，F4 的存在性、单列、全实体为 622 / 1133 / 1485 us，F5 连续调用为 4076 us / 7.96 MB。
+
+最终固定门两轮 `group_by_count` 为 49.76 / 45.66 ms（基线 48.55 / 47.12），`distinct_limit` 为 38.85 / 44.39 ms（基线 42.71 / 42.04）；两轮中位数分别为 47.71 / 41.62 ms，基线为 47.83 / 42.38 ms。`expand_read_us` 两轮中位数分别由 164.92 降到 160.65 ms（-2.6%）、由 177.16 降到 171.96 ms（-2.9%），远未达 30% 门槛；`group_by_count ≤40 ms`、`distinct_limit ≤30 ms` 仍未通过。`actual=10`、`actual_partitions=10`、`result_stable=true`、`spill_rows=0` 保持成立。生产默认单轮 `group_by_count` 为 48.36 ms（基线 47.37），`distinct_limit` 为 42.03 ms（基线 38.02）属轮间波动；九条纯计数与 q1–q9 无实质回归。
+
+正确性门全绿：配置默认值 1/1、partitioning 49/49、typed group 8/8、local topk 10/10、`parallel_partition_execution` 27/27、DQL 324/324、storage lib 1415/1415、`column_batch_test` 13/13。判定：保留可验证收益的计时、标签解析复用与父批直写，最终门未达成；剩余成本集中在每批父端点的重复解析与可见性/分区调度抖动，不再叠加视图去重或身份绕行复杂度。原始日志、逐用例 JSON、EXPLAIN 与微基准见 `perf-data/parity/results/2026-11-23/expand-read-convergence/`。

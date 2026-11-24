@@ -535,9 +535,68 @@ pub(crate) fn packed_node_edge_headers_batch(
         packed.intern_edge_type(&Arc::from(info.edge_type_name.as_str()));
     }
 
-    // One flat event per CSR slot, then a counting scatter into parent-major
-    // arrays. This keeps the CSR visit order without one Vec per parent and
-    // without an Arc clone per edge.
+    let mut endpoint_types = Vec::with_capacity(selected.len());
+    for (type_id, edge_info) in selected.iter().enumerate() {
+        let Some(src_label_id) = endpoint_label_id(ctx, space, &edge_info.src_tag_name)? else {
+            continue;
+        };
+        let Some(dst_label_id) = endpoint_label_id(ctx, space, &edge_info.dst_tag_name)? else {
+            continue;
+        };
+        endpoint_types.push((type_id as u32, *edge_info, src_label_id, dst_label_id));
+    }
+
+    // Endpoint ids are resolved once per call. The cache is local so a later
+    // call at another snapshot cannot inherit an earlier translation.
+    let mut translated: HashMap<(LabelId, u32), VertexId> = HashMap::new();
+    let mut far_id = |label: LabelId, endpoint: u32| -> VertexId {
+        *translated
+            .entry((label, endpoint))
+            .or_insert_with(|| ctx.endpoint_to_external(label, VertexId::from_u32(endpoint), ts))
+    };
+
+    if direction != EdgeDirection::Both {
+        let outward = direction == EdgeDirection::Out;
+        let mut batches_by_type = Vec::with_capacity(endpoint_types.len());
+        for (_, edge_info, src_label, dst_label) in &endpoint_types {
+            let batches = if outward {
+                ctx.out_topology_batch(edge_info.edge_type_id, *src_label, &normalized, handles, ts)
+            } else {
+                ctx.in_topology_batch(edge_info.edge_type_id, *dst_label, &normalized, ts)
+            };
+            batches_by_type.push(batches);
+        }
+        let total: usize = batches_by_type
+            .iter()
+            .map(|batches| batches.iter().map(Vec::len).sum::<usize>())
+            .sum();
+        packed.src.reserve(total);
+        packed.dst.reserve(total);
+        packed.edge_type_ids.reserve(total);
+        packed.rankings.reserve(total);
+        packed.child_offsets.push(0);
+        for parent in 0..normalized.len() {
+            for ((type_id, _, _, _), batches) in endpoint_types.iter().zip(&batches_by_type) {
+                for (far_label, hot) in &batches[parent] {
+                    let far = far_id(*far_label, hot.endpoint);
+                    let (src, dst) = if outward {
+                        (normalized[parent], far)
+                    } else {
+                        (far, normalized[parent])
+                    };
+                    packed.src.push(src);
+                    packed.dst.push(dst);
+                    packed.edge_type_ids.push(*type_id);
+                    packed.rankings.push(hot.rank);
+                }
+            }
+            packed.child_offsets.push(packed.src.len());
+        }
+        return Ok(packed);
+    }
+
+    // Both directions need the shared dedup set, so they still collect CSR
+    // slots first and scatter them into parent-major arrays afterwards.
     #[derive(Clone, Copy)]
     enum Side {
         Out,
@@ -552,105 +611,46 @@ pub(crate) fn packed_node_edge_headers_batch(
         side: Side,
     }
     let mut events: Vec<Event> = Vec::new();
-    let mut translated: HashMap<(LabelId, u32), VertexId> = HashMap::new();
     let mut seen: HashSet<(usize, VertexId, VertexId, i64)> = HashSet::new();
 
-    for (type_id, edge_info) in selected.iter().enumerate() {
-        let Some(src_label_id) = endpoint_label_id(ctx, space, &edge_info.src_tag_name)? else {
-            continue;
-        };
-        let Some(dst_label_id) = endpoint_label_id(ctx, space, &edge_info.dst_tag_name)? else {
-            continue;
-        };
-        let edge_label_id = edge_info.edge_type_id;
-        let type_id = type_id as u32;
-        match direction {
-            EdgeDirection::Out => {
-                let batches =
-                    ctx.out_topology_batch(edge_label_id, src_label_id, &normalized, handles, ts);
-                for (parent, hots) in batches.into_iter().enumerate() {
-                    for (far_label, hot) in hots {
-                        events.push(Event {
-                            parent,
-                            far_label,
-                            endpoint: hot.endpoint,
-                            rank: hot.rank,
-                            type_id,
-                            side: Side::Out,
-                        });
-                    }
+    for (type_id, edge_info, src_label_id, dst_label_id) in &endpoint_types {
+        let out_batches = ctx.out_topology_batch(
+            edge_info.edge_type_id,
+            *src_label_id,
+            &normalized,
+            handles,
+            ts,
+        );
+        let in_batches =
+            ctx.in_topology_batch(edge_info.edge_type_id, *dst_label_id, &normalized, ts);
+        for (parent, (out_hots, in_hots)) in out_batches.into_iter().zip(in_batches).enumerate() {
+            for (far_label, hot) in out_hots {
+                let dst = far_id(far_label, hot.endpoint);
+                if !seen.insert((parent, normalized[parent], dst, hot.rank)) {
+                    continue;
                 }
+                events.push(Event {
+                    parent,
+                    far_label,
+                    endpoint: hot.endpoint,
+                    rank: hot.rank,
+                    type_id: *type_id,
+                    side: Side::Out,
+                });
             }
-            EdgeDirection::In => {
-                let batches = ctx.in_topology_batch(edge_label_id, dst_label_id, &normalized, ts);
-                for (parent, hots) in batches.into_iter().enumerate() {
-                    for (far_label, hot) in hots {
-                        events.push(Event {
-                            parent,
-                            far_label,
-                            endpoint: hot.endpoint,
-                            rank: hot.rank,
-                            type_id,
-                            side: Side::In,
-                        });
-                    }
+            for (far_label, hot) in in_hots {
+                let src = far_id(far_label, hot.endpoint);
+                if !seen.insert((parent, src, normalized[parent], hot.rank)) {
+                    continue;
                 }
-            }
-            EdgeDirection::Both => {
-                let out_batches =
-                    ctx.out_topology_batch(edge_label_id, src_label_id, &normalized, handles, ts);
-                let in_batches =
-                    ctx.in_topology_batch(edge_label_id, dst_label_id, &normalized, ts);
-                for (parent, (out_hots, in_hots)) in
-                    out_batches.into_iter().zip(in_batches).enumerate()
-                {
-                    for (far_label, hot) in out_hots {
-                        let dst =
-                            *translated
-                                .entry((far_label, hot.endpoint))
-                                .or_insert_with(|| {
-                                    ctx.endpoint_to_external(
-                                        far_label,
-                                        VertexId::from_u32(hot.endpoint),
-                                        ts,
-                                    )
-                                });
-                        if !seen.insert((parent, normalized[parent], dst, hot.rank)) {
-                            continue;
-                        }
-                        events.push(Event {
-                            parent,
-                            far_label,
-                            endpoint: hot.endpoint,
-                            rank: hot.rank,
-                            type_id,
-                            side: Side::Out,
-                        });
-                    }
-                    for (far_label, hot) in in_hots {
-                        let src =
-                            *translated
-                                .entry((far_label, hot.endpoint))
-                                .or_insert_with(|| {
-                                    ctx.endpoint_to_external(
-                                        far_label,
-                                        VertexId::from_u32(hot.endpoint),
-                                        ts,
-                                    )
-                                });
-                        if !seen.insert((parent, src, normalized[parent], hot.rank)) {
-                            continue;
-                        }
-                        events.push(Event {
-                            parent,
-                            far_label,
-                            endpoint: hot.endpoint,
-                            rank: hot.rank,
-                            type_id,
-                            side: Side::In,
-                        });
-                    }
-                }
+                events.push(Event {
+                    parent,
+                    far_label,
+                    endpoint: hot.endpoint,
+                    rank: hot.rank,
+                    type_id: *type_id,
+                    side: Side::In,
+                });
             }
         }
     }
@@ -672,11 +672,7 @@ pub(crate) fn packed_node_edge_headers_batch(
     packed.rankings = vec![0i64; total];
     let mut cursors = packed.child_offsets[..normalized.len()].to_vec();
     for event in events {
-        let far = *translated
-            .entry((event.far_label, event.endpoint))
-            .or_insert_with(|| {
-                ctx.endpoint_to_external(event.far_label, VertexId::from_u32(event.endpoint), ts)
-            });
+        let far = far_id(event.far_label, event.endpoint);
         let (src, dst) = match event.side {
             Side::Out => (normalized[event.parent], far),
             Side::In => (far, normalized[event.parent]),

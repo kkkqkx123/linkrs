@@ -87,8 +87,12 @@ keys = (
     "name", "median_ms", "compile_median_ms", "typed_group_hits",
     "local_topk_pushed", "scan_read_us", "scan_enumerate_us",
     "scan_visibility_us", "scan_decode_us", "scan_assemble_us",
-    "scan_predicate_us", "expand_read_us", "spill_rows", "result",
-    "status",
+    "scan_predicate_us", "expand_read_us",
+    "expand_topology_read_us", "expand_destination_read_us",
+    "expand_tag_resolve_us", "expand_view_us", "expand_output_us",
+    "expand_parent_batches", "expand_parents", "expand_events",
+    "expand_unique_destinations", "expand_missing_destinations",
+    "expand_output_rows", "spill_rows", "result", "status",
 )
 print("\t".join(keys))
 for group in ("round1", "round2", "prod"):

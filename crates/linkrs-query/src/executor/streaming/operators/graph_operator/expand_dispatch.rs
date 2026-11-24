@@ -31,19 +31,22 @@ pub(super) enum ColumnarOutcome {
     Declined,
 }
 
-/// Verify the planner closed-loop claim against storage schemas. Every edge
-/// type must declare endpoint labels and the planned `dst_tag` must match the
-/// neighbor side. An empty plan tag is allowed when all edge types agree on
-/// one neighbor label, which the executor then derives from schema.
-/// Anything else falls back to the row path.
-pub(super) fn is_closed_loop_storage(
-    reader: &dyn QueryStorage,
-    space_name: &str,
-    edge_types: &[String],
-    direction: EdgeDirection,
-    dst_tag: &str,
-) -> bool {
-    closed_loop_dst_tag(reader, space_name, edge_types, direction, dst_tag).is_some()
+impl ExpandCtx<'_> {
+    /// Resolve the neighbor tag once per operator instance. All batches of
+    /// one execution read the same snapshot and plan constant, so later
+    /// batches reuse the schema decision instead of re-reading metadata.
+    pub(super) fn resolved_dst_tag(&mut self, reader: &dyn QueryStorage) -> Option<String> {
+        if self.dst_tag_cache.is_none() {
+            self.dst_tag_cache = Some(closed_loop_dst_tag(
+                reader,
+                self.space_name,
+                self.edge_types,
+                self.direction,
+                self.dst_tag,
+            ));
+        }
+        self.dst_tag_cache.clone().flatten()
+    }
 }
 
 /// The single agreed neighbor label for a closed loop, or `None` when the
