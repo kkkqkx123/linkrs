@@ -5,7 +5,7 @@
 //! shape switches to pass-through: every visible row is emitted unchanged
 //! and the global Distinct/TopN above the exchange remains authoritative.
 
-use std::cmp::Reverse;
+use std::cmp::{Ordering, Reverse};
 use std::collections::{BinaryHeap, HashSet};
 use std::sync::Arc;
 
@@ -16,7 +16,8 @@ use linkrs_core::Value;
 
 use crate::executor::base::MemoryTracker;
 use crate::executor::streaming::chunk::{bitmap_is_valid, DataChunk, TypedColumn};
-use crate::executor::streaming::executor::SortDirection;
+use crate::executor::streaming::executor::{SortDirection, StreamingExecutor};
+use crate::executor::streaming::helpers::compare_values;
 
 use super::helpers::{emit_batch_slice, BlockingContext};
 
@@ -203,6 +204,48 @@ pub(super) fn next(
         if let Some(rt) = ctx.runtime.as_ref() {
             rt.ensure_not_cancelled()?;
         }
+        if let Some(payload) = chunk.take_packed_expand() {
+            let typed_keys: Option<Vec<Option<i64>>> =
+                if payload.key_name == state.key_name && state.mode != Mode::PassThrough {
+                    payload
+                        .keys
+                        .iter()
+                        .map(|value| match value {
+                            Value::BigInt(value) => Some(Some(*value)),
+                            Value::VertexId(value) => Some(value.as_int64()),
+                            Value::Null(_) => Some(None),
+                            _ => None,
+                        })
+                        .collect()
+                } else {
+                    None
+                };
+            if let Some(keys) = typed_keys {
+                state.mode = Mode::Typed;
+                state.accept_typed_keys(keys, memory_tracker)?;
+                if state.col_names.is_empty() {
+                    state.col_names = chunk.col_names();
+                }
+                continue;
+            }
+            let width = chunk.get_layout().len();
+            let slot = chunk
+                .get_layout()
+                .slot_id(&payload.key_name)
+                .unwrap_or(width.saturating_sub(1));
+            let null = Value::Null(NullType::Null);
+            let mut rows = Vec::with_capacity(payload.keys.len());
+            for key in payload.keys {
+                let mut row = vec![null.clone(); width];
+                if slot < width {
+                    row[slot] = key;
+                }
+                rows.push(row);
+            }
+            chunk.rows = rows;
+            chunk.typed_columns = None;
+            chunk.selection = None;
+        }
         if state.col_names.is_empty() {
             state.col_names = chunk.col_names();
         }
@@ -264,6 +307,164 @@ pub(super) fn next(
 }
 
 pub(super) fn close(state: &mut Option<LocalTopKDistinctState>) {
+    *state = None;
+}
+
+/// Partition-local TopK that keeps complete rows.
+///
+/// Used after a partial aggregate when the global sort key is the group key.
+/// The aggregate already made keys unique per partition, so keeping the best
+/// k rows by that key is exact and leaves the final aggregate authoritative.
+#[derive(Debug)]
+pub struct LocalTopKRowsState {
+    limit: usize,
+    direction: SortDirection,
+    key_name: String,
+    key_slot: Option<usize>,
+    rows: Vec<Vec<Value>>,
+    batch: MaterializedBatch,
+    emitted_offset: usize,
+}
+
+impl LocalTopKRowsState {
+    pub fn new(limit: u32, direction: SortDirection, key_name: String) -> Self {
+        Self {
+            limit: limit as usize,
+            direction,
+            key_name,
+            key_slot: None,
+            rows: Vec::new(),
+            batch: MaterializedBatch::new(0, 0),
+            emitted_offset: 0,
+        }
+    }
+
+    fn better(&self, candidate: &Value, current: &Value) -> bool {
+        match self.direction {
+            SortDirection::Ascending => compare_values(candidate, current) == Ordering::Less,
+            SortDirection::Descending => compare_values(candidate, current) == Ordering::Greater,
+        }
+    }
+
+    fn accept(
+        &mut self,
+        row: &[Value],
+        memory_tracker: &mut MemoryTracker,
+    ) -> Result<(), QueryError> {
+        if self.limit == 0 {
+            return Ok(());
+        }
+        let Some(slot) = self.key_slot else {
+            return Err(QueryError::execution(
+                "LocalTopKRows accepted a row before its key slot was resolved".to_string(),
+            ));
+        };
+        let Some(key) = row.get(slot).cloned() else {
+            return Err(QueryError::execution(
+                "LocalTopKRows row is missing its key".to_string(),
+            ));
+        };
+        if self
+            .rows
+            .iter()
+            .any(|existing| compare_values(&existing[slot], &key) == Ordering::Equal)
+        {
+            return Ok(());
+        }
+        if self.rows.len() < self.limit {
+            memory_tracker.try_reserve_row(&row.to_vec())?;
+            self.rows.push(row.to_vec());
+            return Ok(());
+        }
+        let mut worst = 0usize;
+        for index in 1..self.rows.len() {
+            let candidate = &self.rows[index][slot];
+            let current = &self.rows[worst][slot];
+            let replace = match self.direction {
+                SortDirection::Ascending => compare_values(candidate, current) == Ordering::Greater,
+                SortDirection::Descending => compare_values(candidate, current) == Ordering::Less,
+            };
+            if replace {
+                worst = index;
+            }
+        }
+        if !self.better(&key, &self.rows[worst][slot]) {
+            return Ok(());
+        }
+        memory_tracker.try_reserve_row(&row.to_vec())?;
+        self.rows[worst] = row.to_vec();
+        Ok(())
+    }
+
+    fn emit(&mut self) {
+        let Some(slot) = self.key_slot else {
+            self.batch.clear();
+            self.emitted_offset = 0;
+            return;
+        };
+        let direction = self.direction;
+        self.rows.sort_by(|left, right| {
+            let ordering = compare_values(&left[slot], &right[slot]);
+            match direction {
+                SortDirection::Ascending => ordering,
+                SortDirection::Descending => ordering.reverse(),
+            }
+        });
+        self.batch.clear();
+        for row in &self.rows {
+            self.batch.append_row(row.clone());
+        }
+        self.emitted_offset = 0;
+    }
+}
+
+pub(super) fn next_rows(
+    state: &mut LocalTopKRowsState,
+    memory_tracker: &mut MemoryTracker,
+    ctx: &BlockingContext<'_>,
+    input: &mut StreamingExecutor,
+) -> Result<Option<DataChunk>, QueryError> {
+    if state.emitted_offset < state.batch.num_rows() {
+        return Ok(Some(emit_batch_slice(
+            &state.batch,
+            &mut state.emitted_offset,
+            ctx,
+        )));
+    }
+    if state.emitted_offset > 0 {
+        return Ok(None);
+    }
+    while let Some(mut chunk) = input.advance()? {
+        if let Some(rt) = ctx.runtime.as_ref() {
+            rt.ensure_not_cancelled()?;
+        }
+        if state.key_slot.is_none() {
+            state.key_slot = chunk.get_layout().slot_id(&state.key_name);
+            if state.key_slot.is_none() {
+                return Err(QueryError::execution(format!(
+                    "LocalTopKRows key '{}' is not in the input layout",
+                    state.key_name
+                )));
+            }
+        }
+        chunk.normalize_for_opaque("LocalTopKRows");
+        chunk.materialize_typed_rows();
+        for index in chunk.visible_indices() {
+            state.accept(&chunk.rows[index], memory_tracker)?;
+        }
+    }
+    state.emit();
+    if state.batch.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(emit_batch_slice(
+        &state.batch,
+        &mut state.emitted_offset,
+        ctx,
+    )))
+}
+
+pub(super) fn close_rows(state: &mut Option<LocalTopKRowsState>) {
     *state = None;
 }
 

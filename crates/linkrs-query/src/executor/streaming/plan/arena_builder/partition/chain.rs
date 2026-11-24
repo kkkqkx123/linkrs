@@ -14,7 +14,7 @@ use crate::executor::base::ExecutionContext;
 use crate::executor::build_error::PlanBuildError;
 use crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
 use crate::planning::plan::core::nodes::base::plan_node_traits::{
-    MultipleInputNode, SingleInputNode,
+    MultipleInputNode, PlanNode, SingleInputNode,
 };
 use crate::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode;
 use linkrs_core::types::expr::Expression;
@@ -146,6 +146,13 @@ pub(super) fn build_partition_local_fragments(
     exec_ctx: &ExecutionContext,
 ) -> Result<Vec<FragmentId>, PlanBuildError> {
     let mut partition_fids = Vec::with_capacity(spec.partition_count());
+    let packed_key_name = packed_expand_key(chain);
+    let packed_expand_id = chain
+        .local
+        .iter()
+        .rev()
+        .find(|op| matches!(op, PlanNodeEnum::ExpandAll(_)))
+        .map(|op| op.id());
     for (index, range) in spec.ranges().iter().enumerate() {
         let mut scan_spec = build_source_spec(scan, exec_ctx)?;
         match &mut scan_spec {
@@ -224,8 +231,17 @@ pub(super) fn build_partition_local_fragments(
                     // A1.4: drive count_only from the node annotation so only
                     // the chain-tail expand skips row materialization; middle
                     // hops keep emitting raw destination ids for the next hop.
-                    let spec =
-                        build_expand_all_spec_with_flags(expand, exec_ctx, expand.count_only())?;
+                    let direct_key = if packed_expand_id == Some(expand.id()) {
+                        packed_key_name.clone()
+                    } else {
+                        None
+                    };
+                    let spec = build_expand_all_spec_with_flags(
+                        expand,
+                        exec_ctx,
+                        expand.count_only(),
+                        direct_key,
+                    )?;
                     fid = ArenaPlanAssembler::push_graph_op(
                         operators,
                         fragments,
@@ -284,6 +300,19 @@ pub(super) fn build_partition_local_fragments(
                 PhysicalProperties::single_blocking_with_budget(),
             )?;
         }
+        if let Some((topn, spec)) = local_group_topn(chain) {
+            ArenaPlanAssembler::push_blocking_op(
+                &mut FragmentCtx {
+                    operators,
+                    fragments,
+                    op_alloc,
+                },
+                fid,
+                topn.id(),
+                spec,
+                PhysicalProperties::single_blocking_with_budget(),
+            )?;
+        }
         partition_fids.push(fid);
     }
     Ok(partition_fids)
@@ -306,6 +335,103 @@ fn local_topk_unproven<'a>(reason: &str) -> LocalTopKDecision<'a> {
         pushed: None,
         note: Some(format!("local_topk:unpushed,reason={reason}")),
     }
+}
+
+/// Destination property consumed directly by a partition-local blocking
+/// operator. Only single-key count and local distinct TopK shapes qualify.
+fn packed_expand_key(chain: &PartitionedChain<'_>) -> Option<String> {
+    if let Some((_, spec)) = local_distinct_topn(chain).pushed {
+        if let BlockingSpec::LocalTopKDistinct { key_name, .. } = spec {
+            return Some(key_name);
+        }
+    }
+    let (partial, _) = split_aggregate(chain.aggregate_split?);
+    let BlockingSpec::PartialAggregate {
+        group_by_expressions,
+        aggregate_functions,
+        aggregate_filters,
+        ..
+    } = partial
+    else {
+        return None;
+    };
+    if aggregate_filters.iter().any(Option::is_some)
+        || aggregate_functions.len() != 1
+        || !matches!(aggregate_functions[0].0, AggregateFunction::Count)
+    {
+        return None;
+    }
+    match group_by_expressions.as_slice() {
+        [Expression::Variable(name)] => Some(name.clone()),
+        _ => None,
+    }
+}
+
+/// Single-key group aggregate whose following TopN sorts by that key. Every
+/// group key is unique after the partial aggregate, so keeping the best k
+/// rows per partition cannot remove a key needed by the global top k.
+fn local_group_topn<'a>(
+    chain: &'a PartitionedChain<'a>,
+) -> Option<(&'a PlanNodeEnum, BlockingSpec)> {
+    let agg = chain.aggregate_split?;
+    let topn_node = chain.global.get(1)?;
+    let PlanNodeEnum::TopN(topn) = topn_node else {
+        return None;
+    };
+    let BlockingSpec::TopN {
+        n,
+        sort_expressions,
+        sort_directions,
+    } = build_topn_spec(topn).ok()?
+    else {
+        return None;
+    };
+    if n == 0 {
+        return None;
+    }
+    let key_name = match sort_expressions.as_slice() {
+        [Expression::Variable(name)] => name.clone(),
+        [Expression::Property { object, property }] => {
+            let Expression::Variable(object) = object.as_ref() else {
+                return None;
+            };
+            format!("{object}.{property}")
+        }
+        _ => return None,
+    };
+    if agg.group_keys().len() != 1 || agg.group_keys()[0] != key_name {
+        return None;
+    }
+    let (partial, _) = split_aggregate(agg);
+    let BlockingSpec::PartialAggregate {
+        group_by_expressions,
+        aggregate_functions,
+        aggregate_filters,
+        ..
+    } = partial
+    else {
+        return None;
+    };
+    if group_by_expressions.len() != 1
+        || aggregate_functions.len() != 1
+        || !matches!(aggregate_functions[0].0, AggregateFunction::Count)
+        || aggregate_filters.iter().any(Option::is_some)
+    {
+        return None;
+    }
+    let direction = match sort_directions.as_slice() {
+        [direction] => *direction,
+        _ => return None,
+    };
+    Some((
+        topn_node,
+        BlockingSpec::LocalTopKRows {
+            key_name,
+            limit: n,
+            direction,
+            push_reason: "group-key".to_string(),
+        },
+    ))
 }
 
 /// Narrow shape where Distinct and its following TopN can be truncated per

@@ -304,6 +304,7 @@ impl DataChunk {
             layout,
             memory_reservation: self.memory_reservation.take(),
             columnar_stats: self.columnar_stats.clone(),
+            packed_expand: None,
         }
     }
 
@@ -331,6 +332,7 @@ impl DataChunk {
             layout,
             memory_reservation: self.memory_reservation.take(),
             columnar_stats: self.columnar_stats.clone(),
+            packed_expand: None,
         }
     }
 }

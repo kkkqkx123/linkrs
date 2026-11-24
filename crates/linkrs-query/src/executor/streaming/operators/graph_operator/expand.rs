@@ -58,6 +58,7 @@ pub(super) fn handle(
         include_empty_paths: false,
         ttl_active: None,
         dst_tag_cache: None,
+        packed_key_name: None,
         topology_schema: None,
         runtime: count_runtime.clone(),
     };
@@ -138,6 +139,7 @@ pub(super) fn handle_all(
         path_semantic,
         edge_required_props,
         dst_required_props,
+        packed_key_name,
         closed_loop,
         skip_rows,
         include_empty_paths,
@@ -163,6 +165,7 @@ pub(super) fn handle_all(
     let path_semantic = path_semantic.clone();
     let edge_required_props = edge_required_props.clone();
     let dst_required_props = dst_required_props.clone();
+    let packed_key_name = packed_key_name.clone();
     let closed_loop = *closed_loop;
     let include_empty_paths = *include_empty_paths;
     let mut skip_rows = *skip_rows;
@@ -227,6 +230,7 @@ pub(super) fn handle_all(
                         include_empty_paths,
                         ttl_active: None,
                         dst_tag_cache: None,
+                        packed_key_name: packed_key_name.clone(),
                         topology_schema: None,
                         runtime: count_runtime.clone(),
                     },
@@ -259,6 +263,7 @@ pub(super) fn handle_all(
                 include_empty_paths,
                 ttl_active: None,
                 dst_tag_cache: None,
+                packed_key_name: packed_key_name.clone(),
                 topology_schema: None,
                 runtime: count_runtime.clone(),
             };

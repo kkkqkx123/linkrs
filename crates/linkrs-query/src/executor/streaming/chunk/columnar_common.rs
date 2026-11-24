@@ -22,6 +22,25 @@ use std::sync::Arc;
 use linkrs_core::types::{LabelId, VertexId};
 use linkrs_core::{EdgeHeader, Value};
 
+/// Narrow handoff from a packed expand to a partition-local blocking
+/// operator. Keys are the exact projected destination values the downstream
+/// key expression expects; aggregate contributions are one per key.
+#[derive(Debug, Clone)]
+pub struct PackedExpandPayload {
+    pub key_name: String,
+    pub keys: Vec<Value>,
+}
+
+impl PackedExpandPayload {
+    pub fn len(&self) -> usize {
+        self.keys.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.keys.is_empty()
+    }
+}
+
 /// Vertex identity plus the storage handle captured by a topology-only scan.
 ///
 /// The external id remains the public value; the internal pair is a hint for

@@ -111,6 +111,10 @@ pub(super) fn handle(
     };
     loop {
         if let Some(mut chunk) = input.advance()? {
+            if chunk.packed_expand().is_some() {
+                chunk.layout = Arc::clone(&op.output_layout);
+                return Ok(Some(chunk));
+            }
             if *emit_rowless
                 && chunk.rows.is_empty()
                 && chunk.selection.is_none()

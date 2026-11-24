@@ -279,6 +279,89 @@ pub(crate) fn try_accumulate(
     true
 }
 
+/// Accumulate keys handed directly from a packed expand. Each key is one
+/// counted edge, so no row or typed-column materialization is needed.
+pub(crate) fn accumulate_packed_keys(
+    state: &mut Option<TypedGroupCount>,
+    group_map: &HashMap<RowKey, Vec<AggregateAccumulator>>,
+    memory_tracker: &mut MemoryTracker,
+    group_overhead: usize,
+    keys: &[Value],
+) -> bool {
+    if !group_map.is_empty() || keys.is_empty() {
+        return false;
+    }
+    let mut typed_keys = Vec::with_capacity(keys.len());
+    for value in keys {
+        let key = match value {
+            Value::BigInt(value) => TypedGroupKey::I64(*value),
+            Value::Int(value) => TypedGroupKey::I32(*value),
+            Value::Bool(value) => TypedGroupKey::Bool(*value),
+            Value::VertexId(value) => match value.as_int64() {
+                Some(value) => TypedGroupKey::I64(value),
+                None => return false,
+            },
+            _ => return false,
+        };
+        typed_keys.push(key);
+    }
+    let kind = match typed_keys[0] {
+        TypedGroupKey::I64(_) => TypedGroupKeyKind::I64,
+        TypedGroupKey::I32(_) => TypedGroupKeyKind::I32,
+        TypedGroupKey::Bool(_) => TypedGroupKeyKind::Bool,
+    };
+    if typed_keys.iter().any(|key| key_kind_of(*key) != kind) {
+        return false;
+    }
+    if state
+        .as_ref()
+        .is_some_and(|fast| fast.key_kind != kind || fast.mode != TypedAggregateMode::Count)
+    {
+        return false;
+    }
+    let mut new_keys = HashSet::new();
+    for key in &typed_keys {
+        if state
+            .as_ref()
+            .is_none_or(|fast| !fast.counts.contains_key(key))
+        {
+            new_keys.insert(*key);
+        }
+    }
+    let bytes_per_group = state
+        .as_ref()
+        .map(|fast| fast.bytes_per_group)
+        .unwrap_or_else(|| group_bytes(kind, group_overhead));
+    if !new_keys.is_empty()
+        && memory_tracker
+            .try_reserve(bytes_per_group * new_keys.len())
+            .is_err()
+    {
+        return false;
+    }
+    if state.is_none() {
+        *state = Some(TypedGroupCount {
+            counts: HashMap::new(),
+            key_kind: kind,
+            mode: TypedAggregateMode::Count,
+            bytes_per_group,
+        });
+    }
+    let fast = state.as_mut().expect("typed group count initialized above");
+    for key in typed_keys {
+        *fast.counts.entry(key).or_insert(0) += 1;
+    }
+    true
+}
+
+fn key_kind_of(key: TypedGroupKey) -> TypedGroupKeyKind {
+    match key {
+        TypedGroupKey::I64(_) => TypedGroupKeyKind::I64,
+        TypedGroupKey::I32(_) => TypedGroupKeyKind::I32,
+        TypedGroupKey::Bool(_) => TypedGroupKeyKind::Bool,
+    }
+}
+
 /// Move accumulated typed counts into the generic accumulator map before a
 /// chunk or a spill takes the generic path. Memory stays reserved because
 /// the same groups are still live.

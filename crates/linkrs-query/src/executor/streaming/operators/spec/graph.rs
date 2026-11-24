@@ -43,6 +43,9 @@ pub enum GraphSpec {
         edge_required_props: Option<Vec<String>>,
         /// Demanded destination properties, same encoding as the edge demand.
         dst_required_props: Option<Vec<String>>,
+        /// Destination property name consumed directly by a partition-local
+        /// blocking operator. Set only for the narrow packed handoff shape.
+        packed_key_name: Option<String>,
         /// Single-label closed loop proven by the planner syntactically and
         /// re-verified against storage at execution with row fallback.
         closed_loop: bool,

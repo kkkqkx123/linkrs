@@ -480,6 +480,7 @@ impl PoolHandle {
             layout: std::sync::Arc::clone(&chunk.layout),
             memory_reservation: None,
             columnar_stats: chunk.columnar_stats.clone(),
+            packed_expand: None,
         };
         Ok(PooledChunk {
             chunk: copied,

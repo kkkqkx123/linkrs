@@ -26,10 +26,12 @@ impl DataChunk {
     /// rowless chunks whose scan skipped the row view. Typed arms stay in
     /// lockstep like rows, so either source addresses the same positions.
     pub fn eval_len(&self) -> usize {
-        if self.rows.is_empty() {
-            self.typed_len().unwrap_or(0)
-        } else {
+        if !self.rows.is_empty() {
             self.rows.len()
+        } else if let Some(payload) = self.packed_expand.as_ref() {
+            payload.len()
+        } else {
+            self.typed_len().unwrap_or(0)
         }
     }
 

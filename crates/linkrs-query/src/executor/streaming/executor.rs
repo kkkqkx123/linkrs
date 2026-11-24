@@ -370,6 +370,7 @@ impl StreamingExecutor {
                         | BlockingOperatorKind::Sort { .. }
                         | BlockingOperatorKind::Distinct { .. }
                         | BlockingOperatorKind::LocalTopKDistinct { .. }
+                        | BlockingOperatorKind::LocalTopKRows { .. }
                         | BlockingOperatorKind::TopN { .. }
                         | BlockingOperatorKind::GroupBy { .. }
                         | BlockingOperatorKind::Aggregate { .. }

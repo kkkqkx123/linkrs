@@ -56,7 +56,7 @@ fn has_local_topk(plan: &crate::executor::streaming::plan::types::PhysicalPlan) 
         matches!(
             op.spec,
             crate::executor::streaming::plan::types::OperatorKindSpec::Blocking(
-                BlockingSpec::LocalTopKDistinct { .. }
+                BlockingSpec::LocalTopKDistinct { .. } | BlockingSpec::LocalTopKRows { .. }
             )
         )
     })

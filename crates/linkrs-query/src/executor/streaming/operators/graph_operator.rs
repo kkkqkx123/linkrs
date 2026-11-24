@@ -51,6 +51,8 @@ pub(super) struct ExpandCtx<'a> {
     /// Neighbor tag resolved once for this operator instance. The plan fixes
     /// space, edge types and direction, so every batch shares the result.
     pub(super) dst_tag_cache: Option<Option<String>>,
+    /// Destination property name handed directly to a local blocking operator.
+    pub(super) packed_key_name: Option<String>,
     /// Edge-type schema used by packed topology reads, resolved once for the
     /// whole execution under the query's fixed snapshot.
     pub(super) topology_schema: Option<Arc<crate::storage::TopologySchema>>,
@@ -113,6 +115,7 @@ pub enum GraphOperatorKind {
         path_semantic: Option<PathSemantic>,
         edge_required_props: Option<Vec<String>>,
         dst_required_props: Option<Vec<String>>,
+        packed_key_name: Option<String>,
         closed_loop: bool,
         skip_rows: bool,
         include_empty_paths: bool,
@@ -264,6 +267,7 @@ impl GraphOperator {
                 dst_tag,
                 edge_required_props,
                 dst_required_props,
+                packed_key_name,
                 closed_loop,
                 skip_rows,
                 include_empty_paths,
@@ -284,6 +288,7 @@ impl GraphOperator {
                 path_semantic: path_semantic.clone(),
                 edge_required_props: edge_required_props.clone(),
                 dst_required_props: dst_required_props.clone(),
+                packed_key_name: packed_key_name.clone(),
                 closed_loop: *closed_loop,
                 skip_rows: *skip_rows,
                 include_empty_paths: *include_empty_paths,

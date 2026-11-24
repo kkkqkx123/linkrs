@@ -668,3 +668,19 @@ devs release 编译通过，正确性门全绿。固定门两轮 `group_by_count
 devs release 编译通过，正确性门全绿。固定门两轮 `group_by_count` 为 38.80 / 38.73 ms，`distinct_limit` 为 31.14 / 32.61 ms，逐值一致、`actual=10`、`spill_rows=0`。`expand_read_us` 从 172–193 ms 降到 124–161 ms，其中 topology 从 111–130 ms 降到 79–101 ms，destination 从 39–47 ms 降到 28–44 ms，view 从 18–20 ms 降到约 16 ms。`group_by_count ≤40 ms` 已达成；`distinct_limit ≤30 ms` 仍差 1–3 ms，三次直接回测为 32.88 / 34.20 / 33.41 ms，且 devs 负载仍为 5–12。
 
 判定：保留两项改动。packed expand 与局部聚合/TopK 直连涉及计划形状和 Exchange 契约，本轮不与身份收敛混合；在安静窗口确认 `distinct_limit` 仍不达标后再单独实施。原始日志、逐用例 JSON、EXPLAIN 与微基准见 `perf-data/parity/results/2026-11-24/expand-topology-flatten/`。
+
+## 43. Packed expand 与局部阻塞算子直连（2026-11-24）
+
+按 `docs/plan/packed-expand-local-sink-design.md` 实施直连。`DataChunk` 增加 `PackedExpandPayload`，计划层仅在单键 `COUNT` 和既有单列 `Dedup + TopN` 窄形状上设置下游键名；展开在过滤悬空目的端后直接输出投影后的键值序列，`Project` 仅替换 layout 并透传，`PartialAggregate` / `LocalTopKDistinct` 直接消费该序列，仍按原契约输出 row batch，Exchange 不变。非定长或不支持的键类型回退为普通 row 路径。首轮编译缺少 trait import、第二轮 payload 未匹配 `p.id` 与 `id` / identity-only 两种来源，均已修正。
+
+devs release 编译通过，正确性门全绿；最终轮 EXPLAIN 显示 `expand_output_us=0`、`typed_group_hits=110`、`local_topk:pushed`、`actual=10`、`result_stable=true`、`spill_rows=0`。固定门两轮 `group_by_count` 为 40.17 / 40.58 ms，`distinct_limit` 为 34.84 / 35.30 ms；生产默认单轮为 41.06 / 30.73 ms。devs 负载在复测期间达到 9–10，visibility 微基准与拓扑自耗时均显著放大，不能把端到端波动归因于直连本身。
+
+判定：保留直连，因为可测的展开输出自耗时被消除且正确性稳定；但本轮未在噪声窗口内证明两条固定门同时达标。`group_by_count` 的 Exchange 前局部 TopK 需要保留 count payload 的新算子，单独验证后再决定。结果与编译/回退记录见 `perf-data/parity/results/2026-11-24/packed-expand-local-sink/`。
+
+## 44. group_by_count 的 Exchange 前局部 TopK（2026-11-24）
+
+按 `docs/plan/group-by-count-local-topk-design.md` 实施 `LocalTopKRows`。当 split aggregate 是单键 `COUNT`、紧随的全局 `TopN` 按同一分组键排序时，在每个分区的 `PartialAggregate` 之后插入局部行 TopK：按 key 去重、保留最好 k 行、使用与全局排序一致的 NULL 顺序，输出完整 `[key, count]` row batch。全局 `FinalAggregate`、`TopN`、`Limit` 与 Exchange row 契约不变。首轮编译暴露返回引用生命期和调用参数顺序错误，均已直接修正。
+
+devs release 编译通过，正确性门全绿。EXPLAIN 显示每分区 `LocalTopKRows` 输出 10 行，Exchange 从约 11,554 行降到 100 行，`actual=10`、`result_stable=true`、`spill_rows=0`。固定门两轮 `group_by_count` 为 39.59 / 33.89 ms，`distinct_limit` 为 37.95 / 32.80 ms；生产默认单轮为 31.86 / 29.51 ms。结果逐值一致，无额外近似或配置放开。
+
+判定：保留 `LocalTopKRows`。原始日志、逐用例 JSON、EXPLAIN 与微基准见 `perf-data/parity/results/2026-11-24/group-by-local-topk/`。

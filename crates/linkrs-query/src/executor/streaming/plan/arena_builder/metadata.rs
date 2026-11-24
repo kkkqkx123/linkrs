@@ -370,7 +370,8 @@ fn choice_reason_for_spec(spec: &OperatorKindSpec) -> Option<String> {
             BlockingSpec::TopN { .. } => "topn".to_string(),
             BlockingSpec::Sort { .. } => "sort".to_string(),
             BlockingSpec::Distinct => "distinct".to_string(),
-            BlockingSpec::LocalTopKDistinct { push_reason, .. } => {
+            BlockingSpec::LocalTopKDistinct { push_reason, .. }
+            | BlockingSpec::LocalTopKRows { push_reason, .. } => {
                 format!("local_topk:pushed:{push_reason}")
             }
             BlockingSpec::Aggregate { .. }
@@ -987,6 +988,7 @@ pub(super) fn blocking_explain_name(spec: &BlockingSpec) -> &'static str {
         BlockingSpec::TopN { .. } => "TopN",
         BlockingSpec::Distinct => "Distinct",
         BlockingSpec::LocalTopKDistinct { .. } => "LocalTopKDistinct",
+        BlockingSpec::LocalTopKRows { .. } => "LocalTopKRows",
         BlockingSpec::Materialize => "Materialize",
         BlockingSpec::DataCollect => "DataCollect",
         BlockingSpec::RollUpApply { .. } => "RollUpApply",
@@ -1174,6 +1176,7 @@ mod tests {
             dst_tag: "Node".to_string(),
             edge_required_props: edge_props,
             dst_required_props: dst_props,
+            packed_key_name: None,
             closed_loop: true,
             skip_rows: true,
             include_empty_paths: false,

@@ -17,7 +17,9 @@ use crate::executor::streaming::helpers::accumulator_states::{
 use super::super::aggregate::PartialAggregateState;
 use super::super::helpers::{aggregate_arg_field_name, emit_batch_slice, BlockingContext};
 use super::shared::eval_group_key;
-use super::typed_group_count::{deopt, try_accumulate, ACCUMULATOR_OVERHEAD_BYTES};
+use super::typed_group_count::{
+    accumulate_packed_keys, deopt, try_accumulate, ACCUMULATOR_OVERHEAD_BYTES,
+};
 
 pub(crate) fn open_partial_aggregate(state: &mut Option<PartialAggregateState>) {
     *state = Some(PartialAggregateState {
@@ -53,6 +55,44 @@ pub(crate) fn next_partial_aggregate(
     while let Some(mut chunk) = input.advance()? {
         if let Some(rt) = ctx.runtime.as_ref() {
             rt.ensure_not_cancelled()?;
+        }
+        if let Some(payload) = chunk.take_packed_expand() {
+            let direct = group_by_expressions.len() == 1
+                && matches!(&group_by_expressions[0], Expression::Variable(name) if name == &payload.key_name)
+                && aggregate_functions.len() == 1
+                && matches!(aggregate_functions[0].0, AggregateFunction::Count)
+                && aggregate_filters.iter().all(|filter| filter.is_none());
+            if direct
+                && accumulate_packed_keys(
+                    &mut state.typed_group_count,
+                    &state.group_map,
+                    memory_tracker,
+                    aggregate_functions.len() * ACCUMULATOR_OVERHEAD_BYTES,
+                    &payload.keys,
+                )
+            {
+                if let Some(rt) = ctx.runtime.as_ref() {
+                    rt.columnar_stats().record_typed_group_hit();
+                }
+                continue;
+            }
+            let width = chunk.get_layout().len();
+            let slot = chunk
+                .get_layout()
+                .slot_id(&payload.key_name)
+                .unwrap_or(width.saturating_sub(1));
+            let null = Value::Null(NullType::Null);
+            let mut rows = Vec::with_capacity(payload.keys.len());
+            for key in payload.keys {
+                let mut row = vec![null.clone(); width];
+                if slot < width {
+                    row[slot] = key;
+                }
+                rows.push(row);
+            }
+            chunk.rows = rows;
+            chunk.typed_columns = None;
+            chunk.selection = None;
         }
         // The typed group-count state consumes symbolic multiplicity as a
         // weight, so no row duplication is needed for the narrow shape. Only

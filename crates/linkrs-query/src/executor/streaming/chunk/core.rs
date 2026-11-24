@@ -1,5 +1,6 @@
 //! DataChunk core: struct definition, construction, and basic access
 
+use super::columnar_common::PackedExpandPayload;
 use super::schema::{ColumnInfo, Schema};
 use super::typed::TypedColumn;
 use crate::executor::base::MemoryReservation;
@@ -36,6 +37,9 @@ pub struct DataChunk {
     pub memory_reservation: Option<MemoryReservation>,
     /// Query-level columnar fast-path counters (observability).
     pub columnar_stats: Option<Arc<ColumnarStats>>,
+    /// Optional direct handoff from a packed expand to a local blocking
+    /// operator. Regular operators never see this payload.
+    pub packed_expand: Option<PackedExpandPayload>,
 }
 
 impl Clone for DataChunk {
@@ -53,6 +57,7 @@ impl Clone for DataChunk {
             layout: Arc::clone(&self.layout),
             memory_reservation: None,
             columnar_stats: self.columnar_stats.clone(),
+            packed_expand: self.packed_expand.clone(),
         }
     }
 }
@@ -78,6 +83,7 @@ impl DataChunk {
             layout,
             memory_reservation: None,
             columnar_stats: None,
+            packed_expand: None,
         }
     }
 
@@ -89,6 +95,20 @@ impl DataChunk {
     pub fn with_columnar_stats(mut self, stats: Arc<ColumnarStats>) -> Self {
         self.columnar_stats = Some(stats);
         self
+    }
+
+    pub fn new_packed_expand(layout: Arc<SlotLayout>, payload: PackedExpandPayload) -> Self {
+        let mut chunk = Self::new_with_layout(Vec::new(), layout);
+        chunk.packed_expand = Some(payload);
+        chunk
+    }
+
+    pub fn packed_expand(&self) -> Option<&PackedExpandPayload> {
+        self.packed_expand.as_ref()
+    }
+
+    pub fn take_packed_expand(&mut self) -> Option<PackedExpandPayload> {
+        self.packed_expand.take()
     }
 
     pub fn take_memory_reservation(&mut self) -> Option<MemoryReservation> {
@@ -137,6 +157,7 @@ impl DataChunk {
             layout,
             memory_reservation: None,
             columnar_stats: None,
+            packed_expand: None,
         })
     }
 
@@ -212,6 +233,7 @@ impl DataChunk {
             layout,
             memory_reservation: None,
             columnar_stats: None,
+            packed_expand: None,
         }
     }
 
@@ -264,6 +286,7 @@ impl DataChunk {
             layout,
             memory_reservation: None,
             columnar_stats: None,
+            packed_expand: None,
         }
     }
 
@@ -397,7 +420,12 @@ impl DataChunk {
     /// `is_empty` only inspects the row view, so rowless typed chunks need an
     /// explicit predicate at buffering and exchange boundaries.
     pub fn has_data(&self) -> bool {
-        !self.rows.is_empty() || self.typed_len().is_some_and(|len| len > 0)
+        !self.rows.is_empty()
+            || self.typed_len().is_some_and(|len| len > 0)
+            || self
+                .packed_expand
+                .as_ref()
+                .is_some_and(|payload| !payload.is_empty())
     }
 
     // ── Basic access ──

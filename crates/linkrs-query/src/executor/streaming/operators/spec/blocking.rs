@@ -45,6 +45,13 @@ pub enum BlockingSpec {
         /// Why the partition chain admitted this local truncation.
         push_reason: String,
     },
+    LocalTopKRows {
+        key_name: String,
+        limit: u32,
+        direction: SortDirection,
+        /// Why the partition chain admitted this local truncation.
+        push_reason: String,
+    },
     Materialize,
     DataCollect,
     RollUpApply {

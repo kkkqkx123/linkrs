@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::executor::streaming::chunk::{
-    gather_typed_column, DataChunk, EdgeHeaderColumn, TypedColumn,
+    gather_typed_column, DataChunk, EdgeHeaderColumn, PackedExpandPayload, TypedColumn,
 };
 use crate::executor::streaming::runtime::ColumnarStats;
 use crate::executor::streaming::slot::SlotLayout;
@@ -516,6 +516,41 @@ pub(super) fn expand_single_step_columnar(
             stats.record_expand_output_rows(0);
         }
         return Ok(ColumnarOutcome::Empty);
+    }
+    if let Some(key_name) = ctx.packed_key_name.as_deref() {
+        let key_property = key_name.rsplit('.').next().unwrap_or(key_name);
+        let (direct, eligible) = if dst_bypass.len() == 1 && dst_bypass[0] == key_property {
+            (Some(dst_bypass[0].as_str()), true)
+        } else if dst_empty {
+            (None, true)
+        } else {
+            // The plan selected a direct handoff but this chunk does not
+            // carry the expected key; keep the ordinary typed output path.
+            (None, false)
+        };
+        if rowless && eligible {
+            let keys = kept
+                .iter()
+                .map(|&index| match direct {
+                    Some(property) => destinations.property(index, property),
+                    None => destinations
+                        .vertex(index)
+                        .map(|vertex| Value::VertexId(*vertex.vid()))
+                        .unwrap_or(Value::Null(linkrs_core::NullType::Null)),
+                })
+                .collect();
+            let payload = PackedExpandPayload {
+                key_name: key_name.to_string(),
+                keys,
+            };
+            if let Some(stats) = &stats {
+                stats.record_expand_output_rows(payload.len() as u64);
+            }
+            return Ok(ColumnarOutcome::Produced(DataChunk::new_packed_expand(
+                output_layout,
+                payload,
+            )));
+        }
     }
     let output_started = std::time::Instant::now();
 
