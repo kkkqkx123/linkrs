@@ -1295,10 +1295,13 @@ mod fast_shape_tests {
     use crate::planning::plan::core::nodes::access::index_scan::{IndexScanNode, ScanType};
     use crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
     use crate::planning::plan::core::nodes::graph_operations::graph_operations_node::UnionNode;
+    use crate::planning::plan::core::nodes::graph_operations::DedupNode;
     use crate::planning::plan::core::nodes::join::join_node::InnerJoinNode;
     use crate::planning::plan::core::nodes::operation::filter_node::FilterNode;
     use crate::planning::plan::core::nodes::operation::project_node::ProjectNode;
-    use crate::planning::plan::core::nodes::operation::sort_node::{LimitNode, SortItem, SortNode};
+    use crate::planning::plan::core::nodes::operation::sort_node::{
+        LimitNode, SortItem, SortNode, TopNNode,
+    };
     use crate::planning::plan::core::nodes::traversal::traversal_node::ExpandAllNode;
     use crate::planning::plan::ExecutionPlan;
     use linkrs_core::types::expr::expression_context::ExpressionAnalysisContext;
@@ -1522,6 +1525,8 @@ mod fast_shape_tests {
         use crate::optimizer::partitioning::PartitioningLayoutInfo;
         let engine = engine_with_person_stats();
         let layout = PartitioningLayoutInfo::default();
+        let state = OptimizerEngine::fast_shape_state(&root).expect("shape must be gated");
+        let needs_topn_wiring = state.sort_seen;
         let full = engine
             .optimize_full_shape(
                 ExecutionPlan::new(Some(root.clone())),
@@ -1536,6 +1541,8 @@ mod fast_shape_tests {
                 ExecutionPlan::new(Some(root)),
                 Some("test"),
                 &layout,
+                state,
+                needs_topn_wiring,
                 &mut None,
                 false,
             )
@@ -1557,6 +1564,21 @@ mod fast_shape_tests {
             full.diagnostics.notes, fast_notes,
             "fast path must preserve every other diagnostic note"
         );
+    }
+
+    #[test]
+    fn fast_path_matches_full_path_on_distinct_topn_limit() {
+        let mut dedup = DedupNode::new(one_hop_chain()).expect("dedup should build");
+        dedup.set_col_names(vec!["b.id".to_string()]);
+        let sort = SortNode::new(
+            PlanNodeEnum::Dedup(dedup),
+            vec![SortItem::column_asc("b.id".to_string())],
+        )
+        .expect("sort should build");
+        let limit = LimitNode::new(PlanNodeEnum::Sort(sort), 0, 10).expect("limit should build");
+        let chain = PlanNodeEnum::Limit(limit);
+        assert!(OptimizerEngine::is_fast_shape(&chain));
+        full_vs_fast(chain);
     }
 
     #[test]
@@ -1686,11 +1708,14 @@ mod fast_shape_tests {
         let engine = engine_with_person_stats();
         let layout = PartitioningLayoutInfo::default();
         let chain = prop_eq_filter(person_scan("n"), "n", "name", Value::String("a".into()));
+        let state = OptimizerEngine::fast_shape_state(&chain).expect("shape must be gated");
         let _ = engine
             .optimize_fast_shape(
                 ExecutionPlan::new(Some(chain)),
                 Some("test"),
                 &layout,
+                state,
+                false,
                 &mut None,
                 false,
             )

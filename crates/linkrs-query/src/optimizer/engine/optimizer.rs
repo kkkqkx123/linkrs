@@ -7,10 +7,28 @@ use crate::optimizer::partitioning::PartitioningLayoutInfo;
 use crate::optimizer::stats::StatsView;
 use crate::planning::plan::ExecutionPlan;
 use crate::planning::plan::PlanNodeEnum;
+use linkrs_core::types::graph_schema::OrderDirection;
 use std::sync::Arc;
 
 use super::OptimizerEngine;
 use crate::optimizer::error::{OptimizeError, OptimizeResult};
+
+#[derive(Default)]
+pub(crate) struct FastShapeState {
+    pub(crate) limit_seen: bool,
+    pub(crate) sort_seen: bool,
+    pub(crate) topn_seen: bool,
+    pub(crate) dedup_seen: bool,
+    pub(crate) limit_count: i64,
+    pub(crate) order_limit: i64,
+    pub(crate) expand_hops: u32,
+}
+
+impl FastShapeState {
+    fn order_seen(&self) -> bool {
+        self.sort_seen || self.topn_seen
+    }
+}
 
 impl OptimizerEngine {
     pub fn optimize(
@@ -46,15 +64,21 @@ impl OptimizerEngine {
         // else falls through to the full path below.
         // Diagnostic escape hatch: LINKRS_NO_FAST_SHAPE=1 forces the full
         // path for before/after measurement. Default off.
-        let fast = self.enable_heuristic
-            && std::env::var("LINKRS_NO_FAST_SHAPE").is_err()
-            && current_plan.root.as_ref().is_some_and(Self::is_fast_shape);
+        let fast_state = if self.enable_heuristic && std::env::var("LINKRS_NO_FAST_SHAPE").is_err()
+        {
+            current_plan.root.as_ref().and_then(Self::fast_shape_state)
+        } else {
+            None
+        };
+        let needs_topn_wiring = fast_state.as_ref().is_some_and(|state| state.sort_seen);
         Self::mark_opt_stage("fast_shape_gate", &mut stage_start, stage_timing);
-        if fast {
+        if let Some(state) = fast_state {
             return self.optimize_fast_shape(
                 current_plan,
                 space,
                 layout,
+                state,
+                needs_topn_wiring,
                 &mut stage_start,
                 stage_timing,
             );
@@ -279,24 +303,75 @@ impl OptimizerEngine {
     }
 
     /// Fixed-shape gate for the fast optimization path: linear chains of
-    /// Project/Filter over a scan, with at most one ExpandAll hop.
-    ///
-    /// Point lookups and one-hop traversals lower to this grammar. Every
-    /// omitted rule and skipped cost pass requires a node type outside it
-    /// (joins, set operations, sorts, limits, aggregates, subqueries,
-    /// traversals), so anything outside the grammar transparently runs the
-    /// full path and the two paths can never disagree on a gated shape.
+    /// Project/Filter over a scan, with at most one ExpandAll hop. A strict
+    /// Limit -> Sort/TopN -> Dedup prefix is also admitted when its bound fits
+    /// the limit; those shapes need only the cost passes that can fire on a
+    /// distinct-then-ordered chain.
     pub(crate) fn is_fast_shape(root: &PlanNodeEnum) -> bool {
-        let mut expand_hops = 0u32;
-        Self::fast_shape_chain(root, &mut expand_hops)
+        Self::fast_shape_state(root).is_some()
     }
 
-    fn fast_shape_chain(node: &PlanNodeEnum, expand_hops: &mut u32) -> bool {
+    pub(crate) fn fast_shape_state(root: &PlanNodeEnum) -> Option<FastShapeState> {
+        if log::log_enabled!(log::Level::Debug) {
+            let mut chain = Vec::new();
+            let mut node = Some(root);
+            while let Some(current) = node {
+                chain.push(current.type_name());
+                let children = current.children();
+                node = children.first().copied();
+            }
+            log::debug!("fast_shape gate chain: {}", chain.join(" -> "));
+        }
+        let mut state = FastShapeState::default();
+        if !Self::fast_shape_chain(root, &mut state) {
+            return None;
+        }
+        if state.limit_count > state.order_limit {
+            return None;
+        }
+        (state.limit_seen == state.order_seen() && state.order_seen() == state.dedup_seen)
+            .then_some(state)
+    }
+
+    fn fast_shape_chain(node: &PlanNodeEnum, state: &mut FastShapeState) -> bool {
         match node {
+            PlanNodeEnum::Limit(limit)
+                if !state.limit_seen
+                    && !state.order_seen()
+                    && !state.dedup_seen
+                    && limit.offset() == 0
+                    && !limit.is_unbounded()
+                    && limit.count() > 0 =>
+            {
+                state.limit_seen = true;
+                state.limit_count = limit.count();
+            }
+            PlanNodeEnum::Sort(sort)
+                if !state.sort_seen
+                    && !state.topn_seen
+                    && !state.dedup_seen
+                    && sort.sort_items().len() == 1
+                    && sort.sort_items()[0].direction == OrderDirection::Asc =>
+            {
+                state.sort_seen = true;
+                state.order_limit = i64::MAX;
+            }
+            PlanNodeEnum::TopN(topn)
+                if !state.topn_seen
+                    && !state.sort_seen
+                    && !state.dedup_seen
+                    && topn.limit() > 0 =>
+            {
+                state.topn_seen = true;
+                state.order_limit = topn.limit();
+            }
+            PlanNodeEnum::Dedup(_) if !state.dedup_seen && state.order_seen() => {
+                state.dedup_seen = true;
+            }
             PlanNodeEnum::Project(_) | PlanNodeEnum::Filter(_) => {}
             PlanNodeEnum::ExpandAll(_) => {
-                *expand_hops += 1;
-                if *expand_hops > 1 {
+                state.expand_hops += 1;
+                if state.expand_hops > 1 {
                     return false;
                 }
             }
@@ -309,7 +384,7 @@ impl OptimizerEngine {
         if children.len() != 1 {
             return false;
         }
-        Self::fast_shape_chain(children[0], expand_hops)
+        Self::fast_shape_chain(children[0], state)
     }
 
     /// Fast optimization path for fixed shapes: the reduced rule batch plus
@@ -321,14 +396,18 @@ impl OptimizerEngine {
     /// shapes skipping them is exactly identical. Index selection, the
     /// join-order keep-decision notes, precompute notes, feedback,
     /// partitioning, and row estimates all run unchanged.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn optimize_fast_shape(
         &self,
         plan: ExecutionPlan,
         space: Option<&str>,
         layout: &PartitioningLayoutInfo,
+        state: FastShapeState,
+        needs_topn_wiring: bool,
         stage_start: &mut Option<std::time::Instant>,
         stage_timing: bool,
     ) -> OptimizeResult<ExecutionPlan> {
+        let _ = state;
         let mut current_plan = plan;
         current_plan
             .diagnostics
@@ -348,7 +427,13 @@ impl OptimizerEngine {
         }
         Self::mark_opt_stage("logical_heuristic", stage_start, stage_timing);
 
-        current_plan = self.apply_cost_based_fast(current_plan, space, &stats, &calculator)?;
+        current_plan = self.apply_cost_based_fast(
+            current_plan,
+            space,
+            &stats,
+            &calculator,
+            needs_topn_wiring,
+        )?;
         Self::mark_opt_stage("cost_based_fast", stage_start, stage_timing);
 
         current_plan = self.apply_factorization(current_plan)?;
@@ -382,6 +467,7 @@ impl OptimizerEngine {
         space: Option<&str>,
         stats: &StatsView,
         calculator: &Arc<CostCalculator>,
+        needs_topn_wiring: bool,
     ) -> OptimizeResult<ExecutionPlan> {
         let mut plan = plan;
         if plan.logical_plan().is_some() {
@@ -396,6 +482,10 @@ impl OptimizerEngine {
                 rewrite_index_scans(&root, &selector, &self.stats_manager, space, &mut notes);
             plan.set_root(rewritten);
             plan.diagnostics.notes.extend(notes);
+        }
+        if needs_topn_wiring {
+            self.apply_topn_wiring(space, &mut plan, stats);
+            self.apply_topn_wiring_logical(stats, space, &mut plan);
         }
         self.apply_precompute_notes(calculator, &mut plan);
         Ok(plan)

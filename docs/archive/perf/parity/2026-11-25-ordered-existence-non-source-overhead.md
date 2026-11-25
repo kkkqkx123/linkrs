@@ -53,6 +53,12 @@ EXPLAIN 显示 `ordered_existence:proven` 与
 `group_by_count [14|59]`、`join_two_hop [382018]`、
 `variable_path_count [400153]` 与其余生产用例结果均无退化。
 
+随后按 `docs/plan/ordered-existence-fast-shape-optimizer-design.md` 扩展
+优化器快速形状门，`Limit -> Sort -> Dedup` 的严格前缀命中后复用精简 cost pass
+与单 pass fast heuristic，并保留 TopN wiring。目标查询 `optimize_median_us`
+从约 870 us 降至约 554–593 us，`compile_median_ms` 降至约 0.67–0.72 ms，
+`exec` 降至约 1.56 ms；结果仍为 `[14]`，生产用例无退化。
+
 ## 4. 分项计时与判断
 
 `LINKRS_STAGE_TIMING=1` 下目标查询热态分段：
@@ -84,6 +90,22 @@ parse/plan/optimize 的固定成本。若要继续压缩编译，需要单独评
 “查询文本 + 空间 + 目录版本 + 读上下文”的已编译物理计划复用，并在 staged
 write 读上下文下失效；本次不直接改热路径缓存结构。
 
+用 `RUST_LOG=debug` 读取优化器已有的 `OPT_STAGE` 标记（`opt-stage-hot.log`）：
+热态下 `cost_based` 约 650–688 us、`physical_heuristic` 约 819–852 us，
+`remove_factorization` 约 108 us，其余阶段均低于 60 us；首次冷运行两项分别
+约 10 ms 与 9 ms。debug 日志本身有开销，绝对值高于 bench 的 842 us，但相对
+主导项可靠。目标查询顶层是 `Dedup -> TopN -> Limit`，不进入现有
+`fast_shape` 门，因此走了完整规则批次。`physical_heuristic` 的耗时来自固定点
+循环：2 个 chain pass × 5 个 batch，每个 batch 都重算全树 fingerprint 并执行
+规则遍历，即使第 2 轮没有规则命中也要验证收敛。
+
+可优化性：一是为本形状证明 `fast_shape` 的可扩展门，跳过对此链确实无作用的
+unnesting / join-order / TopN wiring / 聚合策略与物理启发式批次；二是按
+“查询文本 + 空间 + 目录版本 + 分区配置 + 参数签名 + 读上下文”缓存已编译物理
+计划，在命中时连 bind/optimize 一起跳过。前者改动面小但必须先证明被跳过的
+规则在该形状上是 no-op；后者收益更通用，但必须处理好统计反馈、schema 与
+staged write 失效。全局缩减启发式迭代次数会影响其他查询，不作为本形状的方案。
+
 `ordered_existence_open_us` 最终 EXPLAIN 读回为 124 us；分段日志显示锁等待为
 0 us，耗时集中在游标调用。此前秒级读数未在新一轮复现，字段继续只作诊断，
 不参与性能验收。
@@ -110,4 +132,6 @@ devs 原始目录：`/data/kkkqkx/linkrs/ordered-existence-remediation/`。
 `measure-remediation-driver.log`（全量门与第一轮采集）、
 `explain-prod-final/lsqb_operators_distinct_limit_r1.txt`（计划形状与编译分项）、
 `stage-explain-final/lsqb_operators_distinct_limit_r1.txt`（open 诊断）、
-`diff-off-final/` 与 `diff-on-final/`（逐次 JSON）、`prod-final/`（生产默认逐用例 JSON）。
+`opt-stage-hot.log` 与 `opt-stage-cold.log`（优化器分项）、
+`diff-off-final/` 与 `diff-on-final/`（逐次 JSON）、`prod-final/`（生产默认逐用例 JSON），
+以及 `fast-shape/`（快速形状门的测试、分项与最终 A/B）。
