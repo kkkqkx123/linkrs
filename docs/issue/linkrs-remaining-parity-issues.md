@@ -1,7 +1,7 @@
 # Linkrs 剩余对齐问题清单
 
-**日期**：2026-11-18，最新状态回填 2026-11-23  
-**状态**：本文件是 Linkrs 与 Neug / Ladybug 对齐剩余任务的单一真相源。历史方案与旧问题清单已删除，不再作为判断依据。分阶段修改方案见 `docs/plan/linkrs-remaining-parity-implementation-plan.md`，该方案不重新定义问题。当前状态与最新落地回测以第 35、37 节为准，阶段一、二的实施见 `docs/plan/stage1-stage2-current-gap-remediation.md`。
+**日期**：2026-11-18，最新资源对齐重测 2026-11-25  
+**状态**：本文件是 Linkrs 与 Neug / Ladybug 对齐剩余任务的单一真相源。历史方案与旧问题清单已删除，不再作为判断依据。分阶段修改方案见 `docs/plan/linkrs-remaining-parity-implementation-plan.md`，该方案不重新定义问题。当前状态以第 1、35、49 节为准；2026-11-25 之前基于跨节点绑定或未对齐 buffer 的三方倍率一律作废，只作为历史过程记录。阶段一、二的实施见 `docs/plan/stage1-stage2-current-gap-remediation.md`。
 
 ## 0. 范围与判定口径
 
@@ -41,39 +41,38 @@
 
 **明确不做**：不把 sf100 的 expected 数值套到 sf0.1/sf1；不把无法语义对齐的查询改成近似查询后上报。
 
-### devs 实测指标与对比发现（2026-11-18）
+### devs 实测指标与对比发现（2026-11-25，资源对齐重测）
 
-环境：devs（E5-2667 v3，绑核 `16-31`、NUMA node 1，`powersave`），内核 4.15，rustc 1.100.0；Linkrs 为本地未提交变更同步后的 release 构建，Ladybug 为 0.22.3 wheel，Neug 为 0.3.1。口径：Linkrs warmup 1 + run 5 的中位数，Ladybug/Neug warmup 1 + run 3 去最大值平均；Neug 为 AP 单线程 wall-clock，只作参照。两轮 Linkrs 独立运行原始日志在 `perf-data/parity/results/2026-11-18/`。
+环境：devs（E5-2667 v3，`powersave`，内核 4.15）；三方统一 `numactl --cpunodebind=1 --membind=1 taskset -c 8-15,24-31`，实际亲和性均为 `8-15,24-31`，参数线程数均为 16，warmup 1 + run 5 去最大值平均。Ladybug 0.22.3 wheel 使用 `buffer_pool_size=67108864`；Neug 0.3.1 使用 `M_FULL`，AP 路径为单线程 wall-clock，只作参照；Linkrs 64 MB buffer pool、引擎内计时。Linkrs 固定门为 16 workers / 10 partitions，生产默认门为配置默认 8 workers / 8 partitions。原始日志、EXPLAIN 与三方 JSON 在 `perf-data/parity/results/2026-11-25/resource-aligned/`。
 
-| 用例 | Linkrs 两轮中位数 ms | 编译中位数 ms | Ladybug ms | Neug ms | 行数/首值 | 备注 |
+| 用例 | Linkrs 生产默认 ms | Linkrs 固定门两轮 ms | Ladybug ms | Neug ms | 行数/首值 | 资源对齐后的判定 |
 |---|---:|---:|---:|---:|---|---|
-| `aggregate_filtered_count` | 2.67 / 2.98 | 0.02 | error | error | 1 / NA / NA | 方言被两台对手拒绝，进跳过清单 |
-| `aggregate_min_max` | 1.24 / 1.33 | 0.02 | 1.020 | 0.158 | 1 / 14 / 14 | 约为 Ladybug 的 1.2–1.3× |
-| `distinct_limit`（修正后） | 1107.75 | 0.03 | 3.755 | 28.701 | 10 / 14 / 14 | 修正排序后首值一致；仍约为 Ladybug 的 295× |
-| `filter_id_range` | 1.73 / 1.84 | 0.02 | 0.974 | 0.159 | 1 / 1700 / 1700 | 约为 Ladybug 的 1.8–1.9× |
-| `filter_or` | 1.58 / 1.62 | 0.02 | 1.517 | 0.317 | 1 / 1603 / 1603 | 基本对齐 Ladybug |
-| `group_by_count` | 1307.53 / 1498.62 | 0.03 | 7.104 | 13.762 | 10 / 14 / 14 | 约为 Ladybug 的 184–211×，最大缺口 |
-| `join_two_hop` | 35.43 / 48.53 | 0.02–0.03 | 2.422 | 24.088 | 1 / 382018 / 382018 | 约为 Ladybug 的 15–20× |
-| `order_limit` | 1.29 / 1.35 | 0.01–0.02 | 0.880 | 0.044 | 10 / 14 / 14 | 约为 Ladybug 的 1.5× |
-| `shortest_path` | 1.78 / 1.96 | 0.01 | error | error | 0 / NA / NA | 方言被对手拒绝且当前端点对无路径，进跳过清单 |
-| `undirected_count` | 4.59 / 5.75 | 0.02 | 1.926 | 1.450 | 1 / 36270 / 36270 | 约为 Ladybug 的 2.4–3.0×，慢路径预期内 |
-| `variable_path_count` | 1102.97 / 1350.19 | 0.03 | 457.680 | 117.401 | 1 / 400153 / 400153 | 约为 Ladybug 的 2.4–3.0× |
+| `aggregate_filtered_count` | — | — | error | error | 1 / NA / NA | Linkrs 方言，双方拒绝，跳过 |
+| `aggregate_min_max` | 1.22 | 1.28 / 1.28 | 0.95 | 0.09 | 1 / 14 / 14 | 对 Ladybug 1.29× |
+| `distinct_limit` | 27.28 | 29.98 / 29.96 | 3.20 | 28.33 | 10 / 14 / 14 | 对 Ladybug 8.52×，对 Neug 同量级 |
+| `filter_id_range` | 1.69 | 1.58 / 1.80 | 1.24 | 0.15 | 1 / 1700 / 1700 | 对 Ladybug 1.37× |
+| `filter_or` | 1.53 | 1.42 / 1.62 | 1.21 | 0.32 | 1 / 1603 / 1603 | 对 Ladybug 1.27× |
+| `group_by_count` | 25.92 | 32.05 / 32.53 | 8.16 | 12.28 | 10 / 14 / 14 | 对 Ladybug 3.18×，最大缺口 |
+| `join_two_hop` | 5.38 | 5.94 / 5.93 | 1.54 | 20.14 | 1 / 382018 / 382018 | 对 Ladybug 3.50×，已快于 Neug |
+| `order_limit` | 1.21 | 1.33 / 1.34 | 0.46 | 0.04 | 10 / 14 / 14 | 对 Ladybug 2.64× |
+| `shortest_path` | — | — | error | error | 0 / NA / NA | Linkrs 方言，双方拒绝，跳过 |
+| `undirected_count` | 4.53 | 5.16 / 5.03 | 1.59 | 1.51 | 1 / 36270 / 36270 | 对 Ladybug 2.85× |
+| `variable_path_count` | 5.38 | 5.60 / 5.90 | 441.42 | 102.90 | 1 / 400153 / 400153 | 约 82× 快于 Ladybug |
 
-原有九条纯计数仍为 0.15–0.60 ms，与历史结论一致；编译中位数稳定在 0.01–0.03 ms。Linkrs 进程 RSS 从 668 MB 升到 720 MB，库体积约 197 MB；Ladybug/Neug 同批数据库体积分别约 35 MB / 43 MB，库体积口径差异单独归类到资源报告问题。
+两条阶段一用例在生产默认 EXPLAIN 中 `expand_output_rows=30536`、固定门为 30473，说明身份主键直通生效，不再输出逐边行；两轮固定门与生产默认均 `result_stable=true`、`spill_rows=0`、`actual=10/8`。Linkrs RSS 峰值约 323–326 MB，DB 约 46 MB；Ladybug 显式 64 MB buffer，Neug 全内存，三者缓存策略不同，Neug 数值只作参照。
 
-**本轮新发现**：
+**本轮结论**：
 
-1. `group_by_count` 与 `distinct_limit` 秒级耗时，而 Ladybug 在毫秒级；这是此前九条 COUNT 完全没有暴露的最大算子缺口，优先于分区放行与图算法。
-2. `group_by_count` 的结果只有 10 组，却比返回 10 行的 `distinct_limit` 还慢，说明成本不在输出物化；需要按计划形状和每算子行数定位，而不是先改存储。
-3. `DISTINCT ... LIMIT` 未带 `ORDER BY` 时三方首值不同（Ladybug 8796093023616、Neug 14），是基准定义不确定的问题，不是引擎数值错误；已给该用例补 `ORDER BY` 并复测三方首值一致。
-4. `aggregate_filtered_count` 与 `FIND SHORTEST PATH` 均为 Linkrs 方言，Ladybug/Neug 直接解析失败；进入跳过清单，不能计入三方数值对比。
-5. 测量期间 devs 上有他人 `wf-server` release 构建，两轮 Linkrs 绝对耗时存在 10%–20% 漂移；慢于毫秒级的量级结论不受影响，但细粒度比例需在安静窗口复核。
+1. 资源对齐后，`group_by_count`、`distinct_limit`、`join_two_hop` 仍是主要差距；`variable_path_count` 已大幅领先三方。
+2. 固定门 16 workers / 10 partitions 在 node1 上不再稳定优于生产默认；两条阶段一用例生产默认更快，说明旧“配置未受益”的判断已经过期。
+3. 旧 `2026-11-18` 三方 JSON 及其倍率（Ladybug 7.10 / 3.755 / 2.422 ms 等）因跨节点绑定与 Ladybug 默认大 buffer 不再可比，devs 上旧目录与 JSON 已删除。
+4. `aggregate_filtered_count` 与 `FIND SHORTEST PATH` 仍为 Linkrs 方言，继续跳过；不把无法语义对齐的查询改成近似查询。
 
 ---
 
 ## 2. 带谓词、分组与去重计数仍缺快路径证据
 
-**现象**：无过滤全局计数已走元数据或向量化路径；带过滤聚合虽然语义正确，但逐行裁决后累加，行计数快捷路径和批量表达式路径关闭。分组空值语义缺少专门锁定，去重计数按设计保持慢路径。devs 实测进一步显示分组计数约 1.3–1.5 秒、去重加排序分页约 1.1 秒，分别是 Ladybug 的 184–211 倍和约 295 倍，是当前最突出的算子缺口。
+**现象**：无过滤全局计数已走元数据或向量化路径；带过滤聚合虽然语义正确，但逐行裁决后累加，行计数快捷路径和批量表达式路径关闭。分组空值语义缺少专门锁定，去重计数按设计保持慢路径。2026-11-18 原始实测中分组计数约 1.3–1.5 秒、去重加排序分页约 1.1 秒；资源对齐后已分别降到 25.92 / 27.28 ms，但仍是当前最突出的算子缺口，见第 1、49 节。
 
 **完成定义**：
 
@@ -143,7 +142,7 @@
 
 **验证方式**：在 soc-livejournal 或同等图数据上三方对齐；图500 数据目录当前只有 schema/copy 文件，需先补齐数据后再纳入。
 
-**当前锚点**：`crates/linkrs-query/tests/dql/find_path.rs` 覆盖路径与最短路语义；`benches/parity/queries/lsqb/operators/shortest_path.benchmark` 只是可执行 smoke，且 Linkrs 专用 `FIND SHORTEST PATH` 方言已被 Ladybug/Neug 拒绝并写入跳过清单；变长路径计数在 devs 上约 1.1–1.35 秒，是 Ladybug 的 2.4–3.0 倍，需要在纳入算法图前先定位。
+**当前锚点**：`crates/linkrs-query/tests/dql/find_path.rs` 覆盖路径与最短路语义；`benches/parity/queries/lsqb/operators/shortest_path.benchmark` 只是可执行 smoke，且 Linkrs 专用 `FIND SHORTEST PATH` 方言已被 Ladybug/Neug 拒绝并写入跳过清单；变长路径计数在 2026-11-18 原始实测中约 1.1–1.35 秒；资源对齐后为 5.38 ms，已快于三方，见第 1、49 节。
 
 **明确不做**：不做近似算法和截断采样。
 
@@ -199,8 +198,9 @@
 | `benches/parity/skip.txt` | 记录两条 Linkrs 方言专用用例的跳过原因与解禁条件 |
 | `src/bin/linkrs_parity_bench.rs` 内联单测 | 锁定嵌套目录发现、上游标记解析、跳过原因解析、浮点/无序比较 |
 | `crates/linkrs-query/tests/dql/aggregation.rs` 两处新增用例 | 锁定过滤计数与 WHERE 计数等价、空输入单行零 |
-| `perf-data/parity/results/2026-11-18/` | devs 两轮 Linkrs 原始日志、Ladybug/Neug 原始 JSON、`distinct_limit` 修正后复测结果（本地忽略目录） |
-| devs `/data/kkkqkx/graphdb-ben/results/2026-11-18-linkrs-ops/` | 同一批结果的远端落盘，含数据库目录与运行日志 |
+| `perf-data/parity/results/2026-11-18/` | 历史过程记录；旧三方 JSON 因资源口径不可比，devs 上原始目录与 JSON 已删除 |
+| `perf-data/parity/results/2026-11-25/resource-aligned/` | 当前权威三方数据：Linkrs gate 日志/JSON/EXPLAIN，Ladybug/Neug 同绑定 JSON 与 runner 日志 |
+| devs `/data/kkkqkx/linkrs/resource-aligned-parity/` | 当前 Ladybug/Neug 原始 JSON、日志与数据库目录 |
 | `docs/issue/linkrs-remaining-parity-issues.md` | 本文件，剩余任务与验收口径的唯一入口 |
 
 新增 parity 用例当前不带 `----expected`，只作为可执行与行数记录载体；expected 必须由同规模参考实现生成后回填。运行命令与报告格式仍以 `benches/parity/README.md` 为准。
@@ -365,7 +365,7 @@ devs 上 release 编译通过；`expand_pushdown` 单测 22/22、DQL 322/322、s
 | `distinct_limit` | 114–146 | 114.3 / 124.5 / 136.2 / 115.0 | 无回归，噪声内 |
 | 九条纯计数 | 0.140–0.606 | 0.146–0.654 | 无实质回归，单轮漂移 |
 
-`variable_path_count` 已从秒级降到十几毫秒，超过与 Ladybug 同数量级的目标；`join_two_hop` 约 14 ms，相对 Ladybug 的 2.42 ms 仍有约 5–6 倍差距，但已消除中间路径行物化。后续收益需来自更窄的度读取或并行前沿，而不是继续改聚合。原始日志与四轮 JSON 落在 `perf-data/parity/results/2026-11-18/stage10-two-hop-variable/`，远端在 `/data/kkkqkx/linkrs/stage2-results/` 与 `/data/kkkqkx/linkrs/stage2-gate3.log`。
+`variable_path_count` 已从秒级降到十几毫秒，超过与 Ladybug 同数量级的目标；`join_two_hop` 当时约 14 ms，相对旧跨节点口径下 Ladybug 的 2.42 ms 仍有约 5–6 倍差距，但已消除中间路径行物化；资源对齐后的当前倍率见第 1、49 节。后续收益需来自更窄的度读取或并行前沿，而不是继续改聚合。原始日志与四轮 JSON 落在 `perf-data/parity/results/2026-11-18/stage10-two-hop-variable/`，远端在 `/data/kkkqkx/linkrs/stage2-results/` 与 `/data/kkkqkx/linkrs/stage2-gate3.log`。
 
 ## 20. 两跳计数读取合并实测回填（2026-11-19）
 
@@ -381,7 +381,7 @@ devs 上 release 编译通过；`expand_pushdown` 单测 22/22、DQL 322/322、s
 | `distinct_limit` | 114.3–136.2 | 121.7–128.2 | 无回归 |
 | 九条纯计数 | 0.146–0.654 | 0.155–0.686 | 噪声内 |
 
-`EXPLAIN ANALYZE` 中 `ExpandAll` 从约 15.3 ms 降到约 7.8 ms，顶点扫描仍约 0.6 ms。实现中曾采用逐邻居解析外部 ID 的版本，两跳约 10 ms；改为一次批量解析后保留相同悬空邻居语义并恢复到约 7 ms。结论：阶段二剩余改进达成，两个目标用例相对上一轮各再降约一半；`join_two_hop` 相对 Ladybug 2.42 ms 仍约 2.6–2.8 倍，后续若继续下探需转向并行前沿或分区计数，属于另一阶段任务。日志与 JSON 落在 `perf-data/parity/results/2026-11-18/stage11-read-fusion/`，远端在 `/data/kkkqkx/linkrs/readfusion-results/` 与 `/data/kkkqkx/linkrs/readfusion-gate3.log`。
+`EXPLAIN ANALYZE` 中 `ExpandAll` 从约 15.3 ms 降到约 7.8 ms，顶点扫描仍约 0.6 ms。实现中曾采用逐邻居解析外部 ID 的版本，两跳约 10 ms；改为一次批量解析后保留相同悬空邻居语义并恢复到约 7 ms。结论：阶段二剩余改进达成，两个目标用例相对上一轮各再降约一半；`join_two_hop` 相对当时的 Ladybug 2.42 ms 仍约 2.6–2.8 倍；该倍率已被资源对齐重测取代，当前为 3.50×，见第 1、49 节。后续若继续下探需转向并行前沿或分区计数，属于另一阶段任务。日志与 JSON 落在 `perf-data/parity/results/2026-11-18/stage11-read-fusion/`，远端在 `/data/kkkqkx/linkrs/readfusion-results/` 与 `/data/kkkqkx/linkrs/readfusion-gate3.log`。
 
 ## 21. 并行计数前沿漂移修复与放行恢复（2026-11-19）
 
@@ -429,7 +429,7 @@ devs 上 release 编译通过；存储谓词单测 3/3、storage lib 1406/1406�
 
 ## 24. 下一阶段差距分析与设计
 
-三方指标对照、有序并行 A/B、ref 实现参照与下一阶段任务已写入 `docs/plan/next-stage-parity-gap-design.md`。当前主要差距集中在 `distinct_limit`、`group_by_count`、少量微扫描算子和库体积；两项最大缺口在本轮默认测量中未启用有序并行，恢复可比基线后仍分别约为 Ladybug 的 14× 与 31×。下一阶段先冻结测量基线，再做分区扫描/展开/聚合融合、精确局部 TopN、窄前置存储下推与 WAL/checkpoint 体积回收。补齐 `ref/ladybug` 与 `ref/neug` 后，方案文档第 7 节进一步给出按源码定位的借鉴点：packed extend、multiplicity 加权聚合、typed TopN、按度数预取、活动/frozen 双 WAL 等。
+三方指标对照、有序并行 A/B、ref 实现参照与下一阶段任务已写入 `docs/plan/next-stage-parity-gap-design.md`。当前主要差距集中在 `distinct_limit`、`group_by_count`、少量微扫描算子和库体积；两项最大缺口在当时的默认测量中未启用有序并行，恢复可比基线后曾分别约为 Ladybug 的 14× 与 31×；该倍率已被资源对齐重测取代，当前为 8.52× 与 3.18×，见第 1、49 节。下一阶段先冻结测量基线，再做分区扫描/展开/聚合融合、精确局部 TopN、窄前置存储下推与 WAL/checkpoint 体积回收。补齐 `ref/ladybug` 与 `ref/neug` 后，方案文档第 7 节进一步给出按源码定位的借鉴点：packed extend、multiplicity 加权聚合、typed TopN、按度数预取、活动/frozen 双 WAL 等。
 
 ## 25. 下一阶段首轮实现与回测
 
@@ -566,28 +566,28 @@ devs release 编译通过；local topk 3/3、typed group 5/5、并行分区 27/2
 
 实现缺陷修复不改变改进项立项结论。验证：query lib 2313 passed、storage lib 1412 passed、gate 全绿；固定门 `distinct_limit` 93.22 / 93.56 ms，`group_by_count` 99.41 / 98.79 ms，`actual=10`、结果逐值一致、`spill_rows=0`，库体积约 38.7 MB。指标目录：`perf-data/parity/results/2026-11-18/implementation-defects/`。
 
-## 35. 当前状态核对（2026-11-23）
+## 35. 当前状态核对（2026-11-25，资源对齐后）
 
-依据 `perf-data/parity/results/2026-11-23/observability-plan-proof/final-optimized/round1.log`、`round2.log`、`explain1/`，以及 `perf-ab/` 四组 A/B 日志。口径仍为 LSQB sf0.1、warmup 1 + run 5、绑核 16-31、并行门 `--parallel-workers 16 --max-partitions 10 --require-parallel-explain`；对手数据沿用第 1 节的三方原始 JSON，`distinct_limit` 使用修正 `ORDER BY` 后的 Ladybug 数值。口径不同，只用于量级判断。
+依据 `perf-data/parity/results/2026-11-25/resource-aligned/`：Linkrs 两轮固定门与生产默认日志、逐用例 JSON、EXPLAIN，以及同绑定同 buffer 的 Ladybug/Neug JSON。口径为三方 node1 绑定、16 线程参数、warmup 1 + run 5 去最大值平均；Ladybug 显式 64 MB buffer，Neug 全内存且 AP 单线程 wall-clock，只作参照。第 1 节与本节为当前权威数据；2026-11-23 及更早的三方倍率作废。
 
-| 原阶段 | 原始问题 | 当前固定门 | 对手 | 当前判定 |
-|---|---|---|---|---|
-| 阶段一 | `group_by_count` 1.31–1.50 秒，`distinct_limit` 约 1.11 秒 | 119 / 103 ms，137 / 89 ms | Ladybug 7.10 / 3.755 ms，Neug 13.76 / 28.70 ms | 秒级瓶颈消除；剩余百毫秒级差距未闭环 |
-| 阶段二 | `join_two_hop` 35–49 ms，`variable_path_count` 1.10–1.35 秒 | 5.9 / 6.2 ms，6.5 / 6.3 ms | Ladybug 2.42 / 457.68 ms，Neug 24.09 / 117.40 ms | 基本闭环；两跳相对 Ladybug 仍约 2.5 倍 |
-| 阶段三 | `aggregate_filtered_count` 2.67 ms，微扫描秒级隐患 | 1.21 / 1.17 ms；`filter_id_range` 1.83 / 1.77 ms，`filter_or` 1.63 / 1.61 ms，`order_limit` 1.32 / 1.27 ms | Ladybug 1.02 / 0.974 / 1.517 / 0.880 ms | 过滤聚合已闭环；微扫描仍有 1.2–1.9 倍差距，完整谓词替换未放行 |
+| 原阶段 | 原始问题 | 当前生产默认 | 当前固定门两轮 | 对手（Ladybug / Neug） | 当前判定 |
+|---|---|---:|---:|---|---|
+| 阶段一 | `group_by_count` 1.31–1.50 秒，`distinct_limit` 约 1.11 秒 | 25.92 / 27.28 ms | 32.05 / 32.53 ms；29.98 / 29.96 ms | 8.16 / 3.20 ms；12.28 / 28.33 ms | 秒级瓶颈消除；对 Ladybug 3.18× / 8.52×，未闭环 |
+| 阶段二 | `join_two_hop` 35–49 ms，`variable_path_count` 1.10–1.35 秒 | 5.38 / 5.38 ms | 5.94 / 5.93 ms；5.60 / 5.90 ms | 1.54 / 441.42 ms；20.14 / 102.90 ms | 变长计数大幅领先；两跳对 Ladybug 3.50×，快于 Neug |
+| 阶段三 | `aggregate_filtered_count` 2.67 ms，微扫描秒级隐患 | 1.22 / 1.69 / 1.53 / 1.21 ms | 同量级 | 0.95 / 1.24 / 1.21 / 0.46 ms | 过滤聚合已闭环；微扫描对 Ladybug 1.27–2.85× |
 
 逐用例证据与判定：
 
-1. `EXPLAIN ANALYZE` 中 `group_by_count` 的 `typed_group_hits=110`、`typed_group_fallbacks=0`，`distinct_limit` 的 10 个分区均显示 `local_topk:pushed`，说明阶段一的两条 typed 快路径确实生效，不是缓存偶然命中。两轮 `actual=10`、`actual_partitions=10`、结果逐值一致、`spill_rows=0`。
-2. PROFILE 显示 10 个分区各扫描约 21.5k 行，`StorageScanVertices` 自耗时约 50–74 ms，`ExpandAll` 单分区约 25 ms；`Project` 已为 `rows: 0`，局部聚合、LocalTopK、最终交换均不再是主要成本。分区 `work_time` 约 0.93–1.06 秒、`wall_time` 约 100–112 ms、偏斜比约 1.06–1.28。阶段一的原始“聚合自身秒级”已转为“分区扫描与单跳展开百毫秒级”。
-3. 按第 26 节要求冻结的经济分区点为 10；四轮 A/B 中 16 分区因内存带宽和交换开销更慢，`perf-ab/four-way.log` 与 `isolate.log` 也未给出稳定的比较器/hash/顺序变体收益，不应据单轮波动继续调这些维度。
-4. 生产配置尚未受益：`config.toml:242-257` 与 `crates/linkrs-config/src/parallel.rs` 中 `enabled=false`、`workers=1`、`max_partitions=1`，`allow_ordered_parallel_expand=false`；benchmark 在 `src/bin/linkrs_parity_bench.rs:819` 显式请求有序并行。生产默认执行仍接近旧的串行量级。
-5. 编译中位数出现新变化：九条纯计数仍为 0.01 ms 级，但两条并行固定门升到约 2.0–3.1 ms。绝对量小于执行时间，但对短查询和 Neug 对照不利，需在执行链收敛后单独归因。
-6. `filter_count_pushed` 与 `filter_count_unpushed` 最新均约 1.7 ms，计划形状没有形成阶段三设想的快慢路径差异；完整谓词替换仍因 TTL、跨类型和 NULL 语义保持关闭，残余 `Filter` 继续保留。该结论不改变第 22、23 节的正确性决策。
-7. 资源口径已收敛：库体积约 42–44 MB、RSS 峰值约 320 MB、buffer pool 64 MB、`reclaim_failures=0`；与 Ladybug 35 MB / Neug 43 MB 同一量级。仍有差距的是 buffer 策略：Ladybug parity runner 使用约 90% 可用内存作为 buffer manager，大规模冷热差异尚未验证。
-8. 与参考源码的差距主要是执行形态：Ladybug `scan_rel_table.cpp` 的 `PackedChildSlices`、`packed_filtered_count.cpp` 与 `count_extend_chain.cpp` 直接按父区间累计；Neug `csr_view.h` 的 POD 邻居迭代器与按度数预取避免了当前 `expand_columnar.rs` 中逐边 `PendingEdge`、目的端去重和 typed 列重组。当前 `typed_group_count.rs` 仍是预扫描加两次哈希探测，LocalTopK 非 typed 回退探针约 1.53 秒而 typed 约 2.45 ms。
+1. `EXPLAIN ANALYZE` 中 `group_by_count` 的 `typed_group_hits=112`（生产默认）/`110`（固定门），`distinct_limit` 的 8/10 个分区均显示局部 TopK 生效；两条用例 `expand_output_rows` 为 30536 / 30473，不是旧的逐边 215488 行。结果仍为 `[14|59]` / `[14]`，`result_stable=true`、`actual=8/10`、`spill_rows=0`。
+2. 生产默认自耗时 `scan_read_us` 约 41–43 ms、`expand_read_us` 约 77–81 ms，其中拓扑读取约 65–69 ms、目的端读取约 12 ms。阶段一剩余瓶颈已转为分区扫描与单跳拓扑区间读取，而不是聚合、TopK、Exchange 或配置。
+3. 分区点 10 仍是固定门的经济点；但在 node1 的 8 个物理核上，16 workers / 10 partitions 不再稳定优于生产默认 8/8，两条阶段一用例生产默认更快。默认值不改，固定门只作为上限口径。
+4. 生产配置为 `enabled=false`、`workers=8`、`max_partitions=8`、`allow_ordered_parallel_expand=true`；benchmark 固定门显式传 16/10 只为验证并行计划，不代表生产默认。旧的“workers=1、配置未受益”描述已过期。
+5. 编译中位数在两条阶段一用例约 1.5–2.5 ms，纯计数仍为 0.01 ms 级；对 ms 级短查询不利，但不改变本轮结果判定。
+6. `filter_count_pushed` 与 `filter_count_unpushed` 仍约 1.0–1.2 ms，完整谓词替换继续因 TTL、跨类型和 NULL 语义保持关闭，残余 `Filter` 保留。
+7. 资源口径已对齐：三方 CPU 亲和性均为 `8-15,24-31`，Ladybug buffer 显式 64 MB 与 Linkrs 相同；Neug `M_FULL` 无法等价，只作参照。Linkrs RSS 约 323–326 MB、DB 约 46 MB；旧“Ladybug 90% 内存 buffer”描述属于上游 runner，不适用于本批 JSON。
+8. 参考源码差距仍在读取形态：Ladybug 的 packed child slices/count extend 与 Neug 的 POD CSR 迭代比当前区间读取更少对象与元数据访问；但 packed 直写、身份直通、typed 聚合与精确局部 TopK 已落地，预取候选无 ≥15% 证明，不进入生产。
 
-当前结论：阶段二和阶段三的过滤聚合部分可以视为已解决；阶段一需要在不改变精确语义的前提下，转向“父批/孩子偏移 + 展开与局部状态融合”，并在通过后更新生产配置。后续方案见 `docs/plan/stage1-stage2-current-gap-remediation.md`。
+当前结论：阶段二和阶段三的过滤聚合部分可以视为已解决；阶段一需要在不改变精确语义的前提下继续降低单次拓扑区间读取与分区扫描成本。生产配置保持当前默认值，任何变更都需要同一资源口径的 A/B 与容量证据。后续方案见 `docs/plan/stage1-stage2-current-gap-remediation.md`。
 
 ## 36. 后续方案入口
 
@@ -722,3 +722,42 @@ devs release 编译通过，正确性门全绿：配置默认值 1/1、partition
 5. 分片锁粒度与 RAM 容量属于架构取舍，缺少偏斜/容量微基准，暂缓。
 
 devs release 全门通过：配置默认值、partitioning 49/49、typed group 9/9、local topk 11/11、parallel 27/27、DQL 324/324、storage 全量、column batch 全绿；两轮固定门 `actual=10`、`result_stable=true`、`spill_rows=0`，结果仍为 `group_by_count [14|59]`、`distinct_limit [14]`。两轮耗时 30.54 / 37.91 ms 与 30.11 / 36.69 ms，生产默认 29.50 / 28.51 ms；与上一切片同量级，单轮波动不视为独立收益。两跳 5.0–5.6 ms、变长路径 4.8–5.8 ms 未退化。判定：只保留第 1 项；它移除每批一条确定性分配且不改变语义，其余项按证明门槛拒绝或暂缓。日志、JSON 与 EXPLAIN 见 `perf-data/parity/results/2026-11-24/parity-convergence/`。
+
+## 48. 结果语义优先审计与修复（2026-11-24）
+
+本轮先审计会改变结果、破坏契约或让验证失去意义的问题，再谈性能。结论写入 `docs/plan/semantic-correctness-remediation.md`：历史记录中的会话键、401 双触发、SSE 尾帧、order-limit 逻辑/物理脱节、index cursor 跨 generation 不有序等问题在当前源码中已修，不重复处理；跨源 ATTACH、`LOAD FROM (query)`、`SET a = {map}`、`CALL option=value` 属于功能缺口，不影响已支持语句的结果正确性。
+
+发现并修复两项当前问题：
+
+1. 分区局部 TopK 只看 `Dedup/Aggregate` 后的第一个 `TopN`，没检查其上方算子。若上方存在 `Filter`、`Sort`、另一个 `Aggregate/Window/TopN` 等，分区内提前截断会丢掉全局结果需要的行。现在要求 `TopN` 之上只能是 `Project`，或 `offset=0` 且 `count <= TopN.n` 的前缀 `Limit`；不安全形状返回 `local_topk:unpushed,reason=unsafe-global-tail`，并同时关闭 packed 身份直通。补了 `Filter` 禁用与前缀 `Limit` 保留两个分区物理计划单测。
+2. packed 键直通只输出分组键列，原证明只检查目的端主键与旁路列，未检查边需求。若下游同时需要边属性，该路径会丢列。现在运行时身份快路径与 rowless payload 都要求 bypass 边列为空；`count(h)` 的整边变量需求只参与行数累加、不产生 bypass 列，因此仍可用。计划期不按 `edge_required_props` 的字符串编码猜测，因为那会误关当前 `distinct_limit` 的形状。
+
+中途尝试用 `edge_required_props == Some([])` 或 `skip_rows` 做计划期/运行时证明，实测把 `distinct_limit` 的 `expand_output_rows` 从 30473 推回 215488、耗时升到 50–79 ms；说明证明过窄会关闭合法直通，已撤回。最终证明以“是否产生需要物化的边列”为准。
+
+该轮语义修复在旧 `16-31` 跨节点绑定下 release 全门通过：partitioning 49/49、typed group 9/9、local topk 11/11、parallel 27/27、DQL、storage、column batch 全绿，结果仍为 `[14]` / `[14|59]`。资源对齐重测后同一修复仍全绿，local topk 13/13；固定门 `distinct_limit` 29.98 / 29.96 ms、`group_by_count` 32.05 / 32.53 ms，生产默认 27.28 / 25.92 ms，`result_stable=true`、`spill_rows=0`、`actual=10/8`。EXPLAIN 显示 `expand_output_rows=30473/30536` 且无 `local_topk:unpushed`，语义修复没有误伤合法优化。旧日志见 `perf-data/parity/results/2026-11-24/semantic-correctness/`，当前权威数据见 `perf-data/parity/results/2026-11-25/resource-aligned/`。
+
+## 49. 三方资源对齐证明与重测（2026-11-25）
+
+此前三方数字不可严格比较：Linkrs 固定门使用 `taskset -c 16-31`，该集合横跨两个 NUMA 节点，文档却写成“node1 独占”；Ladybug/Neug 的 JSON 没有亲和性字段，且 Ladybug Python runner 使用 wheel 默认约 80% 系统内存作 buffer，Linkrs 只配置 64 MB。本节先对齐资源，再重采指标；此前基于旧 JSON 的倍率全部作废。
+
+环境与改动：
+
+- 三方统一 `numactl --cpunodebind=1 --membind=1 taskset -c 8-15,24-31`，实际亲和性写入 JSON，均为 `8-15,24-31`。
+- 三方参数线程数均为 16；Ladybug 为 16 connection threads，Neug 的 AP 路径仍为单线程 wall-clock，结果只作参照。
+- 三方均 warmup 1 + run 5 去最大值平均；Linkrs 同时上报 drop-max mean 与中位数。
+- `graphdb-ben/neug_runner.py` 改为扫描 `*.benchmark`，可直接读取 `benches/parity/queries/lsqb/operators/`；新增 `--warmup`、`--run`、`--ladybug-buffer-mb`、`--neug-buffer-strategy`、`--cpu-binding`、`--numa-policy`，并把亲和性、NUMA 策略、线程模型、buffer、计时来源与引擎版本写进 JSON。Ladybug 显式传 `buffer_pool_size=67108864`。
+- `scripts/devs-stage1-stage2-gate.sh` 与新增 `scripts/devs-resource-aligned-parity.sh` 统一使用同一绑定；Linkrs parity JSON 新增 `cpu_binding` 与 `numa_policy` 字段。
+- devs 上旧的 `2026-11-18-linkrs-ops` 目录与旧三方 JSON 已删除，避免继续引用旧口径。
+
+重测结果（Linkrs 固定门 / 生产默认 / Ladybug / Neug，ms）：
+
+| 用例 | Linkrs 固定门两轮 | Linkrs 生产默认 | Ladybug | Neug |
+|---|---:|---:|---:|---:|
+| `group_by_count` | 32.05 / 32.53 | 25.92 | 8.16 | 12.28 |
+| `distinct_limit` | 29.98 / 29.96 | 27.28 | 3.20 | 28.33 |
+| `join_two_hop` | 5.94 / 5.93 | 5.38 | 1.54 | 20.14 |
+| `variable_path_count` | 5.60 / 5.90 | 5.38 | 441.42 | 102.90 |
+| `filter_or` | 1.42 / 1.62 | 1.53 | 1.21 | 0.32 |
+| `order_limit` | 1.33 / 1.34 | 1.21 | 0.46 | 0.04 |
+
+结论：资源对齐后，`group_by_count` 为 Ladybug 的 3.18×、`distinct_limit` 为 8.52×、`join_two_hop` 为 3.50×；可变长路径计数仍显著领先三方。固定门 16 workers / 10 partitions 在 node1 上不再稳定优于生产默认，生产配置因此保持不变。所有正确性门与微基准门重跑通过；证据在 `perf-data/parity/results/2026-11-25/resource-aligned/`。后续任何 A/B 必须复用本节绑定与 JSON 字段，不得再与旧跨节点或未对齐 buffer 的数字混用。

@@ -64,11 +64,13 @@ fn parse_switch(args: &[String], flag: &str, default: bool) -> bool {
 /// Resource figures shared by every result of one run. They are collected
 /// once because directory size and the process RSS peak do not change per
 /// query, and a parity table needs the same resource basis for all rows.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 struct ResourceSample {
     db_size_bytes: u64,
     rss_peak_kb: u64,
     buffer_pool_bytes: u64,
+    cpu_binding: String,
+    numa_policy: String,
 }
 
 /// Per-query diagnostics recovered from EXPLAIN plus persistence snapshots.
@@ -891,14 +893,22 @@ fn cmd_run(args: &[String]) {
     if let Some(dir) = &explain_dir {
         fs::create_dir_all(dir).unwrap_or_else(|e| die(format!("create explain dir: {e}")));
     }
+    let cpu_binding = std::env::var("BENCH_CPU_BINDING").unwrap_or_else(|_| "unknown".to_string());
+    let numa_policy = std::env::var("BENCH_NUMA_POLICY").unwrap_or_else(|_| "unknown".to_string());
     let resources = ResourceSample {
         db_size_bytes: directory_size_bytes(&db),
         rss_peak_kb: rss_peak_kb().unwrap_or(0),
         buffer_pool_bytes,
+        cpu_binding,
+        numa_policy,
     };
     println!(
-        "[run] resources: db_size_bytes={} rss_peak_kb={} buffer_pool_bytes={}",
-        resources.db_size_bytes, resources.rss_peak_kb, resources.buffer_pool_bytes
+        "[run] resources: db_size_bytes={} rss_peak_kb={} buffer_pool_bytes={} cpu_binding={} numa_policy={}",
+        resources.db_size_bytes,
+        resources.rss_peak_kb,
+        resources.buffer_pool_bytes,
+        resources.cpu_binding,
+        resources.numa_policy
     );
 
     let files = collect_benchmark_files(&bench_dir);
@@ -1403,6 +1413,16 @@ fn write_run_result(
         json,
         "  \"buffer_pool_bytes\": {},",
         resources.buffer_pool_bytes
+    );
+    let _ = writeln!(
+        json,
+        "  \"cpu_binding\": {},",
+        json_escape(&resources.cpu_binding)
+    );
+    let _ = writeln!(
+        json,
+        "  \"numa_policy\": {},",
+        json_escape(&resources.numa_policy)
     );
     json.push_str("  \"reclaim_failures\": 0,\n");
     json.push_str("  \"typed_group_hits\": 0,\n");

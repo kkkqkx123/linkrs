@@ -17,11 +17,11 @@
 
 修复：
 
-- 两个判定都要求 `TopN` 之上的全局算子只能是 `Project`。
+- 两个判定要求 `TopN` 之上的全局算子只能是 `Project`，或 `offset=0` 且 `count <= TopN.n` 的 `Limit`。前缀 `Limit` 只截取已排序结果的前缀，不会需要被局部 TopK 丢弃的行；带偏移、无上界或更大的 `Limit` 仍判为不安全。
 - `local_distinct_topn` 对不安全尾部返回 `local_topk:unpushed,reason=unsafe-global-tail`，进入 EXPLAIN 诊断。
 - `packed_expand_key` 复用该判定，因此不安全形状同时关闭身份直通，避免双重语义风险。
 
-反例：`DISTINCT ... ORDER BY key LIMIT k` 之上再接 `Filter` 时，必须不生成 `LocalTopKDistinct`。已补分区物理计划单测。
+反例：`DISTINCT ... ORDER BY key LIMIT k` 之上再接 `Filter` 时，必须不生成 `LocalTopKDistinct`；同形状的 `LIMIT k` 前缀仍应保留局部 TopK。这两种分区物理计划单测都已补。
 
 ## 3. packed 键直通可能丢弃边属性
 
@@ -44,5 +44,7 @@
 - DQL 全量、并行分区全量、storage 全量；
 - 固定门两轮必须保持 `group_by_count [14|59]`、`distinct_limit [14]`、`result_stable=true`、`spill_rows=0`、`actual=10`；
 - 生产默认单轮无结果漂移。
+
+devs release 全门通过：构建、配置默认值、partitioning 49/49、typed group 9/9、local topk 11/11、parallel 27/27、DQL 全量、storage 全量、column batch 全绿，两轮固定门与生产默认均 `status ok`。固定门 `distinct_limit` 26.71 / 25.20 ms、`group_by_count` 29.15 / 27.98 ms，生产默认 32.30 / 35.41 ms；结果保持 `distinct_limit [14]`、`group_by_count [14|59]`，`result_stable=true`、`actual=10`、`spill_rows=0`。EXPLAIN 中 `distinct_limit` 的 `expand_output_rows=30473`，没有 `local_topk:unpushed`，说明前缀 `Limit` 没有误伤身份直通。语义门已全绿；这些耗时数字只用于确认没有退化，不是新的性能收益结论。
 
 只有在这些门全绿时，后续 A/B 数字才有解释意义。

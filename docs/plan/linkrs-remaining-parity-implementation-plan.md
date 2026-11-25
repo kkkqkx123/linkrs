@@ -14,7 +14,9 @@
 
 ## 已冻结的基线
 
-devs 2026-11-18 两轮 LSQB sf0.1 实测显示：原有九条纯计数仍为 0.15–0.60 ms，编译中位数 0.01–0.03 ms；新增算子中 `group_by_count` 为 1.31–1.50 秒、`distinct_limit` 修正排序后约 1.11 秒、`join_two_hop` 为 35–49 ms、`variable_path_count` 为 1.10–1.35 秒。原始日志与三方 JSON 在 `perf-data/parity/results/2026-11-18/`，结论与表格在问题文档。
+devs 2026-11-18 两轮 LSQB sf0.1 实测显示：原有九条纯计数仍为 0.15–0.60 ms，编译中位数 0.01–0.03 ms；新增算子中 `group_by_count` 为 1.31–1.50 秒、`distinct_limit` 修正排序后约 1.11 秒、`join_two_hop` 为 35–49 ms、`variable_path_count` 为 1.10–1.35 秒。这批数字只用于描述原始问题，不作为当前三方倍率依据。
+
+2026-11-25 已按 `numactl --cpunodebind=1 --membind=1 taskset -c 8-15,24-31`、三方 16 线程、warmup 1 + run 5、Ladybug 64 MB buffer 重新采集。当前基线为 Linkrs 生产默认 `group_by_count` 25.92 ms、`distinct_limit` 27.28 ms、`join_two_hop` 5.38 ms、`variable_path_count` 5.38 ms；Ladybug 对应 8.16 / 3.20 / 1.54 / 441.42 ms，Neug 对应 12.28 / 28.33 / 20.14 / 102.90 ms。三方环境与逐用例 JSON 在 `perf-data/parity/results/2026-11-25/resource-aligned/`，本方案后续判断以这批数据为准。
 
 ---
 
@@ -220,8 +222,8 @@ devs 2026-11-18 两轮 LSQB sf0.1 实测显示：原有九条纯计数仍为 0.1
 
 ## 当前状态与后续收敛
 
-截至 2026-11-23，阶段一的原始秒级用例已由 1.1–1.5 秒降到约 90–120 ms，typed 分组计数和分区局部 TopK 均已在 PROFILE 中确认生效；阶段二的两跳与变长计数已降到约 6 ms；阶段三的过滤计数已降到约 1.2 ms。详细证据见 `docs/issue/linkrs-remaining-parity-issues.md` 第 35 节。
+截至 2026-11-25 的资源对齐重测，阶段一的原始秒级用例已由 1.1–1.5 秒降到生产默认 25.92 / 27.28 ms；阶段二的两跳与变长计数降到 5.38 / 5.38 ms；阶段三的过滤计数仍约 1.2–1.7 ms。typed 分组计数、局部 TopK、父批拓扑直写与身份主键直通均已在 EXPLAIN 与逐用例 JSON 中确认生效。详细证据见 `docs/issue/linkrs-remaining-parity-issues.md` 第 1、35、49 节。
 
-阶段一的“秒级瓶颈”已消除，但相对 Ladybug 仍约 15–30 倍，且收益依赖 benchmark 显式放行并行，生产默认配置未启用。因此首条硬门槛按原始字面已满足，按下一阶段 20 ms / 15 ms 目标仍未闭环。后续不重新划分阶段，也不改写上述历史目标；针对阶段一、二的收敛实施与生产配置更新写入 `docs/plan/stage1-stage2-current-gap-remediation.md`，该文件继承本方案的护栏与不做项。
+阶段一的“秒级瓶颈”已消除，事件到键的放大也已切断；按当前资源对齐口径，`group_by_count` 为 Ladybug 的 3.18×，`distinct_limit` 为 8.52×。首条硬门槛按原始字面已满足，按下一阶段 20 ms / 15 ms 与倍率目标仍未闭环。后续不重新划分阶段，也不改写上述历史目标；针对阶段一、二的收敛实施与生产配置判定写入 `docs/plan/stage1-stage2-current-gap-remediation.md`，该文件继承本方案的护栏与不做项。
 
-首轮回测已于 2026-11-23 在 devs 完成：release 构建与 partitioning / typed group / local topk / parallel / DQL / storage 全绿，生产默认已切到 `workers=8, max_partitions=8, allow_ordered_parallel_expand=true`。固定门中两条阶段一用例仍在约 100–130 ms，未达 40 ms / 30 ms 中间门；阶段二两跳约 6.2 ms，未达 4 ms。新增自耗时证据显示扫描读取与展开读取合计占主导，后续按问题清单第 37 节转入扫描枚举/可见性与目的端属性读取；不得因配置收益而宣称算子目标闭环。
+资源对齐后的全门重测已通过：release 构建、配置默认值、partitioning 49/49、typed group 9/9、local topk 13/13、parallel 27/27、DQL、storage、column batch 与三个微基准门全绿。生产默认保持 `workers=8 / max_partitions=8 / allow_ordered_parallel_expand=true`；固定门 16 workers / 10 partitions 在 node1 上不再稳定优于默认，因此不因固定门显式参数改默认值。剩余自耗时集中在扫描读取与单跳拓扑读取，后续按问题清单第 37 节继续；不得因配置收益或旧跨节点数字宣称算子目标闭环。

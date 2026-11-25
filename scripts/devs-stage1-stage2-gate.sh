@@ -5,6 +5,11 @@ export PATH="$HOME/.cargo/bin:$PATH"
 export CARGO_NET_OFFLINE=true
 cd /data/kkkqkx/linkrs/repo
 
+BIND="numactl --cpunodebind=1 --membind=1 taskset -c 8-15,24-31"
+export BENCH_CPU_BINDING="$BIND"
+export BENCH_NUMA_POLICY="cpunodebind=1,membind=1"
+echo "=== cpu binding: $BIND ==="
+
 ROOT=/data/kkkqkx/linkrs
 OUT_NAME="${GATE_OUT:-scan-visibility-baseline}"
 OUT="$ROOT/$OUT_NAME"
@@ -51,7 +56,7 @@ printf '%s\n' \
 
 echo "=== fixed gate (explicit benchmark parallelism) ==="
 for round in 1 2; do
-  taskset -c 16-31 "$BIN" run \
+  $BIND "$BIN" run \
     --db "$DB" --space lsqb \
     --benchmark-dir benches/parity/queries/lsqb \
     --warmup 1 --run 5 --threads 16 --parallel-workers 16 --max-partitions 10 \
@@ -65,7 +70,7 @@ for round in 1 2; do
 done
 
 echo "=== production default gate (no benchmark parallel flags) ==="
-taskset -c 16-31 "$BIN" run \
+$BIND "$BIN" run \
   --db "$DB" --space lsqb \
   --benchmark-dir benches/parity/queries/lsqb \
   --warmup 1 --run 5 --threads 16 \
@@ -121,11 +126,11 @@ for group in ("explain1", "explain2", "explain-prod"):
 PY
 
 echo "=== microbenchmark attribution ==="
-taskset -c 16 cargo bench -p linkrs-storage --bench scan_division_bench > "$OUT/microbench-scan.log" 2>&1
+$BIND cargo bench -p linkrs-storage --bench scan_division_bench > "$OUT/microbench-scan.log" 2>&1
 echo "SCAN_BENCH_EXIT=$?"
-taskset -c 16 cargo bench -p linkrs-storage --bench topology_read_bench > "$OUT/microbench-topology.log" 2>&1
+$BIND cargo bench -p linkrs-storage --bench topology_read_bench > "$OUT/microbench-topology.log" 2>&1
 echo "TOPO_BENCH_EXIT=$?"
-taskset -c 16 cargo bench -p linkrs-storage --bench visibility_decode_bench > "$OUT/microbench-visibility-decode.log" 2>&1
+$BIND cargo bench -p linkrs-storage --bench visibility_decode_bench > "$OUT/microbench-visibility-decode.log" 2>&1
 echo "VISIBILITY_BENCH_EXIT=$?"
 tail -n 8 "$OUT/microbench-scan.log"
 tail -n 10 "$OUT/microbench-topology.log"
