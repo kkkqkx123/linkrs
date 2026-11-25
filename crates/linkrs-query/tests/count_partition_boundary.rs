@@ -99,7 +99,6 @@ fn build_pipeline(
             allow_global_aggregate: false,
             allow_ordered_parallel_expand: false,
             allow_parallel_count_frontier: false,
-            allow_partition_metadata_count: false,
         });
     } else {
         engine.set_partitioning_config(PartitioningConfig {

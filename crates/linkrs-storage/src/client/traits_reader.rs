@@ -454,25 +454,6 @@ pub trait StorageReader: Send + Sync + std::fmt::Debug {
         Ok(packed)
     }
 
-    /// A/B entry point for adjacency-head prefetch experiments. Portable
-    /// adapters inherit the ordinary packed read; the native engine primes
-    /// heads from the same resolved endpoints used by the scan. The hint is
-    /// read-only and never changes visibility, order or returned values.
-    fn get_packed_node_edge_headers_batch_with_prefetch(
-        &self,
-        space: &str,
-        node_ids: &[VertexId],
-        handles: Option<&[Option<(u32, LabelId)>]>,
-        direction: EdgeDirection,
-        edge_types: &[String],
-        schema: &TopologySchema,
-        _prefetch_ahead: usize,
-    ) -> Result<PackedEdgeTopology, StorageError> {
-        self.get_packed_node_edge_headers_batch(
-            space, node_ids, handles, direction, edge_types, schema,
-        )
-    }
-
     /// Batch vertex point lookups with the schema resolved once.
     ///
     /// Returns one entry per input id in input order. The default

@@ -61,11 +61,10 @@ impl OptimizerEngine {
         // Fixed-shape short-circuit: point lookups and one-hop traversals
         // lower to linear chains whose full rule batches and cost model are
         // provably redundant. The gate admits only that grammar; everything
-        // else falls through to the full path below.
-        // Diagnostic escape hatch: LINKRS_NO_FAST_SHAPE=1 forces the full
-        // path for before/after measurement. Default off.
-        let fast_state = if self.enable_heuristic && std::env::var("LINKRS_NO_FAST_SHAPE").is_err()
-        {
+        // else falls through to the full path below. The shortcut is
+        // governed by `enable_heuristic`; plan-tree equivalence with the
+        // full path is covered by the fast_shape unit tests.
+        let fast_state = if self.enable_heuristic {
             current_plan.root.as_ref().and_then(Self::fast_shape_state)
         } else {
             None

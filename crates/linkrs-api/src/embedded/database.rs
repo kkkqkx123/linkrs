@@ -221,14 +221,13 @@ fn partitioning_config_from(parallel: &ParallelConfig) -> PartitioningConfig {
         vertex_id_range: parallel.vertex_id_range(),
         max_workers: parallel.workers,
         max_buffered_chunks: parallel.max_buffered_chunks,
-        fixed_overhead_rows: 0,
-        per_partition_rows: 0,
-        exchange_row_per_mille: 0,
+        fixed_overhead_rows: parallel.fixed_overhead_rows,
+        per_partition_rows: parallel.per_partition_rows,
+        exchange_row_per_mille: parallel.exchange_row_per_mille,
         allow_pure_count_chain: parallel.allow_pure_count_chain,
         allow_global_aggregate: parallel.allow_global_aggregate,
         allow_ordered_parallel_expand: parallel.allow_ordered_parallel_expand,
         allow_parallel_count_frontier: parallel.allow_parallel_count_frontier,
-        allow_partition_metadata_count: parallel.allow_partition_metadata_count,
     }
 }
 
@@ -356,6 +355,7 @@ impl GraphDatabase<GraphStorage> {
 
         let mut optimizer_engine = OptimizerEngine::default();
         optimizer_engine.set_partitioning_config(partitioning_config_from(&config.parallel));
+        optimizer_engine.set_ordered_existence_batch_limit(config.ordered_existence_batch_limit);
         let optimizer_engine = Arc::new(optimizer_engine);
         let query_api = if let Some(ref sync) = sync_manager {
             QueryApi::with_optimizer_engine(

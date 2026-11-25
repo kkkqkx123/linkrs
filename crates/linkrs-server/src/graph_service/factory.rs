@@ -185,6 +185,8 @@ impl<
         );
         let mut optimizer_engine = crate::query::OptimizerEngine::new(cost_config);
         optimizer_engine.set_partitioning_config(Self::partitioning_config_from(&config));
+        optimizer_engine
+            .set_ordered_existence_batch_limit(config.common.optimizer.ordered_existence_batch_limit);
         {
             let rules = &config.common.optimizer.rules;
             for name in rules
@@ -419,16 +421,13 @@ impl<
             vertex_id_range: parallel.vertex_id_range(),
             max_workers: parallel.workers,
             max_buffered_chunks: parallel.max_buffered_chunks,
-            // Economic gate stays inert in production until the overhead
-            // terms are calibrated per hardware (follow-up config knobs).
-            fixed_overhead_rows: 0,
-            per_partition_rows: 0,
-            exchange_row_per_mille: 0,
+            fixed_overhead_rows: parallel.fixed_overhead_rows,
+            per_partition_rows: parallel.per_partition_rows,
+            exchange_row_per_mille: parallel.exchange_row_per_mille,
             allow_pure_count_chain: parallel.allow_pure_count_chain,
             allow_global_aggregate: parallel.allow_global_aggregate,
             allow_ordered_parallel_expand: parallel.allow_ordered_parallel_expand,
             allow_parallel_count_frontier: parallel.allow_parallel_count_frontier,
-            allow_partition_metadata_count: parallel.allow_partition_metadata_count,
         }
     }
 

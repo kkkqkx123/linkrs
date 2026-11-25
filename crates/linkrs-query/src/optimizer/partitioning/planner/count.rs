@@ -19,15 +19,6 @@ pub(crate) fn is_parallel_count_frontier(root: &PlanNodeEnum) -> bool {
     count_frontier_shape(root).is_some()
 }
 
-/// Whether `root` is narrow enough for shard-local metadata counting.
-///
-/// Storage ownership and layout identity are separate proofs and are not
-/// inspected here; this gate only rules out plans that could never be served
-/// by a single scalar per partition.
-pub(crate) fn is_partition_metadata_count(root: &PlanNodeEnum) -> bool {
-    count_frontier_shape(root).is_some()
-}
-
 fn count_frontier_shape(root: &PlanNodeEnum) -> Option<()> {
     let PlanNodeEnum::Aggregate(aggregate) = root else {
         return None;

@@ -88,7 +88,7 @@
 | 展开即计数 | Ladybug `CountExtendChain` 按 offset 累计，不物化邻居 | `frontier_degree_batch` 合并深度一加二；两跳仍保留必要存在性判断 | 缺少无悬空边证明，不折叠存在性读取 |
 | 聚合与 multiplicity | Ladybug typed `append` 按 multiplicity 累加；Neug typed flat map | typed 聚合一次定位，packed 键按权重累加，局部 TopK 精确截断 | 输入已是唯一键，聚合不是主因 |
 | 目的端属性 | Ladybug 直接从 packed 批取键；Neug POD CSR 内联可见性 | 身份主键直通已按 schema 证明并带运行时标签守卫 | 非主键整数属性在当前 LSQB schema 中不存在，无法激活更宽证明 |
-| CSR 局部性 | Neug 按度数距离预取 head 与 metadata | 只读 A/B 钩子与非阻塞候选均已验证但被拒绝 | 无 ≥15% 微基准收益，不进入生产 |
+| CSR 局部性 | Neug 按度数距离预取 head 与 metadata | 黑盒读与非阻塞候选均已验证但被拒绝，A/B 钩子已从生产路径移除（2026-11-25） | 无 ≥15% 微基准收益，不进入生产；重测需从历史恢复实验代码 |
 
 ### 2.3 判定
 

@@ -364,23 +364,6 @@ impl EdgeStore {
         self.observe_direction_read(true, hots.len() as u64);
     }
 
-    /// Warm the out-adjacency head of one row for a lookahead scan.
-    ///
-    /// Pure cache hint: no edge is visited, no visibility is decided and no
-    /// state is changed. Missing or closed legs no-op.
-    pub fn prefetch_out_head(&self, src: u32) {
-        if self.is_open && self.schema.has_out() {
-            self.out_csr.prefetch_hot_head(src);
-        }
-    }
-
-    /// Warm the in-adjacency head of one row for a lookahead scan.
-    pub fn prefetch_in_head(&self, dst: u32) {
-        if self.is_open && self.schema.has_in() {
-            self.in_csr.prefetch_hot_head(dst);
-        }
-    }
-
     /// Topology-only in-neighbors for one CSR row.
     pub fn in_topology_with_gate(
         &self,

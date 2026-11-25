@@ -89,6 +89,10 @@ pub async fn get<
             min_iteration_rounds: config.common.optimizer.min_iteration_rounds,
             statistics_sample_limit: config.common.optimizer.statistics_sample_limit,
             statistics_min_epoch_delta: config.common.optimizer.statistics_min_epoch_delta,
+            ordered_existence_batch_limit: config
+                .common
+                .optimizer
+                .ordered_existence_batch_limit,
             storage_cost_profile: serde_json::to_value(
                 &config.common.optimizer.storage_cost_profile,
             )
@@ -444,6 +448,9 @@ pub(crate) fn get_config_value(
             "statistics_min_epoch_delta" => {
                 serde_json::json!(config.common.optimizer.statistics_min_epoch_delta)
             }
+            "ordered_existence_batch_limit" => {
+                serde_json::json!(config.common.optimizer.ordered_existence_batch_limit)
+            }
             "storage_cost_profile" => {
                 serde_json::json!(config.common.optimizer.storage_cost_profile)
             }
@@ -661,6 +668,10 @@ pub(crate) fn set_config_value(
             }
             "statistics_min_epoch_delta" => {
                 config.common.optimizer.statistics_min_epoch_delta = parse_value(&full_key, value)?
+            }
+            "ordered_existence_batch_limit" => {
+                config.common.optimizer.ordered_existence_batch_limit =
+                    parse_value(&full_key, value)?
             }
             "storage_cost_profile" => {
                 config.common.optimizer.storage_cost_profile = parse_value(&full_key, value)?

@@ -45,6 +45,12 @@ pub struct OptimizerConfig {
     /// write batches reuse the last collection.
     #[serde(default = "default_statistics_min_epoch_delta")]
     pub statistics_min_epoch_delta: u64,
+    /// Upper bound of the candidate batch used by the ordered-existence scan
+    /// that replaces `DISTINCT key ORDER BY key LIMIT k`. Larger batches read
+    /// more primary-key candidates per cursor step; the effective batch is
+    /// `limit.clamp(1, ordered_existence_batch_limit)`. Defaults to 16.
+    #[serde(default = "default_ordered_existence_batch_limit")]
+    pub ordered_existence_batch_limit: usize,
     /// Storage cost profile selecting the optimizer cost preset.
     #[serde(default)]
     pub storage_cost_profile: crate::cost_profile::StorageCostProfile,
@@ -68,6 +74,10 @@ fn default_statistics_min_epoch_delta() -> u64 {
     100
 }
 
+fn default_ordered_existence_batch_limit() -> usize {
+    16
+}
+
 impl Default for OptimizerConfig {
     fn default() -> Self {
         Self {
@@ -81,6 +91,7 @@ impl Default for OptimizerConfig {
             min_iteration_rounds: 1,
             statistics_sample_limit: default_statistics_sample_limit(),
             statistics_min_epoch_delta: default_statistics_min_epoch_delta(),
+            ordered_existence_batch_limit: default_ordered_existence_batch_limit(),
             storage_cost_profile: crate::cost_profile::StorageCostProfile::default(),
             space_cost_profiles: HashMap::new(),
             rules: OptimizerRulesConfig::default(),
@@ -107,6 +118,10 @@ impl OptimizerConfig {
 
         if self.statistics_sample_limit == 0 {
             return Err("Statistics sample limit must be greater than 0".to_string());
+        }
+
+        if self.ordered_existence_batch_limit == 0 {
+            return Err("Ordered-existence batch limit must be greater than 0".to_string());
         }
 
         if self

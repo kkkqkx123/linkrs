@@ -234,28 +234,6 @@ impl StorageReader for GraphStorage {
         )
     }
 
-    fn get_packed_node_edge_headers_batch_with_prefetch(
-        &self,
-        space: &str,
-        node_ids: &[VertexId],
-        handles: Option<&[Option<(u32, u32)>]>,
-        direction: linkrs_core::EdgeDirection,
-        edge_types: &[String],
-        schema: &crate::TopologySchema,
-        prefetch_ahead: usize,
-    ) -> Result<crate::PackedEdgeTopology, StorageError> {
-        reader::packed_node_edge_headers_batch_prefetched(
-            &self.ctx,
-            space,
-            node_ids,
-            handles,
-            direction,
-            edge_types,
-            schema,
-            prefetch_ahead,
-        )
-    }
-
     fn get_vertices_batch(
         &self,
         space: &str,

@@ -118,7 +118,7 @@
 - 绑定：`numactl --cpunodebind=1 --membind=1 taskset -c 8-15,24-31`；
 - warmup 1 + run 5，去最大值均值；同时记录中位数；
 - 结果必须逐值等于 `[14]`，`result_stable=true`，`spill_rows=0`；
-- `LINKRS_ORDERED_EXISTENCE_SCAN=off` 与 `on` 差分结果一致；
+- EXPLAIN 断言改写已启用：`ordered_existence:proven` 或 `redundant_global_ops=eliminated` 出现，`ordered_existence_open_us` 合理；差分测试由单测覆盖，不再保留运行时 A/B 环境变量；
 - 现有 partitioning、local_topk、parallel、DQL、storage 全量门保持通过；
 - 性能回复只接受可复现的下降；单次波动不作为结论。
 

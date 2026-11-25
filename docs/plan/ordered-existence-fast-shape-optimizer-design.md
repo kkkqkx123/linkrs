@@ -28,7 +28,7 @@ unnesting、join order、TopN wiring 与聚合策略属于无效工作。
 - 命中快速路径后沿用已有的精简 cost pass 与 fast heuristic 规则集，不新增规则。
 - 被精简掉的成本阶段必须在该形状上无作用：无子查询可 unnest、无 join 可重排、
   `Sort+Limit` 已在本层转换为 TopN、无 aggregate 可选策略。
-- 不修改优化器结果缓存与执行引擎；保留了 `LINKRS_NO_FAST_SHAPE` 回退开关。
+- 不修改优化器结果缓存与执行引擎；快形状已转正为正式实现，由 `enable_heuristic` 统一控制，完整路径与快速路径的计划树一致性由单测保证。
 
 ## 4. 正确性约束
 

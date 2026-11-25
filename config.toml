@@ -229,6 +229,10 @@ min_iteration_rounds = 1
 statistics_sample_limit = 10000
 # Minimum data-epoch advance that triggers an automatic refresh (default 100)
 statistics_min_epoch_delta = 100
+# Ordered-existence scan candidate batch upper bound (default 16); effective
+# batch is limit.clamp(1, this value). Higher values read more key candidates
+# per cursor step at the cost of a wider existence probe.
+ordered_existence_batch_limit = 16
 # Cost preset for the storage medium: auto | hdd | ssd | memory
 storage_cost_profile = "auto"
 
@@ -249,6 +253,13 @@ min_rows_per_partition = 100000
 max_partitions = 8
 # Maximum number of buffered chunks per partition worker (backpressure)
 max_buffered_chunks = 10
+# Economic gate cost terms, in row-equivalents. All zero keeps the gate inert
+# and leaves min_rows_per_partition as the only threshold. Calibrate per
+# hardware: fixed_overhead_rows (startup), per_partition_rows (each partition),
+# exchange_row_per_mille (per output row crossing the gather, per mille).
+fixed_overhead_rows = 0
+per_partition_rows = 0
+exchange_row_per_mille = 0
 # Gray-release switches: admit a single shape through the disabled master gate.
 # Only the rowless single-hop expand chain feeding group-count or ordered
 # distinct is released; pure counts and general aggregates stay serial.
@@ -257,8 +268,6 @@ allow_global_aggregate = false
 allow_ordered_parallel_expand = true
 # Admit partitioned count-only expand frontiers
 allow_parallel_count_frontier = false
-# Requires shard-local storage evidence; inert until that proof exists
-allow_partition_metadata_count = false
 # Optional vertex ID range (takes effect only when both start and end are set)
 # vertex_id_start = 0
 # vertex_id_end = 100000

@@ -46,6 +46,34 @@ impl CompileTimes {
     }
 }
 
+/// Deterministic hash of the live partitioning configuration, shared by the
+/// plan-cache key and its unit tests.
+fn partitioning_config_hash_inner(config: &PartitioningConfig) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    config.enabled.hash(&mut hasher);
+    config.min_rows_per_partition.hash(&mut hasher);
+    config.max_partitions.hash(&mut hasher);
+    config.max_workers.hash(&mut hasher);
+    config.fixed_overhead_rows.hash(&mut hasher);
+    config.per_partition_rows.hash(&mut hasher);
+    config.exchange_row_per_mille.hash(&mut hasher);
+    config.allow_pure_count_chain.hash(&mut hasher);
+    config.allow_global_aggregate.hash(&mut hasher);
+    config.allow_ordered_parallel_expand.hash(&mut hasher);
+    config.allow_parallel_count_frontier.hash(&mut hasher);
+    match &config.vertex_id_range {
+        Some(range) => {
+            range.start.hash(&mut hasher);
+            range.end.hash(&mut hasher);
+        }
+        None => {
+            hasher.write_u8(0);
+        }
+    }
+    hasher.finish()
+}
+
 impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
     pub(crate) fn optimize_execution_plan(
         &mut self,
@@ -463,27 +491,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
     /// different hash so cached plans cannot be reused under a
     /// different layout policy.
     pub(crate) fn partitioning_config_hash(config: &PartitioningConfig) -> u64 {
-        use std::hash::{Hash, Hasher};
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        config.enabled.hash(&mut hasher);
-        config.min_rows_per_partition.hash(&mut hasher);
-        config.max_partitions.hash(&mut hasher);
-        config.max_workers.hash(&mut hasher);
-        config.allow_pure_count_chain.hash(&mut hasher);
-        config.allow_global_aggregate.hash(&mut hasher);
-        config.allow_ordered_parallel_expand.hash(&mut hasher);
-        config.allow_parallel_count_frontier.hash(&mut hasher);
-        config.allow_partition_metadata_count.hash(&mut hasher);
-        match &config.vertex_id_range {
-            Some(range) => {
-                range.start.hash(&mut hasher);
-                range.end.hash(&mut hasher);
-            }
-            None => {
-                hasher.write_u8(0);
-            }
-        }
-        hasher.finish()
+        partitioning_config_hash_inner(config)
     }
 
     /// Build a `MetadataContext` for the current space scoped to the schema
@@ -1037,5 +1045,33 @@ fn referenced_schema_objects(
         | BoundStatement::Savepoint(_)
         | BoundStatement::ReleaseSavepoint(_) => (tags, edges, true),
         BoundStatement::Other(_) => (tags, edges, true),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn partitioning_config_hash_covers_economic_gate_terms() {
+        let base = PartitioningConfig::default();
+        let base_hash = partitioning_config_hash_inner(&base);
+
+        let fixed = PartitioningConfig {
+            fixed_overhead_rows: 1,
+            ..base.clone()
+        };
+        let per_partition = PartitioningConfig {
+            per_partition_rows: 1,
+            ..base.clone()
+        };
+        let exchange = PartitioningConfig {
+            exchange_row_per_mille: 1,
+            ..base.clone()
+        };
+
+        assert_ne!(base_hash, partitioning_config_hash_inner(&fixed));
+        assert_ne!(base_hash, partitioning_config_hash_inner(&per_partition));
+        assert_ne!(base_hash, partitioning_config_hash_inner(&exchange));
     }
 }

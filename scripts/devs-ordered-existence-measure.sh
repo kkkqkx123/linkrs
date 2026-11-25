@@ -76,15 +76,9 @@ LINKRS_STAGE_TIMING=1 $BIND "$BIN" run \
 echo "STAGE_EXIT=$?"
 awk '/\[stage\]|ordered_existence_open_us|distinct_limit:/' "$OUT/stage.log" | head -n 40
 
-echo "=== differential: slow path vs rewrite ==="
-for mode in off on; do
-  LINKRS_ORDERED_EXISTENCE_SCAN="$mode" $BIND "$BIN" run \
-    --db "$DB" --space lsqb --benchmark-dir "$OUT/diff" \
-    --warmup 1 --run 5 --threads 16 \
-    --no-snapshots --out "$OUT/diff-$mode" > "$OUT/diff-$mode.log" 2>&1
-  echo "DIFF_${mode^^}_EXIT=$?"
-  awk '/distinct_limit|resources:/' "$OUT/diff-$mode.log"
-done
+echo "=== rewrite path is now the only path (A/B switch removed) ==="
+echo "Correctness for the former slow path is covered by the differential unit"
+echo "tests and EXPLAIN proof above; no runtime A/B toggle remains."
 
 echo "=== production default metrics ==="
 $BIND "$BIN" run \
@@ -104,22 +98,6 @@ import re
 import sys
 
 out = pathlib.Path(sys.argv[1])
-
-def observation(mode):
-    with (out / f"diff-{mode}.log").open(encoding="utf-8") as handle:
-        lines = [line for line in handle if "distinct_limit:" in line]
-    result = lines[-1].split("result ", 1)[1].split(",", 1)[0]
-    with (out / f"diff-{mode}" / "lsqb_operators_distinct_limit.json").open(
-        encoding="utf-8"
-    ) as handle:
-        row = json.load(handle)
-    return result, row.get("median_ms")
-
-slow, slow_ms = observation("off")
-fast, fast_ms = observation("on")
-print("DIFF_RESULT slow=", slow, "rewrite=", fast)
-print("DIFF_EQUAL=", slow == fast)
-print("DIFF_MEDIAN_MS slow=", slow_ms, "rewrite=", fast_ms)
 
 keys = (
     "name", "median_ms", "compile_median_ms", "status", "plan_cache_hits",

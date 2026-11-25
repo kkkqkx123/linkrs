@@ -177,7 +177,6 @@ fn build_pipeline(
             allow_global_aggregate: false,
             allow_ordered_parallel_expand: false,
             allow_parallel_count_frontier: false,
-            allow_partition_metadata_count: false,
         }
     } else {
         PartitioningConfig {
@@ -1010,7 +1009,6 @@ fn storage_self_proven_domain_enables_partitioning_without_config_range() {
         allow_global_aggregate: false,
         allow_ordered_parallel_expand: false,
         allow_parallel_count_frontier: false,
-        allow_partition_metadata_count: false,
     });
     let stats = Arc::new(StatsManager::new());
     let mut pipeline =
@@ -1065,7 +1063,6 @@ fn ordered_parallel_expand_matches_serial_for_narrow_shapes() {
         allow_global_aggregate: false,
         allow_ordered_parallel_expand: true,
         allow_parallel_count_frontier: false,
-        allow_partition_metadata_count: false,
     };
     let mut parallel = build_pipeline_with_config(&storage, config);
 
@@ -1123,7 +1120,6 @@ fn ordered_parallel_expand_gate_keeps_unlisted_shapes_serial() {
         allow_global_aggregate: false,
         allow_ordered_parallel_expand: true,
         allow_parallel_count_frontier: false,
-        allow_partition_metadata_count: false,
     };
     let mut pipeline = build_pipeline_with_config(&storage, config);
 
@@ -1158,7 +1154,6 @@ fn count_frontier_config() -> PartitioningConfig {
         allow_global_aggregate: false,
         allow_ordered_parallel_expand: false,
         allow_parallel_count_frontier: true,
-        allow_partition_metadata_count: false,
     }
 }
 
@@ -1232,11 +1227,10 @@ fn parallel_count_frontier_matches_serial_and_reports_partition_counts() {
 }
 
 #[test]
-fn metadata_count_flag_alone_does_not_select_generic_partitioning() {
+fn metadata_count_without_storage_proof_stays_serial() {
     let storage = setup_storage();
     let mut config = count_frontier_config();
     config.allow_parallel_count_frontier = false;
-    config.allow_partition_metadata_count = true;
     let mut pipeline = build_pipeline_with_config(&storage, config);
 
     let query = "MATCH (a:Node)-[:Link]->(b:Node)-[:Link]->(c:Node) RETURN count(c)";
@@ -1244,6 +1238,6 @@ fn metadata_count_flag_alone_does_not_select_generic_partitioning() {
     let plan = analyzed[0][0].to_string().unwrap_or_default();
     assert!(
         !plan.contains("Partitioning:") || plan.contains("fallback_reason"),
-        "metadata flag without storage proof must stay serial: {plan}"
+        "metadata count without storage proof must stay serial: {plan}"
     );
 }

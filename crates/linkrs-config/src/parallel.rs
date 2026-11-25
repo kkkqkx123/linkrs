@@ -27,8 +27,25 @@ pub struct ParallelConfig {
     pub vertex_id_start: Option<i64>,
     /// Optional trusted upper bound (exclusive) of the vertex-id range.
     pub vertex_id_end: Option<i64>,
-    /// Gray-release allowlist: admit pure-count chains through the disabled
-    /// gate without enabling partitioning globally.
+    /// Parallel fixed startup overhead in row-equivalents (fragment startup,
+    /// exchange coordination). All three economic-gated cost terms default to
+    /// zero, which leaves the row-count threshold as the only gate. They are
+    /// machine-dependent and should be calibrated per hardware.
+    #[serde(default)]
+    pub fixed_overhead_rows: u64,
+    /// Per-partition fixed overhead in row-equivalents.
+    #[serde(default)]
+    pub per_partition_rows: u64,
+    /// Exchange cost per output row in row-equivalents, per mille
+    /// (50 = 0.05 row-equivalents per row crossing the gather).
+    #[serde(default)]
+    pub exchange_row_per_mille: u32,
+    /// Shape-level gray-release allowlist. These flags only take effect while
+    /// `enabled` is false: each admits one additional query shape through the
+    /// disabled master gate. When `enabled` is true the whole allowlist is
+    /// short-circuited (every shape passes the master gate), so setting an
+    /// `allow_*` flag has no additional effect. All other gates (self-proven
+    /// domain, row threshold, structural checks) still apply either way.
     #[serde(default)]
     pub allow_pure_count_chain: bool,
     /// Gray-release allowlist: admit other aggregate-rooted plans through
@@ -43,10 +60,6 @@ pub struct ParallelConfig {
     /// partial results are scalar counts. Defaults to false.
     #[serde(default)]
     pub allow_parallel_count_frontier: bool,
-    /// Gray-release allowlist for shard-local metadata counts. Stays off
-    /// until storage can prove shard ownership and layout identity.
-    #[serde(default)]
-    pub allow_partition_metadata_count: bool,
 }
 
 impl Default for ParallelConfig {
@@ -59,11 +72,13 @@ impl Default for ParallelConfig {
             max_buffered_chunks: 10,
             vertex_id_start: None,
             vertex_id_end: None,
+            fixed_overhead_rows: 0,
+            per_partition_rows: 0,
+            exchange_row_per_mille: 0,
             allow_pure_count_chain: false,
             allow_global_aggregate: false,
             allow_ordered_parallel_expand: true,
             allow_parallel_count_frontier: false,
-            allow_partition_metadata_count: false,
         }
     }
 }
@@ -112,6 +127,9 @@ mod tests {
         assert_eq!(config.max_buffered_chunks, 10);
         assert!(config.vertex_id_range().is_none());
         assert!(!config.enabled);
+        assert_eq!(config.fixed_overhead_rows, 0);
+        assert_eq!(config.per_partition_rows, 0);
+        assert_eq!(config.exchange_row_per_mille, 0);
         assert!(config.allow_ordered_parallel_expand);
         assert!(!config.allow_pure_count_chain);
         assert!(!config.allow_global_aggregate);

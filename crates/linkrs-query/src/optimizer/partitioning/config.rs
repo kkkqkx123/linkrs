@@ -17,13 +17,15 @@ pub struct PartitioningConfig {
     pub max_workers: usize,
     /// Maximum queued chunks per partition worker for backpressure.
     pub max_buffered_chunks: usize,
-    /// Gray-release allowlist for aggregate-rooted shapes.
+    /// Shape-level gray-release allowlist for aggregate-rooted shapes.
     ///
-    /// The master `enabled` switch stays default-off; turning on one of
-    /// these flags additionally admits that shape through the disabled
-    /// gate so a single query class can be partitioned without enabling
-    /// partitioning globally. Every other gate (storage self-proven
-    /// domain, row thresholds, structural rejects) still applies.
+    /// These flags are consulted only when the master `enabled` switch is
+    /// false: each admits one additional shape through the disabled gate so
+    /// a single query class can be partitioned without enabling partitioning
+    /// globally. When `enabled` is true, `shape_allowlisted` is short-circuited
+    /// and every shape passes the master gate, so these flags have no further
+    /// effect. Every other gate (storage self-proven domain, row thresholds,
+    /// structural rejects) still applies either way.
     /// Pure-count chains go first because they carry no grouping state;
     /// global aggregates follow once per-partition aggregation is proven.
     /// Both default to false, so default behavior is unchanged.
@@ -36,10 +38,6 @@ pub struct PartitioningConfig {
     /// Admit count-only expand frontiers whose partition-local result is a
     /// scalar count merged by the existing `SUM(_expand_count)` rewrite.
     pub allow_parallel_count_frontier: bool,
-    /// Admit storage metadata counts that are proven disjoint per partition.
-    /// The storage proof is a separate prerequisite; this switch alone never
-    /// changes a plan.
-    pub allow_partition_metadata_count: bool,
     /// Parallel fixed startup overhead in row-equivalents (fragment startup,
     /// exchange coordination). All-zero cost params disable the economic
     /// gate and leave the row-count threshold as the only gate.
@@ -64,7 +62,6 @@ impl Default for PartitioningConfig {
             allow_global_aggregate: false,
             allow_ordered_parallel_expand: true,
             allow_parallel_count_frontier: false,
-            allow_partition_metadata_count: false,
             fixed_overhead_rows: 0,
             per_partition_rows: 0,
             exchange_row_per_mille: 0,

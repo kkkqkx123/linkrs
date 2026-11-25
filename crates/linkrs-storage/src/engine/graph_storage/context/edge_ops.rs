@@ -1087,34 +1087,6 @@ impl GraphStorageContext {
         handles: Option<&[Option<(u32, LabelId)>]>,
         ts: Timestamp,
     ) -> PackedTopologyBatch {
-        self.out_topology_batch_impl(edge_label, src_label, src_ids, handles, ts, 0)
-    }
-
-    /// A/B variant that warms the adjacency heads of lookahead parents from
-    /// the endpoints already resolved for this scan. Production callers use
-    /// [`Self::out_topology_batch`]; the benchmark uses this to isolate the
-    /// cache hint from a second parent resolution.
-    pub fn out_topology_batch_prefetched(
-        &self,
-        edge_label: LabelId,
-        src_label: LabelId,
-        src_ids: &[VertexId],
-        handles: Option<&[Option<(u32, LabelId)>]>,
-        ts: Timestamp,
-        prefetch_ahead: usize,
-    ) -> PackedTopologyBatch {
-        self.out_topology_batch_impl(edge_label, src_label, src_ids, handles, ts, prefetch_ahead)
-    }
-
-    fn out_topology_batch_impl(
-        &self,
-        edge_label: LabelId,
-        src_label: LabelId,
-        src_ids: &[VertexId],
-        handles: Option<&[Option<(u32, LabelId)>]>,
-        ts: Timestamp,
-        prefetch_ahead: usize,
-    ) -> PackedTopologyBatch {
         let resolved: Vec<Option<(u32, LabelId)>> = match handles {
             Some(handles) => handles
                 .iter()
@@ -1142,17 +1114,6 @@ impl GraphStorageContext {
         let mut packed = PackedTopologyBatch::new(src_ids.len());
         let mut hots = Vec::new();
         for (index, seed) in resolved.iter().enumerate() {
-            if prefetch_ahead > 0 {
-                if let Some(Some((ahead_internal, ahead_label))) =
-                    resolved.get(index + prefetch_ahead)
-                {
-                    for (_, table) in &tables {
-                        if table.src_label() == *ahead_label {
-                            table.prefetch_out_head(*ahead_internal);
-                        }
-                    }
-                }
-            }
             let Some((src_internal, actual_src)) = seed else {
                 continue;
             };
@@ -1177,29 +1138,6 @@ impl GraphStorageContext {
         dst_ids: &[VertexId],
         ts: Timestamp,
     ) -> PackedTopologyBatch {
-        self.in_topology_batch_impl(edge_label, dst_label, dst_ids, ts, 0)
-    }
-
-    /// A/B counterpart of [`Self::out_topology_batch_prefetched`].
-    pub fn in_topology_batch_prefetched(
-        &self,
-        edge_label: LabelId,
-        dst_label: LabelId,
-        dst_ids: &[VertexId],
-        ts: Timestamp,
-        prefetch_ahead: usize,
-    ) -> PackedTopologyBatch {
-        self.in_topology_batch_impl(edge_label, dst_label, dst_ids, ts, prefetch_ahead)
-    }
-
-    fn in_topology_batch_impl(
-        &self,
-        edge_label: LabelId,
-        dst_label: LabelId,
-        dst_ids: &[VertexId],
-        ts: Timestamp,
-        prefetch_ahead: usize,
-    ) -> PackedTopologyBatch {
         let resolved = self.resolve_node_endpoints(dst_label, dst_ids, ts);
         let arcs = self
             .persistent
@@ -1217,17 +1155,6 @@ impl GraphStorageContext {
         let mut packed = PackedTopologyBatch::new(dst_ids.len());
         let mut hots = Vec::new();
         for (index, seed) in resolved.iter().enumerate() {
-            if prefetch_ahead > 0 {
-                if let Some(Some((ahead_internal, ahead_label))) =
-                    resolved.get(index + prefetch_ahead)
-                {
-                    for (_, table) in &tables {
-                        if table.dst_label() == *ahead_label {
-                            table.prefetch_in_head(*ahead_internal);
-                        }
-                    }
-                }
-            }
             let Some((dst_internal, actual_dst)) = seed else {
                 continue;
             };

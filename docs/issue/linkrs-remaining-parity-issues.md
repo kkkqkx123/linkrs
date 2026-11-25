@@ -711,6 +711,8 @@ devs release 编译通过，正确性门全绿：配置默认值 1/1、partition
 
 语义复核另发现并修正一处真实问题：身份直通在运行时 `resolved_dst_tag()` 返回 `None` 时仍可能回退到计划期 `dst_tag`，若目录在计划与执行之间漂移，目的端存在性检查会落在不同标签上，身份证明随之失效。现在只有在运行时标签解析成功且等于计划标签、并且计划标签非空时才允许直通，否则继续走原属性列读取。`linkrs-query` partitioning 49/49 通过；修正后固定门单轮 `group_by_count` 29.87 ms、`distinct_limit` 26.46 ms，结果仍为 `[14|59]` / `[14]`，`result_stable=true`、`actual=10`、`spill_rows=0`，EXPLAIN 仍显示 `expand_output_rows=30473` 且身份直通未被关闭。结论：预取候选本身无语义问题但未证明有收益；当前保留的身份直通与直写路径在补齐标签守卫后未发现语义漂移。日志、EXPLAIN 与逐用例 JSON 见 `perf-data/parity/results/2026-11-24/csr-prefetch-proof/`。
 
+**后续处置（2026-11-25）**：上文所述"验证 API 与基准保留""仅保留 A/B 钩子"的判定已被撤销。复核发现代码现状与上述声明背离——`packed_node_edge_headers_batch` 普通版已成死代码，生产调用链实际切到 `*_prefetched` 版本（仅参数恒为 0），且 `MappedFrozen::prefetch_head` 仍保留被否定的 `black_box` 黑盒读。按 `AGENTS.md`"无向后兼容包袱、保持合理架构"，已从生产路径完整移除整条 `prefetch_ahead` / `prefetch_head` A/B 钩子链（含公共 trait 方法、native override、CSR 分派、基准 sweep 与只读性单测）。本节的历史测量数据与方法论保留作为决策依据；日后若有真实非阻塞预取指令与局部性证据需要重测，应从引入提交 `e71ff500` 恢复实验代码，在独立基准模块中复现，不再向生产 `StorageReader` trait 注入 A/B 参数。
+
 ## 47. 三方差距收敛实施（2026-11-24）
 
 完整设计与门槛写入 `docs/plan/parity-remaining-gap-convergence-design.md`。按任务顺序处理：

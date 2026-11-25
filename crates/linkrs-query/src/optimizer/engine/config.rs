@@ -90,6 +90,7 @@ impl OptimizerEngine {
             last_batch_statistics: std::sync::Mutex::new(Vec::new()),
             partitioning_planner: PartitioningPlanner::new(PartitioningConfig::default())
                 .with_selectivity(Arc::clone(&selectivity_estimator)),
+            ordered_existence_batch_limit: 16,
             enable_heuristic: true,
             max_heuristic_iterations: 100,
             feedback_history: Arc::new(QueryFeedbackHistory::default()),
@@ -286,6 +287,20 @@ impl OptimizerEngine {
 
     pub fn partitioning_config(&self) -> &PartitioningConfig {
         self.partitioning_planner.config()
+    }
+
+    /// Set the ordered-existence scan candidate batch upper bound. A value
+    /// of zero is ignored so the safe default survives bad configuration.
+    pub fn set_ordered_existence_batch_limit(&mut self, limit: usize) {
+        if limit == 0 {
+            return;
+        }
+        self.ordered_existence_batch_limit = limit;
+    }
+
+    /// Ordered-existence scan candidate batch upper bound.
+    pub fn ordered_existence_batch_limit(&self) -> usize {
+        self.ordered_existence_batch_limit
     }
 
     pub fn heuristic_batch(&self) -> &crate::optimizer::heuristic::batch::BatchOptimizer {

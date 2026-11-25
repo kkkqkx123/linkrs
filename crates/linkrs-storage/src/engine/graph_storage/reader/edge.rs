@@ -650,46 +650,6 @@ pub(crate) fn packed_node_edge_headers_batch(
     edge_types: &[String],
     schema: &TopologySchema,
 ) -> StorageResult<PackedEdgeTopology> {
-    packed_node_edge_headers_batch_impl(
-        ctx, space, src_ids, handles, direction, edge_types, schema, 0,
-    )
-}
-
-/// A/B entry point used by the storage microbenchmark. The hint shares the
-/// scan's resolved endpoints and table guards, so it measures the adjacency
-/// head warm-up itself rather than a second endpoint resolution.
-pub(crate) fn packed_node_edge_headers_batch_prefetched(
-    ctx: &GraphStorageContext,
-    space: &str,
-    src_ids: &[VertexId],
-    handles: Option<&[Option<(u32, LabelId)>]>,
-    direction: EdgeDirection,
-    edge_types: &[String],
-    schema: &TopologySchema,
-    prefetch_ahead: usize,
-) -> StorageResult<PackedEdgeTopology> {
-    packed_node_edge_headers_batch_impl(
-        ctx,
-        space,
-        src_ids,
-        handles,
-        direction,
-        edge_types,
-        schema,
-        prefetch_ahead,
-    )
-}
-
-fn packed_node_edge_headers_batch_impl(
-    ctx: &GraphStorageContext,
-    space: &str,
-    src_ids: &[VertexId],
-    handles: Option<&[Option<(u32, LabelId)>]>,
-    direction: EdgeDirection,
-    edge_types: &[String],
-    schema: &TopologySchema,
-    prefetch_ahead: usize,
-) -> StorageResult<PackedEdgeTopology> {
     record_schema_read(ctx, space);
     let schema = if schema.matches(space, ctx.layout_version()) {
         Cow::Borrowed(schema)
@@ -739,22 +699,15 @@ fn packed_node_edge_headers_batch_impl(
         let mut batches_by_type = Vec::with_capacity(endpoint_types.len());
         for (_, edge_label, src_label, dst_label) in &endpoint_types {
             let batches = if outward {
-                ctx.out_topology_batch_prefetched(
+                ctx.out_topology_batch(
                     *edge_label,
                     *src_label,
                     &normalized,
                     handles,
                     ts,
-                    prefetch_ahead,
                 )
             } else {
-                ctx.in_topology_batch_prefetched(
-                    *edge_label,
-                    *dst_label,
-                    &normalized,
-                    ts,
-                    prefetch_ahead,
-                )
+                ctx.in_topology_batch(*edge_label, *dst_label, &normalized, ts)
             };
             batches_by_type.push(batches);
         }
@@ -828,21 +781,15 @@ fn packed_node_edge_headers_batch_impl(
     let mut by_type = Vec::with_capacity(endpoint_types.len());
     let mut endpoint_pairs: Vec<(LabelId, u32)> = Vec::new();
     for (type_id, edge_label, src_label_id, dst_label_id) in &endpoint_types {
-        let out_batches = ctx.out_topology_batch_prefetched(
+        let out_batches = ctx.out_topology_batch(
             *edge_label,
             *src_label_id,
             &normalized,
             handles,
             ts,
-            prefetch_ahead,
         );
-        let in_batches = ctx.in_topology_batch_prefetched(
-            *edge_label,
-            *dst_label_id,
-            &normalized,
-            ts,
-            prefetch_ahead,
-        );
+        let in_batches =
+            ctx.in_topology_batch(*edge_label, *dst_label_id, &normalized, ts);
         for batches in [&out_batches, &in_batches] {
             endpoint_pairs.extend(
                 batches

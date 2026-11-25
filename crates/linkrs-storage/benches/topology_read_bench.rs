@@ -48,7 +48,6 @@ const SEED_COUNT: usize = 2048;
 const BATCH_SIZES: [usize; 3] = [512, 2048, 4096];
 const UNIQUE_RATES: [usize; 3] = [100, 50, 10];
 const ITERATIONS: usize = 20;
-const PREFETCH_AHEADS: [usize; 4] = [4, 8, 16, 32];
 
 fn setup() -> GraphStorage {
     let mut storage = GraphStorage::new().expect("storage init");
@@ -145,102 +144,6 @@ fn report(label: &str, samples: Vec<u128>, bytes: u128, edges: usize, unique: us
     println!(
         "{label:<30} {us:>8} us  {bytes:>10} B/call  {bytes_per_edge:>9} B/edge  {bytes_per_unique:>13} B/unique-dest  edges={edges} unique={unique}",
     );
-}
-
-fn assert_packed_equal(
-    left: &linkrs_storage::PackedEdgeTopology,
-    right: &linkrs_storage::PackedEdgeTopology,
-) {
-    assert_eq!(left.parents, right.parents);
-    assert_eq!(left.child_offsets, right.child_offsets);
-    assert_eq!(left.src, right.src);
-    assert_eq!(left.dst, right.dst);
-    assert_eq!(left.edge_type_ids, right.edge_type_ids);
-    assert_eq!(left.edge_type_names, right.edge_type_names);
-    assert_eq!(left.rankings, right.rankings);
-    assert_eq!(left.destination_handles, right.destination_handles);
-}
-
-fn prefetch_packed_sweep(
-    storage: &GraphStorage,
-    seeds: &[VertexId],
-    label: &str,
-    edge_types: &[String],
-    schema: &linkrs_storage::TopologySchema,
-    children: usize,
-    baseline: &linkrs_storage::PackedEdgeTopology,
-) {
-    for &ahead in &PREFETCH_AHEADS {
-        let (samples, bytes) = measure(|| {
-            storage
-                .get_packed_node_edge_headers_batch_with_prefetch(
-                    SPACE,
-                    seeds,
-                    None,
-                    EdgeDirection::Out,
-                    edge_types,
-                    schema,
-                    ahead,
-                )
-                .expect("packed read with head hint")
-        });
-        let probed = storage
-            .get_packed_node_edge_headers_batch_with_prefetch(
-                SPACE,
-                seeds,
-                None,
-                EdgeDirection::Out,
-                edge_types,
-                schema,
-                ahead,
-            )
-            .expect("packed read with head hint");
-        assert_packed_equal(baseline, &probed);
-        report(
-            &format!("{label} hint={ahead}"),
-            samples,
-            bytes,
-            children,
-            0,
-        );
-    }
-}
-
-fn prefetch_packed_dest_sweep(
-    storage: &GraphStorage,
-    seeds: &[VertexId],
-    dest_ids: &[VertexId],
-    projected: &[Arc<str>],
-    edge_types: &[String],
-    schema: &linkrs_storage::TopologySchema,
-    children: usize,
-) {
-    for &ahead in &PREFETCH_AHEADS {
-        let (samples, bytes) = measure(|| {
-            let topology = storage
-                .get_packed_node_edge_headers_batch_with_prefetch(
-                    SPACE,
-                    seeds,
-                    None,
-                    EdgeDirection::Out,
-                    edge_types,
-                    schema,
-                    ahead,
-                )
-                .expect("packed read with head hint");
-            let columns = storage
-                .get_vertex_property_columns_batch(SPACE, TAG, dest_ids, projected)
-                .expect("property column read");
-            (topology.child_offsets.len(), columns.len())
-        });
-        report(
-            &format!("F5 packed + head hint={ahead} + destination"),
-            samples,
-            bytes,
-            children,
-            dest_ids.len(),
-        );
-    }
 }
 
 fn measure<T>(mut operation: impl FnMut() -> T) -> (Vec<u128>, u128) {
@@ -385,16 +288,6 @@ fn main() {
             0,
         );
 
-        prefetch_packed_sweep(
-            &storage,
-            &parents,
-            &format!("F1 packed batch={count}"),
-            &edge_types,
-            &schema_filtered,
-            children,
-            &first,
-        );
-
         let spread = spread_seeds(count);
         let (spread_samples, spread_bytes) = measure(|| {
             storage
@@ -408,16 +301,6 @@ fn main() {
                 )
                 .expect("spread packed read")
         });
-        let spread_first = storage
-            .get_packed_node_edge_headers_batch(
-                SPACE,
-                &spread,
-                None,
-                EdgeDirection::Out,
-                &edge_types,
-                &schema_filtered,
-            )
-            .expect("spread packed read");
         report(
             &format!("F1 spread batch={count}"),
             spread_samples,
@@ -426,15 +309,6 @@ fn main() {
             0,
         );
 
-        prefetch_packed_sweep(
-            &storage,
-            &spread,
-            &format!("F1 spread batch={count}"),
-            &edge_types,
-            &schema_filtered,
-            children,
-            &spread_first,
-        );
     }
 
     println!("-- F2 direction and edge-type filtering --");
@@ -578,16 +452,6 @@ fn main() {
         bytes,
         children,
         dest_ids.len(),
-    );
-
-    prefetch_packed_dest_sweep(
-        &storage,
-        &dense_seeds,
-        &dest_ids,
-        &projected,
-        &edge_types,
-        &schema_filtered,
-        children,
     );
 
     println!("-- existing reference cases --");

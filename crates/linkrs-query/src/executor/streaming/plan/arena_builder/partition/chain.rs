@@ -672,7 +672,7 @@ pub(super) fn build_ordered_existence_group(
         key_column: proof.key_column.clone(),
         key_type: proof.key_type.clone(),
         limit: proof.limit,
-        batch_size: proof.limit.clamp(1, 16),
+        batch_size: proof.limit.clamp(1, exec_ctx.ordered_existence_batch_limit.max(1)),
         proof: proof.reason.clone(),
         generation: proof.generation,
         output_layout: layout.clone(),
@@ -721,11 +721,6 @@ pub(super) fn ordered_existence_scan(
     chain: &PartitionedChain<'_>,
     exec_ctx: &ExecutionContext,
 ) -> Result<Option<OrderedExistenceProof>, String> {
-    if std::env::var("LINKRS_ORDERED_EXISTENCE_SCAN")
-        .is_ok_and(|value| matches!(value.as_str(), "off" | "0" | "false"))
-    {
-        return Err("disabled".to_string());
-    }
     let dedup = match chain.global.first() {
         Some(PlanNodeEnum::Dedup(dedup)) if dedup.col_names().len() == 1 => dedup,
         Some(PlanNodeEnum::Dedup(_)) => return Err("multi-column-distinct".to_string()),

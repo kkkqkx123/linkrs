@@ -6,6 +6,10 @@
 
 use serde::{Deserialize, Serialize};
 
+fn default_ordered_existence_batch_limit() -> usize {
+    16
+}
+
 // ── Auth ──────────────────────────────────────────────────────────────────
 
 /// Login request
@@ -271,6 +275,8 @@ pub struct OptimizerConfigSnapshot {
     pub min_iteration_rounds: usize,
     pub statistics_sample_limit: usize,
     pub statistics_min_epoch_delta: u64,
+    #[serde(default = "default_ordered_existence_batch_limit")]
+    pub ordered_existence_batch_limit: usize,
     pub storage_cost_profile: String,
     #[serde(default)]
     pub space_cost_profiles: std::collections::HashMap<String, String>,

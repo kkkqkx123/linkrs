@@ -89,23 +89,6 @@ impl CsrShardSet {
         }
     }
 
-    /// Warm one row's adjacency head metadata in the owning shard.
-    ///
-    /// Read-only counterpart of [`Self::visit_hot`] used as a lookahead hint.
-    /// Missing groups no-op; no group is created and no edge is visited.
-    pub fn prefetch_hot_head(&self, src_vid: u32) {
-        let Some((gid, local)) = self.route(src_vid) else {
-            return;
-        };
-        if let Some(shard) = self.shards.get(&gid) {
-            if let Some(mapped) = &shard.mapped {
-                mapped.prefetch_head(local);
-            } else {
-                shard.variant.prefetch_head(local);
-            }
-        }
-    }
-
     /// Fill a caller buffer with every physically stored entry of one vertex.
     ///
     /// Same content as the allocating trait accessor, without the per-vertex

@@ -427,6 +427,10 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                 .partitioning_config()
                 .max_buffered_chunks
                 .max(1),
+            ordered_existence_batch_limit: self
+                .optimizer_engine
+                .ordered_existence_batch_limit()
+                .max(1),
             parameters: Arc::new(params),
             session_variables: Arc::new(session_variables),
             ..ExecutionContext::default()

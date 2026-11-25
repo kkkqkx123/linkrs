@@ -68,6 +68,8 @@ pub struct ExecutionContext {
     pub cancel_token: Option<crate::executor::streaming::query_registry::CancelToken>,
     /// Streaming chunk size (rows per chunk).
     pub chunk_size: usize,
+    /// Upper bound of the ordered-existence scan candidate batch.
+    pub ordered_existence_batch_limit: usize,
     /// Maximum buffered chunks before back-pressure.
     pub max_buffered_chunks: usize,
     /// Engine-level shared scheduler.
@@ -116,6 +118,7 @@ fn new_base(expression_context: Arc<ExpressionAnalysisContext>) -> ExecutionCont
         query_id: 0,
         cancel_token: None,
         chunk_size: ExecutionContext::DEFAULT_CHUNK_SIZE,
+        ordered_existence_batch_limit: ExecutionContext::DEFAULT_ORDERED_EXISTENCE_BATCH_LIMIT,
         max_buffered_chunks: ExecutionContext::DEFAULT_MAX_BUFFERED_CHUNKS,
         shared_scheduler: None,
         arena: None,
@@ -131,6 +134,7 @@ fn new_base(expression_context: Arc<ExpressionAnalysisContext>) -> ExecutionCont
 
 impl ExecutionContext {
     pub const DEFAULT_CHUNK_SIZE: usize = 2048;
+    pub const DEFAULT_ORDERED_EXISTENCE_BATCH_LIMIT: usize = 16;
     pub const DEFAULT_MAX_BUFFERED_CHUNKS: usize = 10;
 
     pub fn new(expression_context: Arc<ExpressionAnalysisContext>) -> Self {

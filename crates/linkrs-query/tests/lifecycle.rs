@@ -350,6 +350,7 @@ fn cache_context() -> linkrs_query::cache::plan_cache::PlanCacheContext {
         param_type_signature: None,
         optimizer_version: 1,
         planning_config_hash: 0,
+        in_write_context: false,
     }
 }
 
@@ -364,6 +365,7 @@ fn put_context() -> linkrs_query::cache::plan_cache::PlanCachePutContext {
         is_transaction: false,
         optimizer_version: ctx.optimizer_version,
         planning_config_hash: ctx.planning_config_hash,
+        in_write_context: false,
     }
 }
 

@@ -325,6 +325,7 @@ Linkrs 使用 TOML 格式的配置文件，默认配置文件为 `config.toml`�
 | min_iteration_rounds | usize | 1 | 最小迭代轮数（不得大于 max_iteration_rounds） |
 | statistics_sample_limit | usize | 10000 | 统计信息采样上限（>0） |
 | statistics_min_epoch_delta | u64 | 100 | 统计信息最小 epoch 间隔 |
+| ordered_existence_batch_limit | usize | 16 | 有序存在扫描候选批次上限（>0）；有效批次为 `limit.clamp(1, 本值)`，越大每次游标步进读取越多主键候选 |
 | storage_cost_profile | String | 默认画像 | 存储代价画像 |
 | space_cost_profiles | Map | `{}` | 分空间代价画像 |
 
@@ -352,6 +353,8 @@ Linkrs 使用 TOML 格式的配置文件，默认配置文件为 `config.toml`�
 
 查询内并行分区采用总开关关闭、按形状灰度放行。`enabled` 保持 false；只有 `allow_ordered_parallel_expand` 默认打开，放行已证明等价的 rowless 单跳分组计数与有序去重，纯计数和通用聚合仍走串行。
 
+`allow_*` 系列是形状级灰度白名单，**仅在 `enabled=false` 时生效**：每个开关只额外放行一类形状。若把 `enabled` 设为 true，白名单会被整体短路（所有形状都通过总开关），此时任何 `allow_*` 取值都不再产生差别；其余门槛（存储自证域、行数阈值、结构检查）在两种情况下都照常生效。因此不要期望单独打开某个 `allow_*` 就能在总开关受控的前提下放行单一形状。
+
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | enabled | bool | false | 查询内并行分区总开关 |
@@ -359,13 +362,15 @@ Linkrs 使用 TOML 格式的配置文件，默认配置文件为 `config.toml`�
 | min_rows_per_partition | u64 | 100000 | 每个分区的最小行数（低于阈值拒绝分区） |
 | max_partitions | usize | 8 | 单个扫描的最大分区数 |
 | max_buffered_chunks | usize | 10 | 每个分区 worker 的最大缓冲块数（背压） |
+| fixed_overhead_rows | u64 | 0 | 经济门：启动固定开销（行当量）。三项全 0 时经济门关闭，仅保留行数阈值；按硬件标定 |
+| per_partition_rows | u64 | 0 | 经济门：每分区固定开销（行当量） |
+| exchange_row_per_mille | u32 | 0 | 经济门：每行跨 gather 的交换成本（行当量，千分比；50 = 0.05 行当量/行） |
 | vertex_id_start | Option\<i64\> | null | 可选顶点 ID 范围下界（与 end 同时设置才生效） |
 | vertex_id_end | Option\<i64\> | null | 可选顶点 ID 范围上界（开区间） |
 | allow_pure_count_chain | bool | false | 总开关关闭时仍放行纯计数链；默认关闭以保持微查询串行 |
 | allow_global_aggregate | bool | false | 总开关关闭时仍放行其他聚合根形状 |
 | allow_ordered_parallel_expand | bool | true | 放行 rowless 单跳展开的分组计数与有序去重 |
 | allow_parallel_count_frontier | bool | false | 放行计数前沿分区；收益未稳定，保持关闭 |
-| allow_partition_metadata_count | bool | false | 放行分区元数据计数；缺少 shard-local 存储证明，保持关闭 |
 
 生产默认只改变执行形状，不改变查询数值。回滚时将 `allow_ordered_parallel_expand` 设回 false、`workers` 与 `max_partitions` 设回 1 即可；无需数据迁移。
 
@@ -444,7 +449,7 @@ Linkrs 使用 TOML 格式的配置文件，默认配置文件为 `config.toml`�
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| column_block_enabled | bool | true | 是否启用存储列块扫描路径（默认开启，行式路径保留为回退；输出与行式路径逐位一致，开启后 PROFILE/EXPLAIN ANALYZE 中可观察 `column_block_hits`；也可用环境变量 `LINKRS_COLUMN_BLOCK_ENABLED=0` 回退） |
+| column_block_enabled | bool | true | 是否启用存储列块扫描路径（默认开启，行式路径保留为回退；输出与行式路径逐位一致，开启后 PROFILE/EXPLAIN ANALYZE 中可观察 `column_block_hits`；回滚通过修改本配置项，行式路径为唯一回退） |
 
 ---
 

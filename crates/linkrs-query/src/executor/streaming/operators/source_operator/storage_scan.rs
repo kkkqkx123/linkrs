@@ -28,10 +28,9 @@ use super::SourceOperatorKind;
 ///
 /// Default on: storage sources stream column-major batches through the
 /// `next_column_batch` cursor API and build chunk typed columns directly
-/// from those batches. Rollback: set `LINKRS_COLUMN_BLOCK_ENABLED=0` (or
-/// `false`/`off`) to force the row-based path without restarting with a
-/// different binary, or call `set_column_block_enabled(false)`
-/// programmatically. The row path is retained as the fallback.
+/// from those batches. Roll back through the `column_block_enabled`
+/// configuration or `set_column_block_enabled(false)`. The row path stays
+/// as the fallback.
 static COLUMN_BLOCK_ENABLED: AtomicBool = AtomicBool::new(true);
 
 /// Enable or disable the storage column-block scan mode.
@@ -40,20 +39,7 @@ pub fn set_column_block_enabled(enabled: bool) {
 }
 
 /// Whether the storage column-block scan mode is currently enabled.
-///
-/// The environment rollback overrides the static switch: when
-/// `LINKRS_COLUMN_BLOCK_ENABLED` is `0`/`false`/`off` (case-insensitive)
-/// the column-block path stays off even if it was enabled programmatically.
 pub fn column_block_enabled() -> bool {
-    if let Ok(raw) = std::env::var("LINKRS_COLUMN_BLOCK_ENABLED") {
-        let lowered = raw.trim().to_ascii_lowercase();
-        if matches!(lowered.as_str(), "0" | "false" | "off" | "no") {
-            return false;
-        }
-        if matches!(lowered.as_str(), "1" | "true" | "on" | "yes") {
-            return COLUMN_BLOCK_ENABLED.load(AtomicOrdering::Relaxed);
-        }
-    }
     COLUMN_BLOCK_ENABLED.load(AtomicOrdering::Relaxed)
 }
 

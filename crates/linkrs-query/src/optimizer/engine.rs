@@ -88,6 +88,9 @@ pub struct OptimizerEngine {
     fast_heuristic: PhysicalHeuristicOptimizer,
     last_batch_statistics: Mutex<Vec<(OptimizationBatch, BatchStatistics)>>,
     partitioning_planner: PartitioningPlanner,
+    /// Upper bound of the ordered-existence scan candidate batch. Threaded
+    /// to execution via `ExecutionContext`; the plan asserts `limit.clamp(1, value)`.
+    ordered_existence_batch_limit: usize,
     enable_heuristic: bool,
     max_heuristic_iterations: usize,
     feedback_history: Arc<QueryFeedbackHistory>,

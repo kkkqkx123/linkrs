@@ -1,5 +1,5 @@
 use super::super::{
-    BundledCsr, CsrBase, EdgeId, EdgeStrategy, HotNbr, ImmutableCsr, MutableCsr, MutableCsrTrait,
+    BundledCsr, CsrBase, EdgeId, EdgeStrategy, ImmutableCsr, MutableCsr, MutableCsrTrait,
     Nbr, PureTopologyCsr, VertexId,
 };
 use super::*;
@@ -12,42 +12,6 @@ fn test_multiple_csr_variant() {
     csr.insert_edge(0u32, VertexId::edge_endpoint_key(1, 0), EdgeId(100), 1)
         .unwrap();
     assert_eq!(csr.edge_count(), 1);
-}
-
-#[test]
-fn prefetch_head_is_read_only() {
-    let mut csr =
-        CsrVariant::from_strategy_with_overflow(EdgeStrategy::Multiple, 10, 100, 4096).unwrap();
-    for src in 0..4u32 {
-        for dst in 0..3u32 {
-            csr.insert_edge(
-                src,
-                VertexId::edge_endpoint_key(dst + 1, 0),
-                EdgeId((src * 3 + dst + 1) as u64),
-                1,
-            )
-            .unwrap();
-        }
-    }
-    let collect = |csr: &CsrVariant| {
-        let mut rows = Vec::new();
-        for src in 0..10u32 {
-            let mut hot = Vec::new();
-            csr.visit_hot(src, |item| {
-                hot.push(item);
-                true
-            });
-            rows.push(hot);
-        }
-        rows
-    };
-    let before: Vec<Vec<HotNbr>> = collect(&csr);
-    let dump = csr.dump();
-    for src in 0..10u32 {
-        csr.prefetch_head(src);
-    }
-    assert_eq!(before, collect(&csr));
-    assert_eq!(dump, csr.dump());
 }
 
 #[test]

@@ -56,6 +56,8 @@ pub struct DatabaseConfig {
     /// Query-internal parallel execution settings. Defaults keep embedded
     /// execution serial.
     pub parallel: ParallelConfig,
+    /// Upper bound of the ordered-existence scan candidate batch (default 16).
+    pub ordered_existence_batch_limit: usize,
 }
 
 /// Vector subsystem configuration for the embedded database.
@@ -160,6 +162,7 @@ impl DatabaseConfig {
             snapshot_retention_count: 10,
             vector: VectorConfig::default(),
             parallel: ParallelConfig::default(),
+            ordered_existence_batch_limit: 16,
         }
     }
 
@@ -178,6 +181,7 @@ impl DatabaseConfig {
             snapshot_retention_count: 10,
             vector: VectorConfig::default(),
             parallel: ParallelConfig::default(),
+            ordered_existence_batch_limit: 16,
         }
     }
 
@@ -243,6 +247,12 @@ impl DatabaseConfig {
     /// Apply query-internal parallel execution settings.
     pub fn with_parallel_config(mut self, parallel: ParallelConfig) -> Self {
         self.parallel = parallel;
+        self
+    }
+
+    /// Set the ordered-existence scan candidate batch upper bound.
+    pub fn with_ordered_existence_batch_limit(mut self, limit: usize) -> Self {
+        self.ordered_existence_batch_limit = limit.max(1);
         self
     }
 

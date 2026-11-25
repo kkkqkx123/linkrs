@@ -213,19 +213,6 @@ impl MappedFrozen {
         }
     }
 
-    /// Warm the row-length header of one mapped row without changing it.
-    ///
-    /// Mapped rows store no heap head columns; reading the degree header a
-    /// few rows ahead still primes the same metadata line used by the row
-    /// walk. Visibility and edge order are untouched.
-    pub fn prefetch_head(&self, src_vid: u32) {
-        let idx = src_vid as usize;
-        if idx < self.rows {
-            std::hint::black_box(self.degree_at(idx));
-            std::hint::black_box(*self.offsets.get(idx).unwrap_or(&0));
-        }
-    }
-
     /// Visit every physically stored hot half of one row without allocating
     /// and without touching the stamp columns.
     ///
