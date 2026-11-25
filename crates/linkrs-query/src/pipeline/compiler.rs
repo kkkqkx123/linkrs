@@ -23,6 +23,7 @@ pub(crate) struct CompileTimes {
     pub optimize_us: u64,
     pub cache_probe_us: u64,
     pub plan_cache_hit: bool,
+    pub compiled_plan_memo_hit: bool,
 }
 
 impl CompileTimes {
@@ -33,6 +34,14 @@ impl CompileTimes {
             optimize_us: 0,
             cache_probe_us: probe_us,
             plan_cache_hit: true,
+            compiled_plan_memo_hit: false,
+        }
+    }
+
+    fn compiled_memo_hit(probe_us: u64) -> Self {
+        Self {
+            compiled_plan_memo_hit: true,
+            ..Self::cache_hit(probe_us)
         }
     }
 }
@@ -92,6 +101,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                 optimize_us: optimize_start.elapsed().as_micros() as u64,
                 cache_probe_us: 0,
                 plan_cache_hit: false,
+                compiled_plan_memo_hit: false,
             },
         ))
     }
@@ -232,6 +242,11 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             crate::context::staged_writes_visible(request.operation_context.as_ref());
         let cache_context =
             self.plan_cache_context(space_name.clone(), param_signature, in_write_context);
+        let compiled_key = if super::prepared::is_read_only_cacheable(stmt) {
+            self.compiled_plan_memo_key(query_text, &query_context, param_signature)
+        } else {
+            None
+        };
         let dml_memo_key = if dml_shape_cacheable {
             Some(super::DmlPlanMemoKey::from_context(
                 query_text.to_string(),
@@ -242,6 +257,14 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         };
 
         let cache_start = std::time::Instant::now();
+        if let Some(key) = compiled_key.as_ref() {
+            if let Some(plan) = self.serve_compiled_plan(key, schema_version) {
+                return Ok((
+                    plan,
+                    CompileTimes::compiled_memo_hit(cache_start.elapsed().as_micros() as u64),
+                ));
+            }
+        }
         if let Some(plan) = self.serve_dml_memo(dml_memo_key.as_ref(), schema_version) {
             return Ok((
                 plan,
@@ -289,6 +312,16 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                     if let Some(key) = dml_memo_key.clone() {
                         self.store_dml_plan(key, cached.plan.clone());
                     }
+                    // Statistics and feedback may have advanced while the
+                    // optimized plan cache was being reused; re-arm the
+                    // pre-bind memo under the current epochs.
+                    if super::prepared::is_read_only_cacheable(stmt) {
+                        if let Some(key) =
+                            self.compiled_plan_memo_key(query_text, &query_context, param_signature)
+                        {
+                            self.store_compiled_plan(key, cached.plan.clone());
+                        }
+                    }
                     times.plan_cache_hit = true;
                     return Ok((cached.plan.clone(), times));
                 }
@@ -299,6 +332,15 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         }
 
         let plan = self.build_physical_plan(&optimized_plan, &query_context)?;
+        // The key is rebuilt after optimization because statistics collection
+        // and feedback folding may have advanced their epochs on this compile.
+        if super::prepared::is_read_only_cacheable(stmt) && plan.partition_spec().is_some() {
+            if let Some(key) =
+                self.compiled_plan_memo_key(query_text, &query_context, param_signature)
+            {
+                self.store_compiled_plan(key, plan.clone());
+            }
+        }
         let cacheable = super::prepared::is_read_only_cacheable(stmt) || dml_shape_cacheable;
         if cacheable {
             if let Some(key) = dml_memo_key.clone() {
@@ -334,6 +376,28 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             }
         }
         Ok((plan, times))
+    }
+
+    /// Serve a compiled read-only plan through the single checked exit.
+    ///
+    /// The key is fully known before binding, but the plan still carries a
+    /// partition layout decided during optimization. Only the shared
+    /// checked-serve validator decides whether that layout is still usable.
+    pub(crate) fn serve_compiled_plan(
+        &self,
+        key: &super::CompiledPlanMemoKey,
+        schema_version: Option<u64>,
+    ) -> Option<Arc<PhysicalPlan>> {
+        let plan = self.find_compiled_plan(key)?;
+        if self.plan_cache.serve_checked(&plan, schema_version).is_ok() {
+            self.compiled_plan_memo_hits
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            return Some(plan);
+        }
+        self.compiled_plan_memo_failures
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        log::debug!("Compiled plan failed checked serve, falling through to replan");
+        None
     }
 
     /// Serve a DML memo hit through the single checked exit.

@@ -749,6 +749,7 @@ fn test_query_result_empty() {
             rows_scanned: 0,
             rows_returned: 0,
             cache_hit: false,
+            compiled_plan_memo_hit: false,
         },
     );
     let result = QueryResult::from_core(core_result);
@@ -771,6 +772,7 @@ fn test_query_result_columns() {
             rows_scanned: 0,
             rows_returned: 0,
             cache_hit: false,
+            compiled_plan_memo_hit: false,
         },
     );
     let result = QueryResult::from_core(core_result);
@@ -792,6 +794,7 @@ fn test_query_result_metadata() {
             rows_scanned: 100,
             rows_returned: 10,
             cache_hit: false,
+            compiled_plan_memo_hit: false,
         },
     );
     let result = QueryResult::from_core(core_result);
@@ -814,6 +817,7 @@ fn test_query_result_iterator() {
             rows_scanned: 0,
             rows_returned: 1,
             cache_hit: false,
+            compiled_plan_memo_hit: false,
         },
     );
     let result = QueryResult::from_core(core_result);
@@ -837,6 +841,7 @@ fn test_query_result_into_iterator() {
             rows_scanned: 0,
             rows_returned: 1,
             cache_hit: false,
+            compiled_plan_memo_hit: false,
         },
     );
     let result = QueryResult::from_core(core_result);

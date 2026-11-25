@@ -83,6 +83,7 @@ struct CompileDetail {
     statistics_us: Vec<u64>,
     cache_probe_us: Vec<u64>,
     cache_hits: usize,
+    compiled_memo_hits: usize,
 }
 
 impl CompileDetail {
@@ -94,6 +95,9 @@ impl CompileDetail {
         self.cache_probe_us.push(metadata.cache_probe_us);
         if metadata.plan_cache_hit {
             self.cache_hits += 1;
+        }
+        if metadata.compiled_plan_memo_hit {
+            self.compiled_memo_hits += 1;
         }
     }
 }
@@ -1517,6 +1521,11 @@ fn write_run_result(
         field("statistics", &detail.statistics_us);
         field("cache_probe", &detail.cache_probe_us);
         let _ = writeln!(json, "  \"plan_cache_hits\": {},", detail.cache_hits);
+        let _ = writeln!(
+            json,
+            "  \"compiled_plan_memo_hits\": {},",
+            detail.compiled_memo_hits
+        );
     }
     match execute {
         Some(values) => {

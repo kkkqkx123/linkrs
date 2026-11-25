@@ -5,7 +5,7 @@ mod frontend;
 mod merge_conditional;
 pub mod prepared;
 
-use crate::cache::{ParameterizedQueryHandler, PlanCacheConfig, QueryPlanCache};
+use crate::cache::{ParameterizedQueryHandler, PlanCacheConfig, PlanCacheKey, QueryPlanCache};
 use crate::executor::streaming::plan::PhysicalPlan;
 use crate::executor::streaming::pool::SharedScheduler;
 use crate::executor::streaming::query_registry::QueryRegistry;
@@ -13,6 +13,7 @@ use crate::executor::streaming::SessionTransactionController;
 use crate::optimizer::OptimizerEngine;
 use crate::query_manager::QueryManager;
 use crate::storage::QueryStorage;
+use crate::QueryContext;
 use linkrs_core::metadata::index_manager::IndexMetadataManager;
 use linkrs_core::metadata::SchemaManager;
 #[cfg(feature = "fulltext")]
@@ -39,6 +40,10 @@ use std::sync::Arc;
 /// bounded map keeps the common bulk-load shapes resident while bounding
 /// memory. Lookup is a linear scan, which is cheap at this size.
 pub(crate) const DML_SHAPE_CACHE_CAP: usize = 16;
+
+/// Capacity of the read-only compiled-plan memo. It follows the DML memo
+/// because both are linear lookup tables on the query hot path.
+pub(crate) const COMPILED_PLAN_MEMO_CAP: usize = DML_SHAPE_CACHE_CAP;
 
 pub struct QueryPipelineManager<S: QueryStorage + 'static> {
     pub(crate) stats_manager: Arc<StatsManager>,
@@ -109,6 +114,15 @@ pub struct QueryPipelineManager<S: QueryStorage + 'static> {
     /// compiled physical plans directly. Bounded multi-entry map keyed by
     /// [`DmlPlanMemoKey`]; see that struct for the key dimensions.
     pub(crate) dml_plan_memo: parking_lot::Mutex<Vec<DmlPlanMemoEntry>>,
+    /// Read-only compiled physical plans whose partition layout is known only
+    /// after optimization. Keys carry the pre-bind identity plus stats and
+    /// feedback epochs so a hit can skip bind without a partition fingerprint.
+    pub(crate) compiled_plan_memo: parking_lot::Mutex<Vec<CompiledPlanMemoEntry>>,
+    pub compiled_plan_memo_hits: AtomicU64,
+    pub(crate) compiled_plan_memo_failures: AtomicU64,
+    /// Bumped by every statistics collection so an explicit ANALYZE retires
+    /// plans priced under the previous statistics snapshot.
+    pub(crate) compiled_plan_stats_epoch: AtomicU64,
     pub last_dml_plan_hits: std::sync::atomic::AtomicU64,
     /// Unified checked-serve failure counter across the memo, plain
     /// plan-cache, and partitioned paths. Every `serve_checked` rejection
@@ -167,6 +181,27 @@ pub(crate) struct DmlPlanMemoEntry {
     pub plan: Arc<PhysicalPlan>,
 }
 
+/// Identity of a compiled read-only plan that can be served before binding.
+///
+/// The plan-cache component carries the pre-bind catalog and runtime
+/// identity. The remaining fields cover optimizer inputs that are only known
+/// after planning: the statistics snapshot, the folded feedback watermark,
+/// and the storage layout version. A partition fingerprint is deliberately
+/// absent; checked-serve is the single layout validator on the hit path.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct CompiledPlanMemoKey {
+    pub(crate) inner: PlanCacheKey,
+    pub(crate) stats_stamp: Option<(u64, u64)>,
+    pub(crate) stats_epoch: u64,
+    pub(crate) feedback_fingerprint: u64,
+    pub(crate) layout_version: Option<u64>,
+}
+
+pub(crate) struct CompiledPlanMemoEntry {
+    pub key: CompiledPlanMemoKey,
+    pub plan: Arc<PhysicalPlan>,
+}
+
 impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
     /// Fallback sampling window used when the server assembly did not pass
     /// an explicit `statistics_sample_limit` (mirrors the config default).
@@ -221,6 +256,10 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             space_cost_profile_labels: HashMap::new(),
             dml_shape_cache_enabled: true,
             dml_plan_memo: parking_lot::Mutex::new(Vec::new()),
+            compiled_plan_memo: parking_lot::Mutex::new(Vec::new()),
+            compiled_plan_memo_hits: AtomicU64::new(0),
+            compiled_plan_memo_failures: AtomicU64::new(0),
+            compiled_plan_stats_epoch: AtomicU64::new(0),
             last_dml_plan_hits: std::sync::atomic::AtomicU64::new(0),
             dml_memo_failures: std::sync::atomic::AtomicU64::new(0),
             dml_template_ast: parking_lot::Mutex::new(Vec::new()),
@@ -342,6 +381,8 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                 }
             }
         };
+        self.compiled_plan_stats_epoch
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let stats_manager = self.optimizer_engine.stats_manager().clone();
         let schema_version = self
             .schema_generation
@@ -536,6 +577,10 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             space_cost_profile_labels: HashMap::new(),
             dml_shape_cache_enabled: true,
             dml_plan_memo: parking_lot::Mutex::new(Vec::new()),
+            compiled_plan_memo: parking_lot::Mutex::new(Vec::new()),
+            compiled_plan_memo_hits: AtomicU64::new(0),
+            compiled_plan_memo_failures: AtomicU64::new(0),
+            compiled_plan_stats_epoch: AtomicU64::new(0),
             last_dml_plan_hits: std::sync::atomic::AtomicU64::new(0),
             dml_memo_failures: std::sync::atomic::AtomicU64::new(0),
             dml_template_ast: parking_lot::Mutex::new(Vec::new()),
@@ -604,6 +649,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         // cover them too; otherwise `clear_plan_cache` would leave the bind
         // fast path serving plans the plan cache itself just dropped.
         self.dml_plan_memo.lock().clear();
+        self.compiled_plan_memo.lock().clear();
         self.dml_template_ast.lock().clear();
         log::info!("Query plan cache cleared");
     }
@@ -666,6 +712,93 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
     pub fn dml_memo_failure_count(&self) -> u64 {
         self.dml_memo_failures
             .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Hits on the read-only compiled physical-plan memo.
+    pub fn compiled_plan_memo_hits(&self) -> u64 {
+        self.compiled_plan_memo_hits
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Checked-serve rejections on the compiled physical-plan memo.
+    pub fn compiled_plan_memo_failure_count(&self) -> u64 {
+        self.compiled_plan_memo_failures
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Number of compiled physical plans currently memoized.
+    pub fn compiled_plan_memo_len(&self) -> usize {
+        self.compiled_plan_memo.lock().len()
+    }
+
+    /// Build the pre-bind identity of a compiled read-only plan.
+    ///
+    /// `LINKRS_NO_COMPILED_PLAN_MEMO` is a measurement gate: disabling the
+    /// memo exercises the complete compile path on the same binary.
+    pub(crate) fn compiled_plan_memo_key(
+        &self,
+        query_text: &str,
+        query_context: &QueryContext,
+        param_type_signature: Option<u64>,
+    ) -> Option<CompiledPlanMemoKey> {
+        if std::env::var_os("LINKRS_NO_COMPILED_PLAN_MEMO").is_some() {
+            return None;
+        }
+        let request = query_context.request_context();
+        let space_name = query_context
+            .space_name()
+            .or_else(|| request.space_name.clone());
+        let in_write_context =
+            crate::context::staged_writes_visible(request.operation_context.as_ref());
+        let context =
+            self.plan_cache_context(space_name.clone(), param_type_signature, in_write_context);
+        let stats_stamp = space_name
+            .as_deref()
+            .and_then(|space| self.optimizer_engine.stats_manager().space_stamp(space));
+        let layout_version = self
+            .storage
+            .as_ref()
+            .map(|storage| storage.read().layout_version());
+        Some(CompiledPlanMemoKey {
+            inner: PlanCacheKey::fingerprint_less_from_context(query_text, context),
+            stats_stamp,
+            stats_epoch: self.compiled_plan_stats_epoch.load(Ordering::Relaxed),
+            feedback_fingerprint: self.optimizer_engine.feedback_state_fingerprint(),
+            layout_version,
+        })
+    }
+
+    /// Non-serving probe used before binding. The served path still runs the
+    /// shared checked exit, so a candidate that later fails validation simply
+    /// rebinds and recompiles.
+    pub(crate) fn contains_compiled_plan(&self, key: &CompiledPlanMemoKey) -> bool {
+        self.compiled_plan_memo
+            .lock()
+            .iter()
+            .any(|entry| entry.key == *key)
+    }
+
+    /// Look up a compiled plan by full identity, with move-to-front reuse.
+    pub(crate) fn find_compiled_plan(
+        &self,
+        key: &CompiledPlanMemoKey,
+    ) -> Option<Arc<PhysicalPlan>> {
+        let mut guard = self.compiled_plan_memo.lock();
+        let pos = guard.iter().position(|entry| entry.key == *key)?;
+        if pos > 0 {
+            let entry = guard.remove(pos);
+            guard.insert(0, entry);
+        }
+        Some(guard[0].plan.clone())
+    }
+
+    /// Store a compiled plan, replacing a same-key entry and evicting the
+    /// least recently used entry beyond the memo capacity.
+    pub(crate) fn store_compiled_plan(&self, key: CompiledPlanMemoKey, plan: Arc<PhysicalPlan>) {
+        let mut guard = self.compiled_plan_memo.lock();
+        guard.retain(|entry| entry.key != key);
+        guard.insert(0, CompiledPlanMemoEntry { key, plan });
+        guard.truncate(COMPILED_PLAN_MEMO_CAP);
     }
 
     /// Microseconds spent in the last statistics collection pass.

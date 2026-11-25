@@ -21,6 +21,8 @@ pub struct StageMetrics {
     pub cache_probe_us: u64,
     /// Whether a compiled physical plan was served from the cache.
     pub plan_cache_hit: bool,
+    /// Whether the read-only compiled physical-plan memo served this query.
+    pub compiled_plan_memo_hit: bool,
 }
 
 impl StageMetrics {
@@ -34,6 +36,7 @@ impl StageMetrics {
             statistics_us: metrics.statistics_time_us,
             cache_probe_us: 0,
             plan_cache_hit: false,
+            compiled_plan_memo_hit: false,
         }
     }
 

@@ -368,6 +368,7 @@ impl<S: QueryStorage + 'static> crate::pipeline::QueryPipelineManager<S> {
             self.plan_cache.clear();
         }
         self.dml_plan_memo.lock().clear();
+        self.compiled_plan_memo.lock().clear();
     }
 
     pub(crate) fn record_cache_execution(

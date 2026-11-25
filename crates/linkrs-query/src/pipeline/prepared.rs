@@ -271,18 +271,19 @@ impl<S: QueryStorage + 'static> crate::pipeline::QueryPipelineManager<S> {
         } else {
             false
         };
-        // Early plain-cache probe for read-only shapes: a hit serves without
-        // binding, mirroring the compile-time cache path. Partitioned plans
-        // miss here by design and fall through to bind plus optimize.
+        // Early read-only probes let a cached compiled plan skip binding.
+        // The compiled memo covers partitioned plans whose layout is only
+        // known after optimization; the plain cache keeps its existing
+        // non-partitioned fast path. The probe here is a non-serving existence
+        // check: compile still owns the single checked-serve and hit counter.
         let probe_start = if timing_enabled {
             Some(std::time::Instant::now())
         } else {
             None
         };
-        let plain_hit = if !memo_hit
-            && !dml_shape_cacheable
-            && is_read_only_cacheable(parser_result.ast.stmt())
-        {
+        let mut compiled_memo_hit = false;
+        let mut plain_hit = false;
+        if !memo_hit && !dml_shape_cacheable && is_read_only_cacheable(parser_result.ast.stmt()) {
             let space_name = query_context
                 .space_name()
                 .or_else(|| query_context.request_context().space_name.clone());
@@ -290,26 +291,33 @@ impl<S: QueryStorage + 'static> crate::pipeline::QueryPipelineManager<S> {
                 &effective_query,
                 &query_context.request_context().parameters,
             );
-            let in_write_context = crate::context::staged_writes_visible(
-                query_context.request_context().operation_context.as_ref(),
-            );
-            let cache_context = self.plan_cache_context(space_name, param_sig, in_write_context);
-            let schema_version = Some(
-                self.schema_generation
-                    .load(std::sync::atomic::Ordering::Relaxed),
-            );
-            self.serve_plain_cache(&effective_query, &cache_context, None, schema_version)
-                .is_some()
-        } else {
-            false
-        };
+            if let Some(key) =
+                self.compiled_plan_memo_key(&effective_query, &query_context, param_sig)
+            {
+                compiled_memo_hit = self.contains_compiled_plan(&key);
+            }
+            if !compiled_memo_hit {
+                let in_write_context = crate::context::staged_writes_visible(
+                    query_context.request_context().operation_context.as_ref(),
+                );
+                let cache_context =
+                    self.plan_cache_context(space_name, param_sig, in_write_context);
+                let schema_version = Some(
+                    self.schema_generation
+                        .load(std::sync::atomic::Ordering::Relaxed),
+                );
+                plain_hit = self
+                    .serve_plain_cache(&effective_query, &cache_context, None, schema_version)
+                    .is_some();
+            }
+        }
         let probe_us = probe_start.map(|start| start.elapsed().as_micros() as u64);
         let bind_start = if timing_enabled {
             Some(std::time::Instant::now())
         } else {
             None
         };
-        let bound = if memo_hit || plain_hit {
+        let bound = if memo_hit || plain_hit || compiled_memo_hit {
             self.dml_bind_skipped_count
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             None
@@ -319,7 +327,7 @@ impl<S: QueryStorage + 'static> crate::pipeline::QueryPipelineManager<S> {
         if timing_enabled {
             let bind_us = bind_start.map(|start| start.elapsed().as_micros() as u64);
             log::debug!(
-                "prepare segments us: parse={} binding={} context={} probe={} bind={} memo_hit={} plain_hit={}",
+                "prepare segments us: parse={} binding={} context={} probe={} bind={} memo_hit={} plain_hit={} compiled_memo_hit={}",
                 parse_us.unwrap_or(0),
                 binding_us.unwrap_or(0),
                 context_us.unwrap_or(0),
@@ -327,6 +335,7 @@ impl<S: QueryStorage + 'static> crate::pipeline::QueryPipelineManager<S> {
                 bind_us.unwrap_or(0),
                 memo_hit,
                 plain_hit,
+                compiled_memo_hit,
             );
         }
         Self::finalize_prepare(

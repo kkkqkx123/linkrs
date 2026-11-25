@@ -123,6 +123,7 @@ print("DIFF_MEDIAN_MS slow=", slow_ms, "rewrite=", fast_ms)
 
 keys = (
     "name", "median_ms", "compile_median_ms", "status", "plan_cache_hits",
+    "compiled_plan_memo_hits",
     "parse_median_us", "plan_median_us", "optimize_median_us",
     "statistics_median_us", "cache_probe_median_us",
     "ordered_existence_candidates", "ordered_existence_matches",

@@ -280,6 +280,7 @@ pub struct ExecutionMetadata {
     pub statistics_us: u64,
     pub cache_probe_us: u64,
     pub plan_cache_hit: bool,
+    pub compiled_plan_memo_hit: bool,
 }
 
 /// Transaction handler

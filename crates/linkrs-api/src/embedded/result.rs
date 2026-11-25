@@ -99,6 +99,7 @@ pub struct ResultMetadata {
     pub statistics_us: u64,
     pub cache_probe_us: u64,
     pub plan_cache_hit: bool,
+    pub compiled_plan_memo_hit: bool,
 }
 
 impl QueryResult {
@@ -127,6 +128,7 @@ impl QueryResult {
                 statistics_us: result.metadata.statistics_us,
                 cache_probe_us: result.metadata.cache_probe_us,
                 plan_cache_hit: result.metadata.plan_cache_hit,
+                compiled_plan_memo_hit: result.metadata.compiled_plan_memo_hit,
             },
         }
     }
@@ -368,6 +370,7 @@ impl Default for ResultMetadata {
             statistics_us: 0,
             cache_probe_us: 0,
             plan_cache_hit: false,
+            compiled_plan_memo_hit: false,
         }
     }
 }

@@ -140,6 +140,26 @@ impl OptimizerEngine {
         Some((observed / baseline, actual_in))
     }
 
+    /// Deterministic fingerprint of the feedback actually folded into the
+    /// optimizer. Raw history growth is excluded: only the applied sequence
+    /// watermark per query fingerprint can change a planning decision.
+    pub(crate) fn feedback_state_fingerprint(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+
+        let guard = self.feedback_applied_seq.lock();
+        let mut entries: Vec<(&String, &u64)> = guard.iter().collect();
+        entries.sort_by(|(left_fingerprint, _), (right_fingerprint, _)| {
+            left_fingerprint.cmp(right_fingerprint)
+        });
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        entries.len().hash(&mut hasher);
+        for (fingerprint, sequence) in entries {
+            fingerprint.hash(&mut hasher);
+            sequence.hash(&mut hasher);
+        }
+        hasher.finish()
+    }
+
     /// Drop all feedback corrections scoped to `space` (`None` clears all).
     ///
     /// Called when a space's statistics are invalidated (ANALYZE force or

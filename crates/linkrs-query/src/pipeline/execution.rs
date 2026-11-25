@@ -174,6 +174,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         profile.stages.optimize_us = times.optimize_us;
         profile.stages.cache_probe_us = times.cache_probe_us;
         profile.stages.plan_cache_hit = times.plan_cache_hit;
+        profile.stages.compiled_plan_memo_hit = times.compiled_plan_memo_hit;
         profile.result_count = result.count();
         metrics.set_result_row_count(result.count());
         metrics.record_execute_time(execute_start.elapsed());
@@ -261,6 +262,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                 profile.stages.optimize_us = 0;
                 profile.stages.cache_probe_us = 0;
                 profile.stages.plan_cache_hit = false;
+                profile.stages.compiled_plan_memo_hit = false;
                 let error_info = ErrorInfo::new(
                     ErrorType::ExecutionError,
                     QueryPhase::Execute,
@@ -283,6 +285,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         profile.stages.optimize_us = times.optimize_us;
         profile.stages.cache_probe_us = times.cache_probe_us;
         profile.stages.plan_cache_hit = times.plan_cache_hit;
+        profile.stages.compiled_plan_memo_hit = times.compiled_plan_memo_hit;
         profile.result_count = result.count();
         metrics.set_result_row_count(result.count());
         metrics.record_execute_time(execute_start.elapsed());
