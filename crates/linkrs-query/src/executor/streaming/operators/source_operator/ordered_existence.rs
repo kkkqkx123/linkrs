@@ -46,7 +46,13 @@ fn build_plan(
     )
 }
 
+fn timing_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("LINKRS_STAGE_TIMING").is_some())
+}
+
 fn open_paged(op: &mut SourceOperator, start_after: Option<Vec<u8>>) -> Result<(), QueryError> {
+    let build_started = std::time::Instant::now();
     let (storage, plan) = {
         let SourceOperatorKind::OrderedExistenceScan {
             storage,
@@ -63,9 +69,12 @@ fn open_paged(op: &mut SourceOperator, start_after: Option<Vec<u8>>) -> Result<(
         let plan = build_plan(&storage, space_name, *index_id)?;
         (storage, plan)
     };
+    let build_us = build_started.elapsed().as_micros() as u64;
     let opened = std::time::Instant::now();
-    let cursor = storage
-        .read()
+    let guard = storage.read();
+    let lock_us = opened.elapsed().as_micros() as u64;
+    let cursor_started = std::time::Instant::now();
+    let cursor = guard
         .open_ordered_index_cursor(&plan, start_after, PAGE_ENTRIES)
         .map_err(|error| {
             storage_error(
@@ -75,6 +84,13 @@ fn open_paged(op: &mut SourceOperator, start_after: Option<Vec<u8>>) -> Result<(
                 error,
             )
         })?;
+    drop(guard);
+    let cursor_us = cursor_started.elapsed().as_micros() as u64;
+    if timing_enabled() {
+        eprintln!(
+            "[stage] ordered_open build_us={build_us} lock_us={lock_us} cursor_us={cursor_us}"
+        );
+    }
     if let Some(stats) = op.runtime.as_ref().map(|rt| rt.columnar_stats()) {
         let ordering = std::sync::atomic::Ordering::Relaxed;
         stats
@@ -244,23 +260,14 @@ pub(crate) fn next(op: &mut SourceOperator) -> Result<Option<DataChunk>, QueryEr
                 std::sync::atomic::Ordering::Relaxed,
             );
         }
-        let mut output_rows = Vec::new();
-        let mut matched = 0u64;
-        let mut emitted_now = 0usize;
-        for (vid, found) in vids.into_iter().zip(exists) {
-            if !found {
-                continue;
-            }
-            matched += 1;
-            let Some(key) = identity_key_value(vid, &key_type) else {
-                continue;
-            };
-            output_rows.push(vec![key]);
-            emitted_now += 1;
-            if op_early_stop(op) && emitted(op) + emitted_now >= limit {
-                break;
-            }
-        }
+        let (output_rows, matched, emitted_now) = select_emitted(
+            vids,
+            exists,
+            emitted(op),
+            limit,
+            op_early_stop(op),
+            &key_type,
+        );
         if let Some(stats) = &stats {
             let ordering = std::sync::atomic::Ordering::Relaxed;
             stats.ordered_existence_matches.fetch_add(matched, ordering);
@@ -286,6 +293,34 @@ pub(crate) fn next(op: &mut SourceOperator) -> Result<Option<DataChunk>, QueryEr
         };
         return Ok(Some(chunk));
     }
+}
+
+fn select_emitted(
+    vids: Vec<VertexId>,
+    exists: Vec<bool>,
+    emitted_before: usize,
+    limit: usize,
+    early_stop: bool,
+    key_type: &DataType,
+) -> (Vec<Vec<Value>>, u64, usize) {
+    let mut output_rows = Vec::new();
+    let mut matched = 0u64;
+    let mut emitted_now = 0usize;
+    for (vid, found) in vids.into_iter().zip(exists) {
+        if !found {
+            continue;
+        }
+        matched += 1;
+        let Some(key) = identity_key_value(vid, key_type) else {
+            continue;
+        };
+        output_rows.push(vec![key]);
+        emitted_now += 1;
+        if early_stop && emitted_before + emitted_now >= limit {
+            break;
+        }
+    }
+    (output_rows, matched, emitted_now)
 }
 
 fn identity_key_value(vid: VertexId, data_type: &DataType) -> Option<Value> {
@@ -412,4 +447,70 @@ fn record_drift_with(
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
     let _ = op;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn key_of(vid: VertexId) -> i64 {
+        vid.as_int64().expect("test vertex id")
+    }
+
+    fn walk_keys(limit: usize, present: impl Fn(i64) -> bool, early_stop: bool) -> Vec<i64> {
+        let batch_size = limit.clamp(1, 16);
+        let mut emitted = 0usize;
+        let mut output = Vec::new();
+        for batch in (1..=100i64).collect::<Vec<_>>().chunks(batch_size) {
+            let vids = batch
+                .iter()
+                .map(|id| VertexId::try_from_int64(*id).expect("test vertex id"))
+                .collect::<Vec<_>>();
+            let exists = batch.iter().map(|id| present(*id)).collect::<Vec<_>>();
+            let (rows, _, emitted_now) =
+                select_emitted(vids, exists, emitted, limit, early_stop, &DataType::BigInt);
+            emitted += emitted_now;
+            output.extend(rows.into_iter().map(|row| match &row[0] {
+                Value::BigInt(value) => *value,
+                other => panic!("unexpected key {other:?}"),
+            }));
+            if early_stop && emitted >= limit {
+                break;
+            }
+        }
+        output
+    }
+
+    #[test]
+    fn ordered_existence_emits_sorted_prefix_for_each_batch_limit() {
+        for limit in [1, 10, 17, 100] {
+            let dense = walk_keys(limit, |_| true, true);
+            assert_eq!(dense, (1..=limit.min(100) as i64).collect::<Vec<_>>());
+
+            let sparse = walk_keys(limit, |id| id % 3 == 0, true);
+            let expected = (1..=100)
+                .filter(|id| id % 3 == 0)
+                .take(limit)
+                .collect::<Vec<_>>();
+            assert_eq!(sparse, expected);
+
+            assert!(walk_keys(limit, |_| false, true).is_empty());
+            for key in &sparse {
+                assert_eq!(key % 3, 0);
+            }
+            assert!(sparse.windows(2).all(|pair| pair[0] < pair[1]));
+        }
+    }
+
+    #[test]
+    fn ordered_existence_without_early_stop_keeps_every_existing_key() {
+        for limit in [1, 10, 17, 100] {
+            let rows = walk_keys(limit, |id| id % 4 == 1, false);
+            let expected = (1..=100).filter(|id| id % 4 == 1).collect::<Vec<_>>();
+            assert_eq!(rows, expected);
+            assert!(rows
+                .iter()
+                .all(|id| key_of(VertexId::try_from_int64(*id).expect("test vertex id")) == *id));
+        }
+    }
 }

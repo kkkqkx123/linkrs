@@ -73,6 +73,31 @@ struct ResourceSample {
     numa_policy: String,
 }
 
+/// Per-run compile-stage samples used to separate cold compilation from cache
+/// hits and catalog/statistics checks in the benchmark JSON.
+#[derive(Debug, Default)]
+struct CompileDetail {
+    parse_us: Vec<u64>,
+    plan_us: Vec<u64>,
+    optimize_us: Vec<u64>,
+    statistics_us: Vec<u64>,
+    cache_probe_us: Vec<u64>,
+    cache_hits: usize,
+}
+
+impl CompileDetail {
+    fn push(&mut self, metadata: &linkrs_api::embedded::result::ResultMetadata) {
+        self.parse_us.push(metadata.parse_us);
+        self.plan_us.push(metadata.plan_us);
+        self.optimize_us.push(metadata.optimize_us);
+        self.statistics_us.push(metadata.statistics_us);
+        self.cache_probe_us.push(metadata.cache_probe_us);
+        if metadata.plan_cache_hit {
+            self.cache_hits += 1;
+        }
+    }
+}
+
 /// Per-query diagnostics recovered from EXPLAIN plus persistence snapshots.
 /// These are written as JSON placeholders and patched after the EXPLAIN pass.
 #[derive(Debug, Clone, Copy, Default)]
@@ -957,7 +982,7 @@ fn cmd_run(args: &[String]) {
         if is_skipped(&skip_set, &bench.name) {
             println!("[run] {} skipped by skip file", bench.name);
             write_run_result(
-                &out_dir, &bench, None, None, None, "skipped", threads, &resources,
+                &out_dir, &bench, None, None, None, "skipped", threads, &resources, None,
             );
             continue;
         }
@@ -974,6 +999,7 @@ fn cmd_run(args: &[String]) {
                     &format!("prerun error: {e}"),
                     threads,
                     &resources,
+                    None,
                 );
                 warmup_failed = true;
                 break;
@@ -991,6 +1017,7 @@ fn cmd_run(args: &[String]) {
                     &format!("warmup error: {e}"),
                     threads,
                     &resources,
+                    None,
                 );
                 warmup_failed = true;
                 break;
@@ -1008,6 +1035,7 @@ fn cmd_run(args: &[String]) {
         let mut times_ms: Vec<f64> = Vec::with_capacity(runs);
         let mut compile_ms: Vec<f64> = Vec::with_capacity(runs);
         let mut execute_ms: Vec<f64> = Vec::with_capacity(runs);
+        let mut compile_detail = CompileDetail::default();
         let mut rows_seen = 0usize;
         let mut got_lines: Vec<String> = Vec::new();
         let mut result_first_row = String::new();
@@ -1028,6 +1056,7 @@ fn cmd_run(args: &[String]) {
                     let meta = result.metadata();
                     compile_ms.push(meta.compile_time.as_secs_f64() * 1000.0);
                     execute_ms.push(meta.execute_time.as_secs_f64() * 1000.0);
+                    compile_detail.push(meta);
                 }
                 Err(e) => {
                     error = Some(e.to_string());
@@ -1037,7 +1066,9 @@ fn cmd_run(args: &[String]) {
         }
         if let Some(err) = &error {
             eprintln!("[run] {} FAILED: {err}", bench.name);
-            write_run_result(&out_dir, &bench, None, None, None, err, threads, &resources);
+            write_run_result(
+                &out_dir, &bench, None, None, None, err, threads, &resources, None,
+            );
             continue;
         }
         let mut status = "ok";
@@ -1083,6 +1114,7 @@ fn cmd_run(args: &[String]) {
             status,
             threads,
             &resources,
+            Some(&compile_detail),
         );
     }
     // Profile after every timed query has finished: EXPLAIN ANALYZE executes
@@ -1401,6 +1433,20 @@ fn trimmed_mean(values: &[f64]) -> f64 {
     kept.iter().sum::<f64>() / kept.len() as f64
 }
 
+fn median_us(values: &[u64]) -> u64 {
+    if values.is_empty() {
+        return 0;
+    }
+    let mut sorted = values.to_vec();
+    sorted.sort_unstable();
+    let middle = sorted.len() / 2;
+    if sorted.len() % 2 == 1 {
+        sorted[middle]
+    } else {
+        sorted[middle - 1].saturating_add(sorted[middle]) / 2
+    }
+}
+
 fn write_run_result(
     out_dir: &Path,
     bench: &Benchmark,
@@ -1410,6 +1456,7 @@ fn write_run_result(
     status: &str,
     threads: u32,
     resources: &ResourceSample,
+    compile_detail: Option<&CompileDetail>,
 ) {
     let mut json = String::from("{\n");
     let _ = writeln!(json, "  \"name\": {},", json_escape(&bench.name));
@@ -1453,6 +1500,23 @@ fn write_run_result(
             json.push_str("  \"compile_ms\": 0,\n");
             json.push_str("  \"compile_median_ms\": 0,\n");
         }
+    }
+    if let Some(detail) = compile_detail {
+        let mut field = |name: &str, values: &[u64]| {
+            let list = values
+                .iter()
+                .map(|value| value.to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let _ = writeln!(json, "  \"{name}_times_us\": [{list}],");
+            let _ = writeln!(json, "  \"{name}_median_us\": {:.0},", median_us(values));
+        };
+        field("parse", &detail.parse_us);
+        field("plan", &detail.plan_us);
+        field("optimize", &detail.optimize_us);
+        field("statistics", &detail.statistics_us);
+        field("cache_probe", &detail.cache_probe_us);
+        let _ = writeln!(json, "  \"plan_cache_hits\": {},", detail.cache_hits);
     }
     match execute {
         Some(values) => {

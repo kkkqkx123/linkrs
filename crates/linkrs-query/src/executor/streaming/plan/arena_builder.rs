@@ -78,7 +78,9 @@ impl PhysicalPlanBuilder {
 
         let (mut operators, mut fragments, root_fid, root_op_id) = match partitioned {
             Some((operators, fragments, root_fid, root_op_id)) => {
-                if let Some(note) = partition::ordered_existence_decision(node, exec_ctx) {
+                if let Some(note) =
+                    partition::ordered_existence_decision(node, exec_ctx, ordered_existence)
+                {
                     ctx.diagnostics.push_note(note);
                 }
                 if !ordered_existence {
@@ -89,7 +91,7 @@ impl PhysicalPlanBuilder {
                 (operators, fragments, root_fid, root_op_id)
             }
             None => {
-                if let Some(note) = partition::ordered_existence_decision(node, exec_ctx) {
+                if let Some(note) = partition::ordered_existence_decision(node, exec_ctx, false) {
                     if note.contains("unproven") {
                         ctx.diagnostics.push_note(note);
                     }

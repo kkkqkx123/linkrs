@@ -21,6 +21,20 @@ pub(crate) struct CompileTimes {
     pub statistics_us: u64,
     pub plan_us: u64,
     pub optimize_us: u64,
+    pub cache_probe_us: u64,
+    pub plan_cache_hit: bool,
+}
+
+impl CompileTimes {
+    fn cache_hit(probe_us: u64) -> Self {
+        Self {
+            statistics_us: 0,
+            plan_us: 0,
+            optimize_us: 0,
+            cache_probe_us: probe_us,
+            plan_cache_hit: true,
+        }
+    }
 }
 
 impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
@@ -76,6 +90,8 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                 statistics_us,
                 plan_us: 0,
                 optimize_us: optimize_start.elapsed().as_micros() as u64,
+                cache_probe_us: 0,
+                plan_cache_hit: false,
             },
         ))
     }
@@ -212,14 +228,10 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         // Include the write context so a plan compiled outside a transaction
         // (which may use metadata counts) is not reused inside one, where
         // staged rows are invisible to those counts.
-        let in_write_context = crate::context::staged_writes_visible(
-            request.operation_context.as_ref(),
-        );
-        let cache_context = self.plan_cache_context(
-            space_name.clone(),
-            param_signature,
-            in_write_context,
-        );
+        let in_write_context =
+            crate::context::staged_writes_visible(request.operation_context.as_ref());
+        let cache_context =
+            self.plan_cache_context(space_name.clone(), param_signature, in_write_context);
         let dml_memo_key = if dml_shape_cacheable {
             Some(super::DmlPlanMemoKey::from_context(
                 query_text.to_string(),
@@ -229,8 +241,12 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             None
         };
 
+        let cache_start = std::time::Instant::now();
         if let Some(plan) = self.serve_dml_memo(dml_memo_key.as_ref(), schema_version) {
-            return Ok((plan, CompileTimes::default()));
+            return Ok((
+                plan,
+                CompileTimes::cache_hit(cache_start.elapsed().as_micros() as u64),
+            ));
         }
 
         if let Some(plan) = self.serve_plain_cache(
@@ -239,7 +255,10 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             dml_memo_key.clone(),
             schema_version,
         ) {
-            return Ok((plan, CompileTimes::default()));
+            return Ok((
+                plan,
+                CompileTimes::cache_hit(cache_start.elapsed().as_micros() as u64),
+            ));
         }
 
         let owned_bound;
@@ -254,8 +273,9 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                 &owned_bound
             }
         };
-        let (optimized_plan, times) =
+        let (optimized_plan, mut times) =
             self.optimize_from_bound(query_context.clone(), bound, ast)?;
+        times.cache_probe_us = cache_start.elapsed().as_micros() as u64;
         if let Some(spec) = optimized_plan.partition_spec() {
             if let Some(cached) =
                 self.plan_cache
@@ -269,6 +289,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                     if let Some(key) = dml_memo_key.clone() {
                         self.store_dml_plan(key, cached.plan.clone());
                     }
+                    times.plan_cache_hit = true;
                     return Ok((cached.plan.clone(), times));
                 }
                 self.dml_memo_failures

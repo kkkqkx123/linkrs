@@ -17,6 +17,10 @@ pub struct StageMetrics {
     pub optimize_us: u64,
     pub execute_us: u64,
     pub statistics_us: u64,
+    /// Time spent probing the plan cache and checking its layout version.
+    pub cache_probe_us: u64,
+    /// Whether a compiled physical plan was served from the cache.
+    pub plan_cache_hit: bool,
 }
 
 impl StageMetrics {
@@ -28,6 +32,8 @@ impl StageMetrics {
             optimize_us: metrics.optimize_time_us,
             execute_us: metrics.execute_time_us,
             statistics_us: metrics.statistics_time_us,
+            cache_probe_us: 0,
+            plan_cache_hit: false,
         }
     }
 

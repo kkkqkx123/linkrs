@@ -20,6 +20,7 @@ mod dedup;
 mod filter;
 mod flatten;
 mod limit;
+mod ordered_existence_contract;
 mod project;
 mod sample;
 mod unwind;
@@ -97,6 +98,11 @@ pub enum UnaryOperatorKind {
         limit: u32,
         skipped: u32,
         consumed: u32,
+    },
+    OrderedExistenceContract {
+        limit: u32,
+        emitted: u32,
+        last_key: Option<i64>,
     },
     Dedup {
         seen_rows: DedupSeen,
@@ -200,6 +206,13 @@ impl UnaryOperator {
                 skipped: 0,
                 consumed: 0,
             },
+            super::spec::UnarySpec::OrderedExistenceContract { limit } => {
+                UnaryOperatorKind::OrderedExistenceContract {
+                    limit: *limit,
+                    emitted: 0,
+                    last_key: None,
+                }
+            }
             super::spec::UnarySpec::Assign {
                 assignments,
                 subquery_runners: _,
@@ -373,6 +386,12 @@ impl UnaryOperator {
         if matches!(&self.kind, UnaryOperatorKind::Limit { .. }) {
             return limit::handle(self, input);
         }
+        if matches!(
+            &self.kind,
+            UnaryOperatorKind::OrderedExistenceContract { .. }
+        ) {
+            return ordered_existence_contract::handle(self, input);
+        }
         if matches!(&self.kind, UnaryOperatorKind::Dedup { .. }) {
             return dedup::handle(self, input);
         }
@@ -410,6 +429,12 @@ impl UnaryOperator {
             } => {
                 *skipped = 0;
                 *consumed = 0;
+            }
+            UnaryOperatorKind::OrderedExistenceContract {
+                emitted, last_key, ..
+            } => {
+                *emitted = 0;
+                *last_key = None;
             }
             UnaryOperatorKind::Dedup { seen_rows } => seen_rows.clear(),
             UnaryOperatorKind::Unwind {

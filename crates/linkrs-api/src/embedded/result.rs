@@ -93,6 +93,12 @@ pub struct ResultMetadata {
     pub rows_returned: usize,
     /// scanning line
     pub rows_scanned: u64,
+    pub parse_us: u64,
+    pub plan_us: u64,
+    pub optimize_us: u64,
+    pub statistics_us: u64,
+    pub cache_probe_us: u64,
+    pub plan_cache_hit: bool,
 }
 
 impl QueryResult {
@@ -115,6 +121,12 @@ impl QueryResult {
                 execute_time: Duration::from_micros(result.metadata.execute_time_us),
                 rows_returned,
                 rows_scanned: result.metadata.rows_scanned,
+                parse_us: result.metadata.parse_us,
+                plan_us: result.metadata.plan_us,
+                optimize_us: result.metadata.optimize_us,
+                statistics_us: result.metadata.statistics_us,
+                cache_probe_us: result.metadata.cache_probe_us,
+                plan_cache_hit: result.metadata.plan_cache_hit,
             },
         }
     }
@@ -350,6 +362,12 @@ impl Default for ResultMetadata {
             execute_time: Duration::from_millis(0),
             rows_returned: 0,
             rows_scanned: 0,
+            parse_us: 0,
+            plan_us: 0,
+            optimize_us: 0,
+            statistics_us: 0,
+            cache_probe_us: 0,
+            plan_cache_hit: false,
         }
     }
 }

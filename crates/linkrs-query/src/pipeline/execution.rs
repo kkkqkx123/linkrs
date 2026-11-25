@@ -119,10 +119,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
 
         let total_start = Instant::now();
         let mut metrics = QueryMetrics::new();
-        let mut profile = QueryProfile::new(
-            rctx.session_id.unwrap_or(0),
-            query_text.to_string(),
-        );
+        let mut profile = QueryProfile::new(rctx.session_id.unwrap_or(0), query_text.to_string());
 
         let prepare_start = Instant::now();
         let request = match self.prepare_request(query_text, rctx, space_info) {
@@ -175,6 +172,8 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         profile.stages.statistics_us = times.statistics_us;
         profile.stages.plan_us = times.plan_us;
         profile.stages.optimize_us = times.optimize_us;
+        profile.stages.cache_probe_us = times.cache_probe_us;
+        profile.stages.plan_cache_hit = times.plan_cache_hit;
         profile.result_count = result.count();
         metrics.set_result_row_count(result.count());
         metrics.record_execute_time(execute_start.elapsed());
@@ -260,6 +259,8 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                 profile.stages.statistics_us = 0;
                 profile.stages.plan_us = 0;
                 profile.stages.optimize_us = 0;
+                profile.stages.cache_probe_us = 0;
+                profile.stages.plan_cache_hit = false;
                 let error_info = ErrorInfo::new(
                     ErrorType::ExecutionError,
                     QueryPhase::Execute,
@@ -280,6 +281,8 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         profile.stages.statistics_us = times.statistics_us;
         profile.stages.plan_us = times.plan_us;
         profile.stages.optimize_us = times.optimize_us;
+        profile.stages.cache_probe_us = times.cache_probe_us;
+        profile.stages.plan_cache_hit = times.plan_cache_hit;
         profile.result_count = result.count();
         metrics.set_result_row_count(result.count());
         metrics.record_execute_time(execute_start.elapsed());

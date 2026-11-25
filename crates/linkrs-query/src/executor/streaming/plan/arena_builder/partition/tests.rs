@@ -1,10 +1,12 @@
-use super::chain::{ordered_existence_scan, PartitionedChain};
+use super::chain::{
+    build_ordered_existence_group, ordered_existence_scan, OrderedExistenceProof, PartitionedChain,
+};
 use super::*;
 use crate::executor::base::ExecutionContext;
 use crate::executor::streaming::plan::arena_builder::PhysicalPlanBuilder;
 use crate::executor::streaming::plan::context::PhysicalPlanBuildContext;
 use crate::executor::streaming::plan::types::InputContract;
-use crate::executor::streaming::{BlockingSpec, JoinSpec, SourceSpec};
+use crate::executor::streaming::{BlockingSpec, JoinSpec, OperatorKindSpec, SourceSpec, UnarySpec};
 use crate::planning::plan::core::nodes::base::plan_node_traits::{MultipleInputNode, PlanNode};
 use crate::planning::plan::core::nodes::graph_operations::DedupNode;
 use crate::planning::plan::core::nodes::operation::filter_node::FilterNode;
@@ -474,4 +476,57 @@ fn ordered_existence_scan_rejects_variable_length_hop() {
     };
     let result = ordered_existence_scan(&chain, &test_context());
     assert_eq!(result.err().as_deref(), Some("unsafe-expand-shape"));
+}
+
+#[test]
+fn proven_ordered_existence_chain_drops_distinct_and_topn() {
+    let (scan, expand, dedup, topn) = distinct_chain(OrderDirection::Asc, 1);
+    let chain = PartitionedChain {
+        scan: &scan,
+        local: vec![&expand],
+        global: vec![&dedup, &topn],
+        aggregate_split: None,
+    };
+    let proof = OrderedExistenceProof {
+        space_name: "space".to_string(),
+        index_name: "person_id_idx".to_string(),
+        index_id: 7,
+        src_tag: "comment".to_string(),
+        dst_tag: "person".to_string(),
+        edge_type: "HASCREATOR".to_string(),
+        key_property: "id".to_string(),
+        key_column: "p.id".to_string(),
+        key_type: DataType::BigInt,
+        limit: 10,
+        generation: 1,
+        reason: "test".to_string(),
+    };
+    let mut operators = Vec::new();
+    let mut fragments = Vec::new();
+    let mut op_alloc = PhysicalOperatorIdAllocator::new();
+    let mut frag_alloc = ArenaFragmentAllocator::new();
+    let exec_ctx = test_context();
+    build_ordered_existence_group(
+        &mut operators,
+        &mut fragments,
+        &mut op_alloc,
+        &mut frag_alloc,
+        &chain,
+        &proof,
+        &exec_ctx,
+    )
+    .expect("group should build");
+
+    assert!(!operators.iter().any(|op| {
+        matches!(
+            op.spec,
+            OperatorKindSpec::Blocking(BlockingSpec::Distinct | BlockingSpec::TopN { .. })
+        )
+    }));
+    assert!(operators.iter().any(|op| {
+        matches!(
+            op.spec,
+            OperatorKindSpec::Unary(UnarySpec::OrderedExistenceContract { limit: 10 })
+        )
+    }));
 }

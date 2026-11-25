@@ -273,6 +273,13 @@ pub struct ExecutionMetadata {
     pub rows_scanned: u64,
     pub rows_returned: u64,
     pub cache_hit: bool,
+    /// Individual compile stages recovered from the query profile.
+    pub parse_us: u64,
+    pub plan_us: u64,
+    pub optimize_us: u64,
+    pub statistics_us: u64,
+    pub cache_probe_us: u64,
+    pub plan_cache_hit: bool,
 }
 
 /// Transaction handler

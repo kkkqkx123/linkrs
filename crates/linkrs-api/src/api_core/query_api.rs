@@ -170,12 +170,8 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
         // can split compile (parse/validate/plan/optimize) from execute.
         let (execution_result, profile) = match self
             .pipeline_manager
-            .execute_query_with_request_scope_profiled(
-                query,
-                rctx,
-                space_info,
-                ctx.transaction_id,
-            ) {
+            .execute_query_with_request_scope_profiled(query, rctx, space_info, ctx.transaction_id)
+        {
             Ok(result) => result,
             Err(error) => {
                 if auto_commit {
@@ -342,7 +338,9 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
             ExecutionResult::DataSet { data, .. } => data.row_count(),
             _ => 0,
         };
-        let compile_us = profile.stages.parse_us
+        let compile_us = profile
+            .stages
+            .parse_us
             .saturating_add(profile.stages.validate_us)
             .saturating_add(profile.stages.plan_us)
             .saturating_add(profile.stages.optimize_us)
@@ -357,7 +355,13 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
                     execute_time_us: profile.stages.execute_us,
                     rows_scanned: 0,
                     rows_returned: rows_returned as u64,
-                    cache_hit: false,
+                    cache_hit: profile.stages.plan_cache_hit,
+                    parse_us: profile.stages.parse_us,
+                    plan_us: profile.stages.plan_us,
+                    optimize_us: profile.stages.optimize_us,
+                    statistics_us: profile.stages.statistics_us,
+                    cache_probe_us: profile.stages.cache_probe_us,
+                    plan_cache_hit: profile.stages.plan_cache_hit,
                 },
             )),
         }

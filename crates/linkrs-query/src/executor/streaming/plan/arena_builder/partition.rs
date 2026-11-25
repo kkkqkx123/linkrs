@@ -62,13 +62,20 @@ pub(super) fn build_ordered_existence(
 pub(super) fn ordered_existence_decision(
     node: &PlanNodeEnum,
     exec_ctx: &ExecutionContext,
+    redundant_ops_removed: bool,
 ) -> Option<String> {
     let chain = decompose(node)?;
     match chain::ordered_existence_scan(&chain, exec_ctx) {
-        Ok(Some(proof)) => Some(format!(
-            "ordered_existence:proven,reason={},limit={},index={}",
-            proof.reason, proof.limit, proof.index_name
-        )),
+        Ok(Some(proof)) => {
+            let mut note = format!(
+                "ordered_existence:proven,reason={},limit={},index={}",
+                proof.reason, proof.limit, proof.index_name
+            );
+            if redundant_ops_removed {
+                note.push_str(";redundant_global_ops=eliminated");
+            }
+            Some(note)
+        }
         Ok(None) => None,
         Err(reason) => Some(format!("ordered_existence:unproven,reason={reason}")),
     }

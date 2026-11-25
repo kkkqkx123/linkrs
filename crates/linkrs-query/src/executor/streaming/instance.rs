@@ -11,7 +11,7 @@
 //! ```
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use parking_lot::RwLock;
 
@@ -232,6 +232,35 @@ impl AggregatedOperatorProfile {
     }
 }
 
+fn stage_timing_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("LINKRS_STAGE_TIMING").is_some())
+}
+
+struct StageTimer {
+    label: &'static str,
+    started: std::time::Instant,
+}
+
+impl StageTimer {
+    fn new(label: &'static str) -> Self {
+        Self {
+            label,
+            started: std::time::Instant::now(),
+        }
+    }
+}
+
+impl Drop for StageTimer {
+    fn drop(&mut self) {
+        eprintln!(
+            "[stage] {} {}us",
+            self.label,
+            self.started.elapsed().as_micros() as u64
+        );
+    }
+}
+
 /// A single execution instance of a [`PhysicalPlan`].
 ///
 /// Owns the runtime, root memory pool, operator tree, task group, and
@@ -267,10 +296,16 @@ impl QueryExecutionInstance {
         query_manager: Option<Arc<QueryManager>>,
     ) -> Result<Self, QueryError> {
         // Validate the plan (structural + binding).
+        let validate_timer =
+            stage_timing_enabled().then(|| StageTimer::new("instantiate.validate"));
         PhysicalPlanValidator::validate(&plan)?;
+        drop(validate_timer);
 
         // Materialize arena plan → executor tree via materializer.
+        let materialize_timer =
+            stage_timing_enabled().then(|| StageTimer::new("instantiate.materialize"));
         let (executor, runtime) = PhysicalPlanMaterializer::materialize(&plan, &bindings)?;
+        drop(materialize_timer);
 
         // Adopt the request-scoped cancellation token on the runtime
         // regardless of whether a registry is attached.  This is the
@@ -327,11 +362,13 @@ impl QueryExecutionInstance {
         });
 
         // Set up the engine.
+        let engine_timer = stage_timing_enabled().then(|| StageTimer::new("instantiate.engine"));
         let mut engine = StreamingExecutionEngine::new();
         engine.set_max_workers(bindings.max_workers);
         engine.set_max_buffered_chunks(bindings.max_buffered_chunks);
         engine.set_runtime(runtime.clone());
         engine.register_executor(0, executor);
+        drop(engine_timer);
 
         Ok(Self {
             plan,
@@ -368,22 +405,46 @@ impl QueryExecutionInstance {
             "QueryExecutionInstance::execute requires Materialize sink"
         );
 
+        let timed = stage_timing_enabled();
+        let total_timer = timed.then(|| StageTimer::new("execute.total"));
         let mut engine = self
             .engine
             .take()
             .ok_or_else(|| QueryError::execution("Engine already consumed".to_string()))?;
+        let engine_timer = timed.then(|| StageTimer::new("execute.engine"));
         let chunks = engine.execute_collected()?;
+        drop(engine_timer);
+        if timed {
+            let profile = self.runtime().profile().flush_to_collector();
+            let mut operators: Vec<_> = profile.operators.values().collect();
+            operators.sort_by_key(|entry| entry.physical_operator_id.0);
+            for entry in operators {
+                eprintln!(
+                    "[stage] execute.operator id={} name={} open_us={} next_us={} close_us={}",
+                    entry.physical_operator_id.0,
+                    entry.name,
+                    entry.open_time_us,
+                    entry.next_time_us,
+                    entry.close_time_us
+                );
+            }
+        }
+        let feedback_timer = timed.then(|| StageTimer::new("execute.feedback"));
         self.collect_execution_feedback();
+        drop(feedback_timer);
         // Columnar auto-detection: merge this query's hit/miss counts into
         // the shared policy so later queries can adapt.
         self.runtime.flush_columnar_stats_to_policy();
         let spill_manager = self.runtime.get_spill_manager();
+        let materialize_timer = timed.then(|| StageTimer::new("execute.materialize"));
         let (dataset, spilled_rows, spilled_bytes, spilled_runs) =
             convert_chunks_to_dataset_with_spill(
                 chunks,
                 Some(self.plan.output.output_layout.names()),
                 spill_manager,
             )?;
+        drop(materialize_timer);
+        drop(total_timer);
         if spilled_rows > 0 {
             self.runtime.columnar_stats().record_spill_with_runs(
                 spilled_rows,

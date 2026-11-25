@@ -185,6 +185,10 @@ pub struct ColumnarStats {
     pub ordered_existence_open_us: AtomicU64,
     /// Number of bounded index cursor opens.
     pub ordered_existence_opens: AtomicU64,
+    /// Rows rejected by the ordered existence contract (duplicate keys).
+    pub ordered_existence_contract_violations: AtomicU64,
+    /// Rows beyond the proven limit discarded by the contract boundary.
+    pub ordered_existence_contract_discarded: AtomicU64,
 }
 
 impl Default for ColumnarStats {
@@ -233,6 +237,8 @@ impl Default for ColumnarStats {
             ordered_existence_gate_us: AtomicU64::new(0),
             ordered_existence_open_us: AtomicU64::new(0),
             ordered_existence_opens: AtomicU64::new(0),
+            ordered_existence_contract_violations: AtomicU64::new(0),
+            ordered_existence_contract_discarded: AtomicU64::new(0),
         }
     }
 }
@@ -506,6 +512,8 @@ pub struct ColumnarStatsSnapshot {
     pub ordered_existence_gate_us: u64,
     pub ordered_existence_open_us: u64,
     pub ordered_existence_opens: u64,
+    pub ordered_existence_contract_violations: u64,
+    pub ordered_existence_contract_discarded: u64,
 }
 
 impl ColumnarStatsSnapshot {
@@ -557,6 +565,12 @@ impl ColumnarStatsSnapshot {
             ordered_existence_gate_us: stats.ordered_existence_gate_us.load(Ordering::Relaxed),
             ordered_existence_open_us: stats.ordered_existence_open_us.load(Ordering::Relaxed),
             ordered_existence_opens: stats.ordered_existence_opens.load(Ordering::Relaxed),
+            ordered_existence_contract_violations: stats
+                .ordered_existence_contract_violations
+                .load(Ordering::Relaxed),
+            ordered_existence_contract_discarded: stats
+                .ordered_existence_contract_discarded
+                .load(Ordering::Relaxed),
         }
     }
 
@@ -595,7 +609,7 @@ impl ColumnarStatsSnapshot {
     /// Human-readable one-line summary for PROFILE output.
     pub fn summary(&self) -> String {
         format!(
-            "columnar_hits={}, misses={}, hit_rate={:.3}, typed_hit_rate={:.3}, b_path_hits={}, wasted_builds={}, typed_group_hits={}, typed_group_fallbacks={}, scan_read_us={}, scan_enumerate_us={}, scan_visibility_us={}, scan_decode_us={}, scan_assemble_us={}, scan_predicate_us={}, expand_read_us={}, expand_topology_read_us={}, expand_destination_read_us={}, expand_tag_resolve_us={}, expand_view_us={}, expand_output_us={}, expand_parent_batches={}, expand_parents={}, expand_events={}, expand_unique_destinations={}, expand_missing_destinations={}, expand_output_rows={}, ordered_existence_candidates={}, ordered_existence_matches={}, ordered_existence_output_rows={}, ordered_existence_drift={}, ordered_existence_cursor_us={}, ordered_existence_gate_us={}, ordered_existence_open_us={}, ordered_existence_opens={}, selection_attached={}, selection_materialized={}, selection_pushed={}, column_block_hits={}, multiplicity_expanded={}, spill_rows={}, spill_bytes={}, spill_runs={}, batch_outlets={}",
+            "columnar_hits={}, misses={}, hit_rate={:.3}, typed_hit_rate={:.3}, b_path_hits={}, wasted_builds={}, typed_group_hits={}, typed_group_fallbacks={}, scan_read_us={}, scan_enumerate_us={}, scan_visibility_us={}, scan_decode_us={}, scan_assemble_us={}, scan_predicate_us={}, expand_read_us={}, expand_topology_read_us={}, expand_destination_read_us={}, expand_tag_resolve_us={}, expand_view_us={}, expand_output_us={}, expand_parent_batches={}, expand_parents={}, expand_events={}, expand_unique_destinations={}, expand_missing_destinations={}, expand_output_rows={}, ordered_existence_candidates={}, ordered_existence_matches={}, ordered_existence_output_rows={}, ordered_existence_drift={}, ordered_existence_cursor_us={}, ordered_existence_gate_us={}, ordered_existence_open_us={}, ordered_existence_opens={}, ordered_existence_contract_violations={}, ordered_existence_contract_discarded={}, selection_attached={}, selection_materialized={}, selection_pushed={}, column_block_hits={}, multiplicity_expanded={}, spill_rows={}, spill_bytes={}, spill_runs={}, batch_outlets={}",
             self.columnar_hits,
             self.columnar_misses,
             self.hit_rate(),
@@ -630,6 +644,8 @@ impl ColumnarStatsSnapshot {
             self.ordered_existence_gate_us,
             self.ordered_existence_open_us,
             self.ordered_existence_opens,
+            self.ordered_existence_contract_violations,
+            self.ordered_existence_contract_discarded,
             self.selection_attached,
             self.selection_materialized,
             self.selection_pushed,

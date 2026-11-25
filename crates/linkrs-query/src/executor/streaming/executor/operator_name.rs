@@ -40,6 +40,7 @@ pub fn operator_name(exec: &StreamingExecutor) -> &'static str {
             UnaryOperatorKind::Filter { .. } => "Filter",
             UnaryOperatorKind::Project { .. } => "Project",
             UnaryOperatorKind::Limit { .. } => "Limit",
+            UnaryOperatorKind::OrderedExistenceContract { .. } => "OrderedExistenceContract",
             UnaryOperatorKind::Dedup { .. } => "Dedup",
             UnaryOperatorKind::Assign { .. } => "Assign",
             UnaryOperatorKind::Unwind { .. } => "Unwind",

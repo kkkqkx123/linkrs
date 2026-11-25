@@ -29,6 +29,13 @@ pub enum UnarySpec {
         offset: u32,
         limit: u32,
     },
+    /// Zero-buffer assertion for a proven ordered existence source. The
+    /// source emits ascending unique primary keys; this operator preserves
+    /// that contract and enforces the final row bound when the source falls
+    /// back after snapshot drift.
+    OrderedExistenceContract {
+        limit: u32,
+    },
     Assign {
         assignments: Vec<(String, Expression)>,
         /// Expression-level subqueries compiled for this assign.

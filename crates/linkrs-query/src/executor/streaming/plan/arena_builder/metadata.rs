@@ -979,6 +979,7 @@ pub(super) fn unary_explain_name(spec: &UnarySpec) -> &'static str {
         UnarySpec::Filter { .. } => "Filter",
         UnarySpec::Project { .. } => "Project",
         UnarySpec::Limit { .. } => "Limit",
+        UnarySpec::OrderedExistenceContract { .. } => "OrderedExistenceContract",
         UnarySpec::Assign { .. } => "Assign",
         UnarySpec::Unwind { .. } => "Unwind",
         UnarySpec::AppendVertices { .. } => "AppendVertices",

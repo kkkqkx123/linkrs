@@ -1,4 +1,4 @@
-use super::super::super::super::operators::spec::{BlockingSpec, SourceSpec};
+use super::super::super::super::operators::spec::{BlockingSpec, SourceSpec, UnarySpec};
 use super::super::super::properties::PhysicalProperties;
 use super::super::super::types::{
     FragmentId, FragmentSpec, PhysicalOperatorId, PhysicalOperatorIdAllocator, PhysicalOperatorSpec,
@@ -647,9 +647,10 @@ pub(super) struct OrderedExistenceProof {
     pub reason: String,
 }
 
-/// Lower a proven chain directly into one ordered source plus its global
-/// operators. The source already emits at most `limit` ordered distinct keys;
-/// the remaining global operators only re-assert the contract.
+/// Lower a proven chain directly into one ordered source, a zero-buffer
+/// contract boundary and the projections above the TopN. The source already
+/// emits at most `limit` ordered distinct keys, so Distinct and TopN are
+/// redundant on the proven path.
 pub(super) fn build_ordered_existence_group(
     operators: &mut Vec<PhysicalOperatorSpec>,
     fragments: &mut Vec<FragmentSpec>,
@@ -684,7 +685,20 @@ pub(super) fn build_ordered_existence_group(
         chain.scan.id(),
         spec,
     );
-    for op in &chain.global {
+    let contract_node = chain.global[1].id();
+    fid = ArenaPlanAssembler::push_global_unary_op(
+        operators,
+        fragments,
+        op_alloc,
+        frag_alloc,
+        fid,
+        contract_node,
+        UnarySpec::OrderedExistenceContract {
+            limit: u32::try_from(proof.limit).unwrap_or(u32::MAX),
+        },
+    )?
+    .0;
+    for op in chain.global.iter().skip(2) {
         fid = push_global_op(
             operators, fragments, op_alloc, frag_alloc, fid, op, exec_ctx,
         )?
