@@ -37,6 +37,77 @@ impl StorageReader for GraphStorage {
         reader::get_vertex_projected(&self.ctx, space, tag, id, projection)
     }
 
+    fn open_ordered_index_cursor(
+        &self,
+        plan: &IndexScanPlan,
+        start_after: Option<Vec<u8>>,
+        max_entries: usize,
+    ) -> Result<Box<dyn IndexCursor<Row = IndexRow>>, StorageError> {
+        let index = self
+            .list_tag_indexes(&plan.space)?
+            .into_iter()
+            .find(|index| index.id == plan.index_id)
+            .ok_or_else(|| {
+                StorageError::not_found(format!(
+                    "Index {} not found in space {}",
+                    plan.index_id, plan.space
+                ))
+            })?;
+        let space_id = self.ctx.schema_manager().get_space_id(&plan.space)?;
+        let space_name = plan.space.clone();
+        let tag_name = index.schema_name.clone();
+        let ctx = self.ctx.clone();
+        let stale_checker: Option<crate::index::types::StaleChecker> =
+            Some(Arc::new(move |entity_ref| match entity_ref {
+                linkrs_core::wal::EntityRef::Vertex(vid) => {
+                    reader::get_vertex(&ctx, &space_name, &tag_name, vid)
+                        .ok()
+                        .flatten()
+                        .is_some()
+                }
+                linkrs_core::wal::EntityRef::Edge { .. } => true,
+            }));
+        let cursor = self
+            .ctx
+            .index_data_manager()
+            .read()
+            .open_tag_index_cursor_paged(
+                space_id,
+                &index,
+                plan,
+                stale_checker,
+                None,
+                start_after,
+                Some(max_entries),
+            )?;
+        Ok(Box::new(cursor))
+    }
+
+    fn ordered_index_proof(
+        &self,
+        space: &str,
+        tag: &str,
+        property: &str,
+    ) -> Result<Option<crate::OrderedIndexProof>, StorageError> {
+        reader::ordered_index_proof(&self.ctx, space, tag, property)
+    }
+
+    fn incoming_edge_exists_batch(
+        &self,
+        space: &str,
+        dst_ids: &[VertexId],
+        src_tag: &str,
+        dst_tag: &str,
+        edge_type: &str,
+    ) -> Result<Vec<bool>, StorageError> {
+        if self.edge_types_ttl_active(space, &[edge_type.to_string()])? {
+            return crate::client::traits_reader::portable_incoming_edge_exists_batch(
+                self, space, dst_ids, src_tag, dst_tag, edge_type,
+            );
+        }
+        reader::incoming_edge_exists_batch(&self.ctx, space, dst_ids, src_tag, dst_tag, edge_type)
+    }
+
     fn scan_vertices(&self, space: &str) -> Result<Vec<Vertex>, StorageError> {
         reader::scan_vertices(&self.ctx, space)
     }

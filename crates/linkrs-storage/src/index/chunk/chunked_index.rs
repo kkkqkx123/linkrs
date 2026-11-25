@@ -120,6 +120,34 @@ impl ChunkedIndex {
         results
     }
 
+    /// Bounded range read: loads only the chunks needed for `limit` entries.
+    pub(crate) fn range_limited(
+        &self,
+        lower: &[u8],
+        upper: &[u8],
+        limit: usize,
+    ) -> Vec<(SecondaryIndexKey, IndexRecord)> {
+        let mut results = Vec::new();
+        if limit == 0 {
+            return results;
+        }
+        for chunk_id in self.chunks_for_range(lower, upper) {
+            if results.len() >= limit {
+                break;
+            }
+            if let Some(cached) = self.pool.get_or_load(&chunk_id) {
+                cached.pin();
+                results.extend(
+                    cached
+                        .item
+                        .range_limited(lower, upper, limit - results.len()),
+                );
+                cached.unpin();
+            }
+        }
+        results
+    }
+
     /// Return visible entries in `[lower, upper)`, skipping chunks with zero
     /// live entries and filtering tombstones inline via `read_ts`.
     pub(crate) fn visible_range(
@@ -165,6 +193,13 @@ impl ChunkedIndex {
             }
         }
         map
+    }
+
+    /// Range overlap from chunk descriptors only; never loads a chunk.
+    pub(crate) fn may_have_range(&self, lower: &[u8], upper: &[u8]) -> bool {
+        self.chunks.iter().any(|(_, min_key, max_key)| {
+            (upper.is_empty() || min_key.as_slice() < upper) && max_key.as_slice() >= lower
+        })
     }
 
     pub(crate) fn chunk_count(&self) -> usize {

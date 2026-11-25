@@ -1,6 +1,8 @@
 //! Read-only graph, catalog and schema queries.
 
-use crate::cursor::{EdgeCursor, IndexCursor, IndexRow, IndexScanPlan, ScanOptions, VertexCursor};
+use crate::cursor::{
+    EdgeCursor, IndexCursor, IndexRow, IndexScanPlan, OrderedIndexProof, ScanOptions, VertexCursor,
+};
 use crate::schema::{LabelVersionHistory, PropertyChange};
 use linkrs_core::types::{DataType, EdgeTypeInfo, Index, LabelId, SpaceInfo, TagInfo, VertexId};
 use linkrs_core::{Edge, EdgeDirection, StorageError, Value, Vertex};
@@ -165,6 +167,45 @@ impl PackedEdgeTopology {
 pub struct FrontierDegrees {
     pub direct: Vec<usize>,
     pub two_hop: Vec<usize>,
+}
+
+/// Portable existence gate built from topology-only edge reads and visible
+/// endpoint reads. Native engines override this with one reverse-CSR pass.
+pub fn portable_incoming_edge_exists_batch<S: StorageReader + ?Sized>(
+    reader: &S,
+    space: &str,
+    dst_ids: &[VertexId],
+    src_tag: &str,
+    dst_tag: &str,
+    edge_type: &str,
+) -> Result<Vec<bool>, StorageError> {
+    let edge_types = [edge_type.to_string()];
+    let batches = reader.get_node_edges_projected_batch(
+        space,
+        dst_ids,
+        EdgeDirection::In,
+        &edge_types,
+        Some(&[]),
+    )?;
+    let mut exists = Vec::with_capacity(dst_ids.len());
+    for (dst_id, edges) in dst_ids.iter().zip(batches) {
+        let mut found = false;
+        for edge in edges {
+            if edge.dst != *dst_id || edge.edge_type != edge_type {
+                continue;
+            }
+            let Some(src) = reader.get_vertex(space, src_tag, &edge.src)? else {
+                continue;
+            };
+            if src.tag.name != src_tag || reader.get_vertex(space, dst_tag, dst_id)?.is_none() {
+                continue;
+            }
+            found = true;
+            break;
+        }
+        exists.push(found);
+    }
+    Ok(exists)
 }
 
 /// Read-only data and schema operations.
@@ -623,6 +664,53 @@ pub trait StorageReader: Send + Sync + std::fmt::Debug {
             offset += length;
         }
         Ok(FrontierDegrees { direct, two_hop })
+    }
+
+    /// Open an index cursor that materializes at most `max_entries` per
+    /// generation and resumes strictly after `start_after`. Engines without
+    /// a paged native cursor report `not_supported`.
+    fn open_ordered_index_cursor(
+        &self,
+        plan: &IndexScanPlan,
+        start_after: Option<Vec<u8>>,
+        max_entries: usize,
+    ) -> Result<Box<dyn IndexCursor<Row = IndexRow>>, StorageError> {
+        let _ = (plan, start_after, max_entries);
+        Err(StorageError::not_supported(
+            "Paged index cursors are not supported by this storage implementation",
+        ))
+    }
+
+    /// Whether one ordered index key can back an ascending early-stop scan.
+    ///
+    /// Only engines that can prove global key order across generations and
+    /// shards return a proof. The query layer still has to prove that the key
+    /// is the destination's unique primary key.
+    fn ordered_index_proof(
+        &self,
+        space: &str,
+        tag: &str,
+        property: &str,
+    ) -> Result<Option<OrderedIndexProof>, StorageError> {
+        let _ = (space, tag, property);
+        Ok(None)
+    }
+
+    /// Whether a visible incoming edge exists for each destination id, in
+    /// input order. The result only reports existence: parallel edges and
+    /// duplicates collapse into one boolean per input.
+    ///
+    /// Implementations must apply the same vertex, edge, TTL and staged-write
+    /// visibility rules as a full in-direction expansion.
+    fn incoming_edge_exists_batch(
+        &self,
+        space: &str,
+        dst_ids: &[VertexId],
+        src_tag: &str,
+        dst_tag: &str,
+        edge_type: &str,
+    ) -> Result<Vec<bool>, StorageError> {
+        portable_incoming_edge_exists_batch(self, space, dst_ids, src_tag, dst_tag, edge_type)
     }
 
     fn scan_edges_by_type(&self, space: &str, edge_type: &str) -> Result<Vec<Edge>, StorageError>;

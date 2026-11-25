@@ -5,6 +5,7 @@ mod edge_tests;
 mod freeze_compaction_tests;
 mod group_window_tests;
 mod layout_version_tests;
+mod ordered_existence_tests;
 mod schema_tests;
 mod serial_tests;
 mod staged_txn_tests;

@@ -9,6 +9,9 @@ use std::sync::Arc;
 impl<S: StorageClient + 'static> StorageReader for SyncWrapper<S> {
     forward_methods!(inner;
         fn get_vertex(&self, space: &str, tag: &str, id: &VertexId) -> Result<Option<Vertex>, StorageError>;
+        fn ordered_index_proof(&self, space: &str, tag: &str, property: &str) -> Result<Option<crate::OrderedIndexProof>, StorageError>;
+        fn open_ordered_index_cursor(&self, plan: &IndexScanPlan, start_after: Option<Vec<u8>>, max_entries: usize) -> Result<Box<dyn IndexCursor<Row = IndexRow>>, StorageError>;
+        fn incoming_edge_exists_batch(&self, space: &str, dst_ids: &[VertexId], src_tag: &str, dst_tag: &str, edge_type: &str) -> Result<Vec<bool>, StorageError>;
         fn layout_version(&self) -> u64;
         fn vertex_id_domain(&self, space: &str) -> Option<std::ops::Range<i64>>;
         fn get_vertex_projected(&self, space: &str, tag: &str, id: &VertexId, projection: &[std::sync::Arc<str>]) -> Result<Option<Vertex>, StorageError>;

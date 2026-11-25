@@ -21,7 +21,7 @@ use std::process::Command as Process;
 use std::time::Instant;
 
 use linkrs::api::embedded::{DatabaseConfig, GraphDatabase, QueryResult};
-use linkrs::storage::GraphStorage;
+use linkrs::storage::{GraphStorage, StorageReader, StorageSchemaOps};
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -103,6 +103,10 @@ struct QueryDiagnostics {
     expand_unique_destinations: u64,
     expand_missing_destinations: u64,
     expand_output_rows: u64,
+    ordered_existence_candidates: u64,
+    ordered_existence_matches: u64,
+    ordered_existence_output_rows: u64,
+    ordered_existence_drift: u64,
 }
 
 fn directory_size_bytes(path: &Path) -> u64 {
@@ -323,6 +327,30 @@ fn cmd_copy(args: &[String]) {
                 std::process::exit(1);
             }
         }
+    }
+    // Tag indexes created before COPY do not backfill the initial load.
+    // Rebuilding here keeps the prepared dataset self-consistent for the
+    // ordered primary-key scan without touching query timing.
+    let space = text
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("USE "))
+        .map(|name| name.trim().trim_end_matches(';').trim())
+        .unwrap_or(&dataset);
+    let indexes = database
+        .storage()
+        .list_tag_indexes(space)
+        .unwrap_or_else(|e| die(format!("list tag indexes in {space}: {e}")));
+    for index in indexes {
+        let start = Instant::now();
+        database
+            .storage_mut()
+            .rebuild_tag_index(space, &index.name)
+            .unwrap_or_else(|e| die(format!("rebuild index {}: {e}", index.name)));
+        println!(
+            "[copy] rebuild index {}: {:.1} ms",
+            index.name,
+            start.elapsed().as_secs_f64() * 1000.0
+        );
     }
     write_copy_log(&sidecar_dir, &dataset, &head, &stats);
     // Persist the final checkpoint before recording the version; the next
@@ -1124,6 +1152,23 @@ fn cmd_run(args: &[String]) {
                 .unwrap_or(0),
                 expand_output_rows: explain_metric(&explain_text, "expand_output_rows")
                     .unwrap_or(0),
+                ordered_existence_candidates: explain_metric(
+                    &explain_text,
+                    "ordered_existence_candidates",
+                )
+                .unwrap_or(0),
+                ordered_existence_matches: explain_metric(
+                    &explain_text,
+                    "ordered_existence_matches",
+                )
+                .unwrap_or(0),
+                ordered_existence_output_rows: explain_metric(
+                    &explain_text,
+                    "ordered_existence_output_rows",
+                )
+                .unwrap_or(0),
+                ordered_existence_drift: explain_metric(&explain_text, "ordered_existence_drift")
+                    .unwrap_or(0),
             };
             let parallel_ok =
                 !required_parallel.contains(&target.name) || has_parallel_execution(&explain_text);
@@ -1262,6 +1307,26 @@ fn patch_resource_result(
         &mut text,
         "expand_output_rows",
         diagnostics.expand_output_rows,
+    );
+    set_json_u64(
+        &mut text,
+        "ordered_existence_candidates",
+        diagnostics.ordered_existence_candidates,
+    );
+    set_json_u64(
+        &mut text,
+        "ordered_existence_matches",
+        diagnostics.ordered_existence_matches,
+    );
+    set_json_u64(
+        &mut text,
+        "ordered_existence_output_rows",
+        diagnostics.ordered_existence_output_rows,
+    );
+    set_json_u64(
+        &mut text,
+        "ordered_existence_drift",
+        diagnostics.ordered_existence_drift,
     );
     let _ = fs::write(path, text);
 }
@@ -1450,6 +1515,10 @@ fn write_run_result(
     json.push_str("  \"expand_unique_destinations\": 0,\n");
     json.push_str("  \"expand_missing_destinations\": 0,\n");
     json.push_str("  \"expand_output_rows\": 0,\n");
+    json.push_str("  \"ordered_existence_candidates\": 0,\n");
+    json.push_str("  \"ordered_existence_matches\": 0,\n");
+    json.push_str("  \"ordered_existence_output_rows\": 0,\n");
+    json.push_str("  \"ordered_existence_drift\": 0,\n");
     json.push_str("  \"spill_rows\": 0\n}\n");
     let path = out_dir.join(format!("{}.json", bench.name.replace('/', "_")));
     fs::write(&path, json).ok();

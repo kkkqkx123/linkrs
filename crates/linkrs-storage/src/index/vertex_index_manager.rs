@@ -93,6 +93,7 @@ pub struct VertexIndexCursor {
     manifest_handles: Vec<ManifestHandle>,
     stale_checker: Option<StaleChecker>,
     partition_id_range: Option<std::ops::Range<i64>>,
+    last_key: Option<crate::index::key_codec::key_types::SecondaryIndexKey>,
 }
 
 impl std::fmt::Debug for VertexIndexCursor {
@@ -136,6 +137,7 @@ impl VertexIndexCursor {
             manifest_handles,
             stale_checker,
             partition_id_range: plan.partition_id_range.clone(),
+            last_key: None,
         }
     }
 }
@@ -156,6 +158,7 @@ impl IndexCursor for VertexIndexCursor {
                 self.current_range += 1;
                 continue;
             };
+            self.last_key = Some(key.clone());
 
             let entity_ref = match &entry.entity_ref {
                 Some(entity_ref) => entity_ref.clone(),
@@ -229,6 +232,10 @@ impl IndexCursor for VertexIndexCursor {
 
     fn is_exhausted(&self) -> bool {
         self.exhausted
+    }
+
+    fn last_key(&self) -> Option<Vec<u8>> {
+        self.last_key.as_ref().map(|key| key.clone())
     }
 }
 

@@ -1,12 +1,15 @@
+use super::chain::{ordered_existence_scan, PartitionedChain};
 use super::*;
 use crate::executor::base::ExecutionContext;
 use crate::executor::streaming::plan::arena_builder::PhysicalPlanBuilder;
 use crate::executor::streaming::plan::context::PhysicalPlanBuildContext;
 use crate::executor::streaming::plan::types::InputContract;
 use crate::executor::streaming::{BlockingSpec, JoinSpec, SourceSpec};
+use crate::planning::plan::core::nodes::base::plan_node_traits::{MultipleInputNode, PlanNode};
 use crate::planning::plan::core::nodes::graph_operations::DedupNode;
 use crate::planning::plan::core::nodes::operation::filter_node::FilterNode;
 use crate::planning::plan::core::nodes::operation::sort_node::{LimitNode, SortItem, TopNNode};
+use crate::planning::plan::core::nodes::traversal::ExpandAllNode;
 use crate::planning::plan::core::nodes::ScanVerticesNode;
 use crate::planning::plan::{PartitionSource, PartitionSpec};
 use linkrs_core::types::expr::expression_context::ExpressionAnalysisContext;
@@ -416,4 +419,59 @@ fn non_vid_equality_join_falls_back_to_global_gather_join() {
 
     crate::executor::streaming::plan::validator::PhysicalPlanValidator::validate(&Arc::new(plan))
         .expect("hash-exchange join plan should validate");
+}
+
+fn distinct_chain(
+    direction: OrderDirection,
+    step_limit: u32,
+) -> (PlanNodeEnum, PlanNodeEnum, PlanNodeEnum, PlanNodeEnum) {
+    let scan = tagged_scan();
+    let mut expand = ExpandAllNode::new(1, vec!["HASCREATOR".to_string()], "OUT");
+    expand.set_col_names(vec!["n".to_string(), "h".to_string(), "p".to_string()]);
+    expand.set_step_limit(step_limit);
+    expand.set_include_empty_paths(false);
+    expand.set_dst_tag("person".to_string());
+    expand.set_edge_required_props(Some(vec![]));
+    expand.set_dst_required_props(Some(vec!["id".to_string()]));
+    expand.add_input(scan.clone());
+    let expand = PlanNodeEnum::ExpandAll(expand);
+
+    let mut dedup = DedupNode::new(expand.clone()).expect("dedup should build");
+    dedup.set_col_names(vec!["p.id".to_string()]);
+    let dedup = PlanNodeEnum::Dedup(dedup);
+    let topn = PlanNodeEnum::TopN(
+        crate::planning::plan::core::nodes::operation::sort_node::TopNNode::new(
+            dedup.clone(),
+            vec![SortItem::column("p.id".to_string(), direction)],
+            10,
+        )
+        .expect("topn should build"),
+    );
+    (scan, expand, dedup, topn)
+}
+
+#[test]
+fn ordered_existence_scan_rejects_descending_order() {
+    let (scan, expand, dedup, topn) = distinct_chain(OrderDirection::Desc, 1);
+    let chain = PartitionedChain {
+        scan: &scan,
+        local: vec![&expand],
+        global: vec![&dedup, &topn],
+        aggregate_split: None,
+    };
+    let result = ordered_existence_scan(&chain, &test_context());
+    assert_eq!(result.err().as_deref(), Some("descending-order"));
+}
+
+#[test]
+fn ordered_existence_scan_rejects_variable_length_hop() {
+    let (scan, expand, dedup, topn) = distinct_chain(OrderDirection::Asc, 2);
+    let chain = PartitionedChain {
+        scan: &scan,
+        local: vec![&expand],
+        global: vec![&dedup, &topn],
+        aggregate_split: None,
+    };
+    let result = ordered_existence_scan(&chain, &test_context());
+    assert_eq!(result.err().as_deref(), Some("unsafe-expand-shape"));
 }

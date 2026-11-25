@@ -5,7 +5,7 @@ use std::sync::Arc;
 use crate::executor::streaming::slot::SlotLayout;
 use crate::storage::{ScanPredicate, ShardSlice};
 use linkrs_core::types::expr::ContextualExpression;
-use linkrs_core::{EdgeDirection, Value};
+use linkrs_core::{DataType, EdgeDirection, Value};
 
 /// A predicate that has been validated and bound to an index schema.
 ///
@@ -180,6 +180,25 @@ pub enum SourceSpec {
         /// Rows to emit after skipping the leading `offset` rows.
         limit: Option<usize>,
         offset: usize,
+        output_layout: Arc<SlotLayout>,
+    },
+    /// Ordered primary-key existence scan: walk a unique index in key order
+    /// and emit only keys with a visible incoming edge of one proven type.
+    /// Stops after `limit` emitted keys unless the pinned generation drifts.
+    OrderedExistenceScan {
+        space_name: String,
+        index_name: String,
+        index_id: u64,
+        src_tag: String,
+        dst_tag: String,
+        edge_type: String,
+        key_property: String,
+        key_column: String,
+        key_type: DataType,
+        limit: usize,
+        batch_size: usize,
+        proof: String,
+        generation: u64,
         output_layout: Arc<SlotLayout>,
     },
     /// Produces one singleton row from which correlated apply can pull.

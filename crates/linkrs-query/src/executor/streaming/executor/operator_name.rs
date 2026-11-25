@@ -29,6 +29,7 @@ pub fn operator_name(exec: &StreamingExecutor) -> &'static str {
             SourceOperatorKind::GetEdges { .. } => "GetEdges",
             SourceOperatorKind::GetNeighbors { .. } => "GetNeighbors",
             SourceOperatorKind::IndexScan { .. } => "IndexScan",
+            SourceOperatorKind::OrderedExistenceScan { .. } => "OrderedExistenceScan",
             SourceOperatorKind::Argument => "Argument",
             SourceOperatorKind::GetProp { .. } => "GetProp",
             SourceOperatorKind::Start => "Start",

@@ -14,7 +14,7 @@ mod join;
 mod tests;
 
 pub(super) use chain::local_topk_decision;
-use chain::{build_chain_group, decompose};
+use chain::{build_chain_group, build_ordered_existence_group, decompose};
 use join::build_partitioned_multi;
 
 /// A partitioned physical plan: operators, fragments, root fragment, root operator.
@@ -27,6 +27,52 @@ pub(super) type PartitionedPlan = (
 
 /// Result of building a partitioned plan.
 pub(super) type PartitionBuildResult = Result<Option<PartitionedPlan>, PlanBuildError>;
+
+/// Build the ordered existence plan independently of partition configuration.
+/// The rewrite is safe from a single ordered source, so it does not need a
+/// partition spec and is not affected by worker counts.
+pub(super) fn build_ordered_existence(
+    node: &PlanNodeEnum,
+    exec_ctx: &ExecutionContext,
+) -> PartitionBuildResult {
+    let Some(chain) = decompose(node) else {
+        return Ok(None);
+    };
+    let Ok(Some(proof)) = chain::ordered_existence_scan(&chain, exec_ctx) else {
+        return Ok(None);
+    };
+    let mut operators = Vec::new();
+    let mut fragments = Vec::new();
+    let mut op_alloc = PhysicalOperatorIdAllocator::new();
+    let mut frag_alloc = ArenaFragmentAllocator::new();
+    let (root_fragment, root_operator) = build_ordered_existence_group(
+        &mut operators,
+        &mut fragments,
+        &mut op_alloc,
+        &mut frag_alloc,
+        &chain,
+        &proof,
+        exec_ctx,
+    )?;
+    Ok(Some((operators, fragments, root_fragment, root_operator)))
+}
+
+/// Diagnose the ordered existence rewrite for EXPLAIN. Emits a note only for
+/// the narrow query shape it is meant to serve.
+pub(super) fn ordered_existence_decision(
+    node: &PlanNodeEnum,
+    exec_ctx: &ExecutionContext,
+) -> Option<String> {
+    let chain = decompose(node)?;
+    match chain::ordered_existence_scan(&chain, exec_ctx) {
+        Ok(Some(proof)) => Some(format!(
+            "ordered_existence:proven,reason={},limit={},index={}",
+            proof.reason, proof.limit, proof.index_name
+        )),
+        Ok(None) => None,
+        Err(reason) => Some(format!("ordered_existence:unproven,reason={reason}")),
+    }
+}
 
 /// Try to build a partitioned physical plan from the logical root.
 ///
@@ -56,6 +102,7 @@ pub(super) fn build_partitioned(
         Some(chain) => chain,
         None => return Ok(None),
     };
+
     let scan = match spec.source() {
         PartitionSource::VertexId { tag } => {
             let PlanNodeEnum::ScanVertices(scan_node) = chain.scan else {

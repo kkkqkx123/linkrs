@@ -1,5 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
+use linkrs_core::metadata::IndexMetadataManager;
+
 use crate::engine::graph_storage::context::GraphStorageContext;
 use crate::engine::graph_storage::ops::{
     route_vertex_id, serialize_properties, vertex_record_to_vertex, RoutedVertexId,
@@ -18,6 +20,64 @@ pub(crate) fn get_vertex(
     id: &VertexId,
 ) -> StorageResult<Option<Vertex>> {
     get_vertex_impl(ctx, space, tag, id, None)
+}
+
+/// Prove that the native tag index exposes one key in ascending order.
+///
+/// The manifest owns contiguous, non-overlapping shard key ranges and each
+/// shard's generation chain is merged newest-first by the cursor, so walking
+/// shards in manifest order yields one global key order for a pinned snapshot.
+pub(crate) fn ordered_index_proof(
+    ctx: &GraphStorageContext,
+    space: &str,
+    tag: &str,
+    property: &str,
+) -> StorageResult<Option<crate::OrderedIndexProof>> {
+    let space_id = ctx.schema_manager().get_space_id(space)?;
+    let index = ctx
+        .index_metadata_manager()
+        .list_tag_indexes(space_id)?
+        .into_iter()
+        .find(|index| {
+            index.schema_name == tag
+                && index.properties.as_slice() == [property.to_string()]
+                && index.index_type == linkrs_core::types::IndexType::TagIndex
+                && index.status == linkrs_core::types::IndexStatus::Active
+        });
+    let Some(index) = index else {
+        return Ok(None);
+    };
+    let manager = ctx.index_data_manager().read();
+    let Some(catalog) = manager.manifest_catalog(space_id, index.id) else {
+        return Ok(None);
+    };
+    let handle = catalog.acquire();
+    let manifest = handle.manifest();
+    let shards = &manifest.shards;
+    if shards.first().is_some_and(|shard| shard.lower.is_some())
+        || shards.last().is_some_and(|shard| shard.upper.is_some())
+        || shards.windows(2).any(|pair| pair[0].upper != pair[1].lower)
+    {
+        return Ok(None);
+    }
+    if manager
+        .runtime(space_id, index.id)?
+        .generation(manifest.generation)
+        .is_none()
+    {
+        return Ok(None);
+    }
+    Ok(Some(crate::OrderedIndexProof {
+        index_name: index.name.clone(),
+        index_id: index.id,
+        generation: manifest.generation.get(),
+        reason: format!(
+            "ordered unique primary key '{}' on '{}' across {} contiguous shard(s)",
+            property,
+            tag,
+            shards.len()
+        ),
+    }))
 }
 
 pub(crate) fn get_vertex_projected(

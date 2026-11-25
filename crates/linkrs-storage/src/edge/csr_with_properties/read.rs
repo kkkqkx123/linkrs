@@ -332,7 +332,10 @@ impl CsrWithProperties {
         resolved.iter().all(|(column, predicate)| {
             column
                 .and_then(|index| self.pushdown_cell(row, index, query_ts))
-                .map_or_else(|| predicate.matches_null(), |value| predicate.matches_value(&value))
+                .map_or_else(
+                    || predicate.matches_null(),
+                    |value| predicate.matches_value(&value),
+                )
         })
     }
 

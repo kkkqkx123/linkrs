@@ -40,22 +40,37 @@ impl PhysicalPlanBuilder {
         exec_ctx: &ExecutionContext,
     ) -> Result<PhysicalPlan, PlanBuildError> {
         let mut partitioned = None;
-        if let Some(spec) = ctx.partition_spec.clone() {
-            match partition::build_partitioned(node, &spec, exec_ctx) {
-                Ok(Some(result)) => {
-                    ctx.diagnostics.fallback_reason.clear();
-                    partitioned = Some(result);
-                }
-                Ok(None) => {
-                    if ctx.diagnostics.fallback_reason.is_empty() {
-                        ctx.diagnostics.fallback_reason =
-                            "plan shape does not support partitioned execution".to_string();
+        let mut ordered_existence = false;
+        match partition::build_ordered_existence(node, exec_ctx) {
+            Ok(Some(result)) => {
+                ctx.diagnostics.fallback_reason.clear();
+                partitioned = Some(result);
+                ordered_existence = true;
+            }
+            Ok(None) => {}
+            Err(error) => {
+                ctx.diagnostics.fallback_reason =
+                    format!("ordered existence scan unavailable ({error})");
+            }
+        }
+        if partitioned.is_none() {
+            if let Some(spec) = ctx.partition_spec.clone() {
+                match partition::build_partitioned(node, &spec, exec_ctx) {
+                    Ok(Some(result)) => {
+                        ctx.diagnostics.fallback_reason.clear();
+                        partitioned = Some(result);
                     }
-                }
-                Err(error) => {
-                    if ctx.diagnostics.fallback_reason.is_empty() {
-                        ctx.diagnostics.fallback_reason =
-                            format!("partitioned execution unavailable ({error})");
+                    Ok(None) => {
+                        if ctx.diagnostics.fallback_reason.is_empty() {
+                            ctx.diagnostics.fallback_reason =
+                                "plan shape does not support partitioned execution".to_string();
+                        }
+                    }
+                    Err(error) => {
+                        if ctx.diagnostics.fallback_reason.is_empty() {
+                            ctx.diagnostics.fallback_reason =
+                                format!("partitioned execution unavailable ({error})");
+                        }
                     }
                 }
             }
@@ -63,12 +78,24 @@ impl PhysicalPlanBuilder {
 
         let (mut operators, mut fragments, root_fid, root_op_id) = match partitioned {
             Some((operators, fragments, root_fid, root_op_id)) => {
-                if let Some(note) = partition::local_topk_decision(node) {
+                if let Some(note) = partition::ordered_existence_decision(node, exec_ctx) {
                     ctx.diagnostics.push_note(note);
+                }
+                if !ordered_existence {
+                    if let Some(note) = partition::local_topk_decision(node) {
+                        ctx.diagnostics.push_note(note);
+                    }
                 }
                 (operators, fragments, root_fid, root_op_id)
             }
-            None => Self::build_serial(node, exec_ctx)?,
+            None => {
+                if let Some(note) = partition::ordered_existence_decision(node, exec_ctx) {
+                    if note.contains("unproven") {
+                        ctx.diagnostics.push_note(note);
+                    }
+                }
+                Self::build_serial(node, exec_ctx)?
+            }
         };
 
         Self::finalize(&mut operators, &mut fragments, root_fid, root_op_id, ctx)

@@ -108,7 +108,9 @@ impl SourceState {
             SourceSpec::GetNeighbors { .. } => SourceState::GetNeighbors {
                 state: NeighborScanState::Init,
             },
-            SourceSpec::IndexScan { .. } => SourceState::IndexScan { cursor: None },
+            SourceSpec::IndexScan { .. } | SourceSpec::OrderedExistenceScan { .. } => {
+                SourceState::IndexScan { cursor: None }
+            }
             SourceSpec::Argument { .. } => SourceState::Argument,
             // CTE scans buffer rows in the operator kind itself; the arena
             // state only records scan identity for diagnostics.

@@ -23,6 +23,7 @@ use super::spec::{BoundIndexPredicate, IndexProjection};
 mod buffered;
 mod index_scan;
 mod neighbors;
+mod ordered_existence;
 mod point_lookup;
 mod storage_scan;
 mod util;
@@ -177,6 +178,29 @@ pub enum SourceOperatorKind {
         partition_range: Option<Range<i64>>,
         cursor: Option<Box<dyn IndexCursor<Row = IndexRow>>>,
         edge_type_names: std::collections::HashMap<u32, String>,
+    },
+    /// Ordered primary-key existence scan over a proven index cursor.
+    OrderedExistenceScan {
+        storage: Option<Arc<RwLock<dyn crate::storage::QueryStorage>>>,
+        space_name: String,
+        index_name: String,
+        index_id: u64,
+        src_tag: String,
+        dst_tag: String,
+        edge_type: String,
+        key_property: String,
+        key_column: String,
+        key_type: linkrs_core::DataType,
+        limit: usize,
+        batch_size: usize,
+        proof: String,
+        generation: u64,
+        cursor: Option<Box<dyn IndexCursor<Row = IndexRow>>>,
+        emitted: usize,
+        exhausted: bool,
+        early_stop: bool,
+        snapshot: Option<linkrs_core::types::SnapshotHandle>,
+        resume_key: Option<Vec<u8>>,
     },
     Argument,
     /// Metadata count for pure `COUNT` queries — emits one row with the
@@ -384,6 +408,43 @@ impl SourceOperator {
                 cursor: None,
                 edge_type_names: std::collections::HashMap::new(),
             },
+            super::spec::SourceSpec::OrderedExistenceScan {
+                space_name,
+                index_name,
+                index_id,
+                src_tag,
+                dst_tag,
+                edge_type,
+                key_property,
+                key_column,
+                key_type,
+                limit,
+                batch_size,
+                proof,
+                generation,
+                ..
+            } => SourceOperatorKind::OrderedExistenceScan {
+                storage: storage.clone(),
+                space_name: space_name.clone(),
+                index_name: index_name.clone(),
+                index_id: *index_id,
+                src_tag: src_tag.clone(),
+                dst_tag: dst_tag.clone(),
+                edge_type: edge_type.clone(),
+                key_property: key_property.clone(),
+                key_column: key_column.clone(),
+                key_type: key_type.clone(),
+                limit: *limit,
+                batch_size: (*batch_size).max(1),
+                proof: proof.clone(),
+                generation: *generation,
+                cursor: None,
+                emitted: 0,
+                exhausted: false,
+                early_stop: true,
+                snapshot: None,
+                resume_key: None,
+            },
             super::spec::SourceSpec::MetadataCount {
                 space_name,
                 tag,
@@ -509,6 +570,7 @@ impl SourceOperator {
             }
             SourceOperatorKind::GetNeighbors { .. } => neighbors::open(self)?,
             SourceOperatorKind::IndexScan { .. } => index_scan::open(self)?,
+            SourceOperatorKind::OrderedExistenceScan { .. } => ordered_existence::open(self)?,
             SourceOperatorKind::CteScan { .. } => Self::open_cte_scan(self)?,
             SourceOperatorKind::MetadataCount { .. } => {
                 state = Some(GlobalState::Source(SourceState::MetadataCount {
@@ -553,6 +615,7 @@ impl SourceOperator {
             }
             SourceOperatorKind::GetNeighbors { .. } => neighbors::next(self),
             SourceOperatorKind::IndexScan { .. } => index_scan::next(self),
+            SourceOperatorKind::OrderedExistenceScan { .. } => ordered_existence::next(self),
             SourceOperatorKind::CteScan { .. } => Self::next_cte_scan(self),
             SourceOperatorKind::MetadataCount { .. } => Self::next_metadata_count(self),
             SourceOperatorKind::GetProp { .. } => Err(QueryError::execution(
@@ -637,6 +700,7 @@ impl SourceOperator {
             }
             SourceOperatorKind::GetNeighbors { .. } => neighbors::open(self)?,
             SourceOperatorKind::IndexScan { .. } => index_scan::open(self)?,
+            SourceOperatorKind::OrderedExistenceScan { .. } => ordered_existence::open(self)?,
             SourceOperatorKind::CteScan { .. } => {
                 // Re-snapshot the working table: the fixpoint operator
                 // publishes a fresh delta before every step iteration.

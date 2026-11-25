@@ -27,6 +27,8 @@ pub(crate) struct ChainForwardIterator {
     read_ts: u64,
     seen: HashSet<SecondaryIndexKey>,
     tombstoned: HashSet<SecondaryIndexKey>,
+    exclude_up_to: Option<SecondaryIndexKey>,
+    last_key: Option<SecondaryIndexKey>,
 }
 
 impl ChainForwardIterator {
@@ -36,6 +38,8 @@ impl ChainForwardIterator {
         read_ts: u64,
         range_start: Vec<u8>,
         range_end: Vec<u8>,
+        max_entries: Option<usize>,
+        exclude_up_to: Option<Vec<u8>>,
     ) -> Self {
         let mut streams: Vec<EntryStream> = Vec::new();
         for generation in chain {
@@ -45,7 +49,12 @@ impl ChainForwardIterator {
             if !shard.forward_may_have_range(&range_start, &range_end) {
                 continue;
             }
-            let entries: Vec<_> = shard.forward_range(&range_start, &range_end).collect();
+            let entries: Vec<_> = match max_entries {
+                Some(limit) => shard
+                    .forward_range_limited(&range_start, &range_end, limit)
+                    .collect(),
+                None => shard.forward_range(&range_start, &range_end).collect(),
+            };
             if !entries.is_empty() {
                 streams.push(entries.into_iter());
             }
@@ -62,7 +71,15 @@ impl ChainForwardIterator {
             read_ts,
             seen: HashSet::new(),
             tombstoned: HashSet::new(),
+            exclude_up_to,
+            last_key: None,
         }
+    }
+}
+
+impl ChainForwardIterator {
+    pub(crate) fn last_key(&self) -> Option<&SecondaryIndexKey> {
+        self.last_key.as_ref()
     }
 }
 
@@ -75,6 +92,14 @@ impl Iterator for ChainForwardIterator {
                 continue;
             };
             debug_assert_eq!(entry_key, key);
+            self.last_key = Some(entry_key.clone());
+            if self
+                .exclude_up_to
+                .as_ref()
+                .is_some_and(|resume| &entry_key <= resume)
+            {
+                continue;
+            }
             if let Some((next_key, _)) = self.streams[generation_index].as_slice().first() {
                 self.heap
                     .push(Reverse((next_key.clone(), generation_index)));
@@ -119,6 +144,21 @@ impl IndexDataManagerImpl {
         stale_checker: Option<StaleChecker>,
         catalog: Option<&ManifestCatalog>,
     ) -> StorageResult<VertexIndexCursor> {
+        self.open_tag_index_cursor_paged(space_id, index, plan, stale_checker, catalog, None, None)
+    }
+
+    /// Bounded cursor used by ordered scans: each generation materializes at
+    /// most `max_entries` keys and resumes after `start_after`.
+    pub fn open_tag_index_cursor_paged(
+        &self,
+        space_id: u64,
+        index: &Index,
+        plan: &IndexScanPlan,
+        stale_checker: Option<StaleChecker>,
+        catalog: Option<&ManifestCatalog>,
+        start_after: Option<Vec<u8>>,
+        max_entries: Option<usize>,
+    ) -> StorageResult<VertexIndexCursor> {
         let identity = crate::index::types::IndexIdentity {
             space_id,
             index_id: plan.index_id,
@@ -140,7 +180,14 @@ impl IndexDataManagerImpl {
         let chain = runtime.generation_chain_until(manifest.generation)?;
         let chain_handles = pin_chain_manifests(catalog, &chain);
 
-        let (start, end) = compute_vertex_index_scan_range(space_id, index, plan)?;
+        let (mut start, end) = compute_vertex_index_scan_range(space_id, index, plan)?;
+        if let Some(last) = &start_after {
+            let mut successor = last.clone();
+            successor.push(0);
+            if successor.as_slice() > start.as_slice() {
+                start = successor;
+            }
+        }
         let shard_iterators: Vec<ChainForwardIterator> = manifest
             .scan_ranges_with_shard(&plan.partition, &start, &end)
             .into_iter()
@@ -154,6 +201,8 @@ impl IndexDataManagerImpl {
                         plan.read_timestamp,
                         lower,
                         upper,
+                        max_entries,
+                        start_after.clone(),
                     )
                 })
             })
@@ -209,6 +258,8 @@ impl IndexDataManagerImpl {
                         plan.read_timestamp,
                         lower,
                         upper,
+                        None,
+                        None,
                     )
                 })
             })
@@ -270,6 +321,8 @@ mod chain_merge_tests {
             read_ts: 20,
             seen: HashSet::new(),
             tombstoned: HashSet::new(),
+            exclude_up_to: None,
+            last_key: None,
         };
         let keys: Vec<String> = iterator
             .map(|(key, _)| String::from_utf8(key).expect("utf8 key"))
@@ -302,6 +355,8 @@ mod chain_merge_tests {
                 read_ts: 20,
                 seen: HashSet::new(),
                 tombstoned: HashSet::new(),
+                exclude_up_to: None,
+                last_key: None,
             }
         };
         let plan = IndexScanPlan {
@@ -344,6 +399,8 @@ mod chain_merge_tests {
             read_ts: 20,
             seen: HashSet::new(),
             tombstoned: HashSet::new(),
+            exclude_up_to: None,
+            last_key: None,
         };
         let keys: Vec<String> = iterator
             .map(|(key, entry)| {

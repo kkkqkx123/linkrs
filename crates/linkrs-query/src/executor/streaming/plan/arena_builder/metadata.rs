@@ -350,6 +350,12 @@ fn choice_reason_for_spec(spec: &OperatorKindSpec) -> Option<String> {
                 shard_slice: Some(_),
                 ..
             } => "partitioned_full_scan".to_string(),
+            SourceSpec::OrderedExistenceScan {
+                index_name,
+                proof,
+                limit,
+                ..
+            } => format!("ordered_existence_scan({index_name},{proof},limit:{limit})"),
             SourceSpec::StorageScanVertices { .. } | SourceSpec::StorageScanEdges { .. } => {
                 "storage_full_scan".to_string()
             }
@@ -511,6 +517,7 @@ pub(super) fn estimate_source_cardinality(
         SourceSpec::GetEdges { .. }
         | SourceSpec::GetNeighbors { .. }
         | SourceSpec::IndexScan { .. }
+        | SourceSpec::OrderedExistenceScan { .. }
         | SourceSpec::GetProp { .. } => None,
     }
 }
@@ -910,7 +917,8 @@ pub(super) fn source_output_layout(spec: &SourceSpec) -> SlotLayout {
             &["vertex".to_string()],
             projected_properties,
         )),
-        SourceSpec::IndexScan { output_layout, .. } => (**output_layout).clone(),
+        SourceSpec::IndexScan { output_layout, .. }
+        | SourceSpec::OrderedExistenceScan { output_layout, .. } => (**output_layout).clone(),
         SourceSpec::GetProp { output_layout, .. } => (**output_layout).clone(),
     }
 }
@@ -960,6 +968,7 @@ pub(super) fn source_explain_name(spec: &SourceSpec) -> &'static str {
         SourceSpec::GetEdges { .. } => "GetEdges",
         SourceSpec::GetNeighbors { .. } => "GetNeighbors",
         SourceSpec::IndexScan { .. } => "IndexScan",
+        SourceSpec::OrderedExistenceScan { .. } => "OrderedExistenceScan",
         SourceSpec::GetProp { .. } => "GetProp",
         SourceSpec::MetadataCount { .. } => "MetadataCount",
     }

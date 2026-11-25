@@ -301,6 +301,17 @@ pub enum PartitionSelector {
     },
 }
 
+/// Proof that an index cursor walks one key in ascending order across every
+/// pinned generation and shard. Returned only by storage engines that can
+/// validate the manifest's shard routing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrderedIndexProof {
+    pub index_name: String,
+    pub index_id: u64,
+    pub generation: u64,
+    pub reason: String,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum IndexRow {
     RowId(linkrs_core::wal::EntityRef),
@@ -568,6 +579,11 @@ pub trait IndexCursor: Send + std::fmt::Debug {
     /// such entries must inspect this flag.
     fn is_exhausted(&self) -> bool {
         true
+    }
+
+    /// Last raw index key consumed by the cursor, for bounded resumption.
+    fn last_key(&self) -> Option<Vec<u8>> {
+        None
     }
 }
 

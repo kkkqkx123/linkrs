@@ -199,8 +199,12 @@ impl ShardRuntime {
         upper_suffix: &[u8],
         plen: usize,
         prefix: &[u8],
+        limit: Option<usize>,
     ) -> Vec<(SecondaryIndexKey, IndexRecord)> {
-        let base_results = chunked.range(lower_suffix, upper_suffix);
+        let base_results = match limit {
+            Some(limit) => chunked.range_limited(lower_suffix, upper_suffix, limit),
+            None => chunked.range(lower_suffix, upper_suffix),
+        };
         let mut merged: BTreeMap<SecondaryIndexKey, IndexRecord> = base_results
             .into_iter()
             .map(|(k, v)| {
@@ -214,10 +218,15 @@ impl ShardRuntime {
                 }
             })
             .collect();
-        for (k, v) in delta.range((
+        let delta_range = delta.range((
             Bound::Included(lower_suffix.to_vec()),
             Bound::Excluded(upper_suffix.to_vec()),
-        )) {
+        ));
+        let delta_range: Box<dyn Iterator<Item = _>> = match limit {
+            Some(limit) => Box::new(delta_range.take(limit)),
+            None => Box::new(delta_range),
+        };
+        for (k, v) in delta_range {
             if plen > 0 {
                 let mut full = Vec::with_capacity(prefix.len() + k.len());
                 full.extend_from_slice(prefix);
@@ -227,7 +236,11 @@ impl ShardRuntime {
                 merged.insert(k.clone(), v.clone());
             }
         }
-        merged.into_iter().collect()
+        let merged: Vec<_> = merged.into_iter().collect();
+        match limit {
+            Some(limit) => merged.into_iter().take(limit).collect(),
+            None => merged,
+        }
     }
 
     pub(crate) fn forward_range<'a>(
@@ -240,8 +253,39 @@ impl ShardRuntime {
         let (lower_suffix, upper_suffix) = self.strip_bounds(lower, upper, plen);
         let chunked = self.base_forward.load();
         let delta = self.delta_forward.load();
-        Self::chunked_range_with_delta(&chunked, &delta, lower_suffix, upper_suffix, plen, &prefix)
-            .into_iter()
+        Self::chunked_range_with_delta(
+            &chunked,
+            &delta,
+            lower_suffix,
+            upper_suffix,
+            plen,
+            &prefix,
+            None,
+        )
+        .into_iter()
+    }
+
+    pub(crate) fn forward_range_limited<'a>(
+        &'a self,
+        lower: &[u8],
+        upper: &[u8],
+        limit: usize,
+    ) -> impl Iterator<Item = (SecondaryIndexKey, IndexRecord)> + 'a {
+        let plen = self.prefix_forward_len;
+        let prefix = Arc::clone(&self.forward_prefix);
+        let (lower_suffix, upper_suffix) = self.strip_bounds(lower, upper, plen);
+        let chunked = self.base_forward.load();
+        let delta = self.delta_forward.load();
+        Self::chunked_range_with_delta(
+            &chunked,
+            &delta,
+            lower_suffix,
+            upper_suffix,
+            plen,
+            &prefix,
+            Some(limit),
+        )
+        .into_iter()
     }
 
     pub(crate) fn reverse_range<'a>(
@@ -254,8 +298,16 @@ impl ShardRuntime {
         let (lower_suffix, upper_suffix) = self.strip_bounds(lower, upper, plen);
         let chunked = self.base_reverse.load();
         let delta = self.delta_reverse.load();
-        Self::chunked_range_with_delta(&chunked, &delta, lower_suffix, upper_suffix, plen, &prefix)
-            .into_iter()
+        Self::chunked_range_with_delta(
+            &chunked,
+            &delta,
+            lower_suffix,
+            upper_suffix,
+            plen,
+            &prefix,
+            None,
+        )
+        .into_iter()
     }
 
     fn strip_bounds<'s>(
@@ -333,7 +385,7 @@ impl ShardRuntime {
             return true;
         }
         let base = self.base_forward.load();
-        if !base.range(lower_suffix, upper_suffix).is_empty() {
+        if base.may_have_range(lower_suffix, upper_suffix) {
             return true;
         }
         let delta = self.delta_forward.load();

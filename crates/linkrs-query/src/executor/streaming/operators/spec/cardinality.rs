@@ -36,6 +36,9 @@ pub fn operator_cardinality_shape_key(
             SourceSpec::GetEdges { edge_type, .. } => key("GetEdges", edge_type.as_deref()),
             SourceSpec::GetNeighbors { direction, .. } => key("GetNeighbors", Some(direction)),
             SourceSpec::IndexScan { index_name, .. } => key("IndexScan", Some(index_name)),
+            SourceSpec::OrderedExistenceScan { index_name, .. } => {
+                key("OrderedExistenceScan", Some(index_name))
+            }
             SourceSpec::GetProp { .. } => None,
             SourceSpec::CteScan { .. } => None,
             SourceSpec::MetadataCount { tag, edge_type, .. } => {

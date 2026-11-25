@@ -52,6 +52,27 @@ impl Chunk {
         self.entries[start..end].to_vec()
     }
 
+    /// Bounded variant of [`Self::range`]: stops after `limit` entries so an
+    /// ordered scan does not materialize a whole generation up front.
+    pub(crate) fn range_limited(
+        &self,
+        lower: &[u8],
+        upper: &[u8],
+        limit: usize,
+    ) -> Vec<(SecondaryIndexKey, IndexRecord)> {
+        let start = self.entries.partition_point(|(k, _)| k.as_slice() < lower);
+        let end = if upper.is_empty() {
+            self.entries.len()
+        } else {
+            self.entries.partition_point(|(k, _)| k.as_slice() < upper)
+        };
+        self.entries[start..end]
+            .iter()
+            .take(limit)
+            .cloned()
+            .collect()
+    }
+
     pub(crate) fn visible_range_iter(
         &self,
         lower: &[u8],

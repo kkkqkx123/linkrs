@@ -10,8 +10,11 @@ use super::super::specs::{
     COUNT_ONLY_COLUMN,
 };
 use super::global::push_global_op;
+use std::sync::Arc;
+
 use crate::executor::base::ExecutionContext;
 use crate::executor::build_error::PlanBuildError;
+use crate::executor::streaming::slot::SlotLayout;
 use crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
 use crate::planning::plan::core::nodes::base::plan_node_traits::{
     MultipleInputNode, PlanNode, SingleInputNode,
@@ -19,7 +22,7 @@ use crate::planning::plan::core::nodes::base::plan_node_traits::{
 use crate::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode;
 use linkrs_core::types::expr::Expression;
 use linkrs_core::types::operators::AggregateFunction;
-use linkrs_core::DataType;
+use linkrs_core::{DataType, EdgeDirection};
 
 /// Result of decomposing the logical root into a partitionable chain.
 pub(super) struct PartitionedChain<'a> {
@@ -625,6 +628,265 @@ fn local_distinct_topn<'a>(chain: &'a PartitionedChain<'a>) -> LocalTopKDecision
             },
         )),
         note: None,
+    }
+}
+
+/// Proven shape for the ordered primary-key existence scan.
+pub(super) struct OrderedExistenceProof {
+    pub space_name: String,
+    pub index_name: String,
+    pub index_id: u64,
+    pub src_tag: String,
+    pub dst_tag: String,
+    pub edge_type: String,
+    pub key_property: String,
+    pub key_column: String,
+    pub key_type: DataType,
+    pub limit: usize,
+    pub generation: u64,
+    pub reason: String,
+}
+
+/// Lower a proven chain directly into one ordered source plus its global
+/// operators. The source already emits at most `limit` ordered distinct keys;
+/// the remaining global operators only re-assert the contract.
+pub(super) fn build_ordered_existence_group(
+    operators: &mut Vec<PhysicalOperatorSpec>,
+    fragments: &mut Vec<FragmentSpec>,
+    op_alloc: &mut PhysicalOperatorIdAllocator,
+    frag_alloc: &mut ArenaFragmentAllocator,
+    chain: &PartitionedChain<'_>,
+    proof: &OrderedExistenceProof,
+    exec_ctx: &ExecutionContext,
+) -> Result<(FragmentId, PhysicalOperatorId), PlanBuildError> {
+    let layout = Arc::new(SlotLayout::from_names(&[proof.key_column.clone()]));
+    let spec = SourceSpec::OrderedExistenceScan {
+        space_name: proof.space_name.clone(),
+        index_name: proof.index_name.clone(),
+        index_id: proof.index_id,
+        src_tag: proof.src_tag.clone(),
+        dst_tag: proof.dst_tag.clone(),
+        edge_type: proof.edge_type.clone(),
+        key_property: proof.key_property.clone(),
+        key_column: proof.key_column.clone(),
+        key_type: proof.key_type.clone(),
+        limit: proof.limit,
+        batch_size: proof.limit.clamp(1, 16),
+        proof: proof.reason.clone(),
+        generation: proof.generation,
+        output_layout: layout.clone(),
+    };
+    let (mut fid, _) = ArenaPlanAssembler::push_source_op(
+        operators,
+        fragments,
+        op_alloc,
+        frag_alloc,
+        chain.scan.id(),
+        spec,
+    );
+    for op in &chain.global {
+        fid = push_global_op(
+            operators, fragments, op_alloc, frag_alloc, fid, op, exec_ctx,
+        )?
+        .0;
+    }
+    let root_operator = fragments
+        .get(fid.0)
+        .map(|fragment| fragment.root_operator)
+        .ok_or_else(|| PlanBuildError::unsupported("PhysicalPlan", 0, "root fragment missing"))?;
+    Ok((fid, root_operator))
+}
+
+/// Prove the narrow `DISTINCT key ORDER BY key LIMIT k` shape where walking
+/// the destination primary-key index can replace a full source scan.
+///
+/// `Ok(None)` means the query did not present the target shape at all.
+/// `Err(reason)` means it did but a safety condition failed, so EXPLAIN can
+/// report why the existing plan path was kept.
+pub(super) fn ordered_existence_scan(
+    chain: &PartitionedChain<'_>,
+    exec_ctx: &ExecutionContext,
+) -> Result<Option<OrderedExistenceProof>, String> {
+    if std::env::var("LINKRS_ORDERED_EXISTENCE_SCAN")
+        .is_ok_and(|value| matches!(value.as_str(), "off" | "0" | "false"))
+    {
+        return Err("disabled".to_string());
+    }
+    let dedup = match chain.global.first() {
+        Some(PlanNodeEnum::Dedup(dedup)) if dedup.col_names().len() == 1 => dedup,
+        Some(PlanNodeEnum::Dedup(_)) => return Err("multi-column-distinct".to_string()),
+        _ => return Ok(None),
+    };
+    let topn = match chain.global.get(1) {
+        Some(PlanNodeEnum::TopN(topn)) => topn,
+        _ => return Ok(None),
+    };
+    let spec = build_topn_spec(topn).map_err(|_| "invalid-topn".to_string())?;
+    let BlockingSpec::TopN {
+        n,
+        sort_expressions,
+        sort_directions,
+    } = spec
+    else {
+        return Err("unsupported-topn".to_string());
+    };
+    if n == 0 {
+        return Err("zero-limit".to_string());
+    }
+    if !matches!(
+        sort_directions.as_slice(),
+        [crate::executor::streaming::executor::SortDirection::Ascending]
+    ) {
+        return Err("descending-order".to_string());
+    }
+    if !safe_global_tail_after_topn(chain, n as usize) {
+        return Err("unsafe-global-tail".to_string());
+    }
+    let key_column = match sort_expressions.as_slice() {
+        [Expression::Variable(name)] => name.clone(),
+        [Expression::Property { object, property }] => {
+            let Expression::Variable(variable) = object.as_ref() else {
+                return Err("complex-sort-expression".to_string());
+            };
+            format!("{variable}.{property}")
+        }
+        _ => return Err("unsupported-sort-shape".to_string()),
+    };
+    if key_column != dedup.col_names()[0] {
+        return Err("sort-key-mismatch".to_string());
+    }
+
+    let expands: Vec<_> = chain
+        .local
+        .iter()
+        .filter_map(|op| match op {
+            PlanNodeEnum::ExpandAll(expand) => Some(expand),
+            _ => None,
+        })
+        .collect();
+    let [expand] = expands.as_slice() else {
+        return Ok(None);
+    };
+    if chain
+        .local
+        .iter()
+        .any(|op| matches!(op, PlanNodeEnum::Filter(_) | PlanNodeEnum::Flatten(_)))
+    {
+        return Err("local-filter-or-flatten".to_string());
+    }
+    if expand.any_edge_type()
+        || expand.edge_types().len() != 1
+        || expand.step_limit().unwrap_or(1) != 1
+        || expand.step_limits().is_some()
+        || expand.filter().is_some()
+        || expand.path_semantic().is_some()
+        || expand.sample()
+        || expand.include_empty_paths()
+        || EdgeDirection::parse(expand.direction()) != Ok(EdgeDirection::Out)
+    {
+        return Err("unsafe-expand-shape".to_string());
+    }
+    if !matches!(expand.edge_required_props().as_deref(), Some([])) {
+        return Err("edge-properties-required".to_string());
+    }
+    let dst_var = expand
+        .col_names()
+        .get(2)
+        .map(String::as_str)
+        .ok_or("missing-destination")?;
+    let dst_tag = expand.dst_tag().ok_or("missing-destination-tag")?;
+    if dst_tag.is_empty() {
+        return Err("missing-destination-tag".to_string());
+    }
+    let key_property = key_property_for(chain, &key_column, dst_var)?;
+    if !matches!(expand.dst_required_props().as_deref(), Some([property]) if *property == key_property)
+    {
+        return Err("extra-destination-properties".to_string());
+    }
+    let PlanNodeEnum::ScanVertices(scan) = chain.scan else {
+        return Ok(None);
+    };
+    if scan.filter().is_some() || scan.limit().is_some() || !scan.projected_properties().is_empty()
+    {
+        return Err("source-scan-predicate".to_string());
+    }
+    let src_tag = scan.tag().ok_or("missing-source-tag")?;
+
+    let space_name = exec_ctx.space_name.as_deref().ok_or("missing-space")?;
+    let storage = exec_ctx.storage.as_ref().ok_or("missing-storage")?;
+    let guard = storage.read();
+    if guard.snapshot_handle().is_none() {
+        return Err("unbound-snapshot".to_string());
+    }
+    let edge_type = &expand.edge_types()[0];
+    let edge_info = guard
+        .get_edge_type(space_name, edge_type)
+        .map_err(|_| "edge-schema-unavailable".to_string())?
+        .ok_or("edge-schema-missing".to_string())?;
+    if edge_info.src_tag_name != *src_tag || edge_info.dst_tag_name != *dst_tag {
+        return Err("endpoint-schema-mismatch".to_string());
+    }
+    let tag = guard
+        .get_tag(space_name, dst_tag)
+        .map_err(|_| "tag-schema-unavailable".to_string())?
+        .ok_or("tag-schema-missing".to_string())?;
+    let primary = tag.properties.first().ok_or("no-primary-key")?;
+    if primary.name != key_property {
+        return Err("not-primary-key".to_string());
+    }
+    let key_type = match primary.data_type {
+        DataType::SmallInt | DataType::Int | DataType::BigInt => primary.data_type.clone(),
+        _ => return Err("unsupported-key-type".to_string()),
+    };
+    let proof = guard
+        .ordered_index_proof(space_name, dst_tag, &key_property)
+        .map_err(|_| "index-proof-unavailable".to_string())?
+        .ok_or("no-ordered-index".to_string())?;
+
+    Ok(Some(OrderedExistenceProof {
+        space_name: space_name.to_string(),
+        index_name: proof.index_name.clone(),
+        index_id: proof.index_id,
+        src_tag: src_tag.to_string(),
+        dst_tag: dst_tag.to_string(),
+        edge_type: edge_type.clone(),
+        key_property,
+        key_column,
+        key_type,
+        limit: n as usize,
+        generation: proof.generation,
+        reason: format!(
+            "{}; edge {} from {} to {}; limit {}",
+            proof.reason, edge_type, src_tag, dst_tag, n
+        ),
+    }))
+}
+
+fn key_property_for(
+    chain: &PartitionedChain<'_>,
+    key_column: &str,
+    dst_var: &str,
+) -> Result<String, String> {
+    let expression = key_name_expr(chain, key_column)
+        .or_else(|| {
+            let (variable, property) = key_column.split_once('.')?;
+            (variable == dst_var).then(|| Expression::Property {
+                object: Box::new(Expression::Variable(variable.to_string())),
+                property: property.to_string(),
+            })
+        })
+        .ok_or("key-expression-unavailable".to_string())?;
+    match expression {
+        Expression::Property { object, property } => {
+            let Expression::Variable(variable) = object.as_ref() else {
+                return Err("complex-key-expression".to_string());
+            };
+            if variable != dst_var {
+                return Err("key-not-destination".to_string());
+            }
+            Ok(property)
+        }
+        _ => Err("key-not-property".to_string()),
     }
 }
 

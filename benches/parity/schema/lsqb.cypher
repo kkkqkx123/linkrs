@@ -29,6 +29,10 @@ CREATE EDGE IF NOT EXISTS REPLYOF_COMMENT() FROM Comment_ TO Comment_;
 CREATE EDGE IF NOT EXISTS REPLYOF_POST() FROM Comment_ TO Post;
 CREATE EDGE IF NOT EXISTS CONTAINEROF() FROM Forum TO Post;
 
+-- Ordered existence scan for `DISTINCT p.id ORDER BY p.id LIMIT k`:
+-- the index must exist before COPY so it sees the initial vertex load.
+CREATE TAG INDEX IF NOT EXISTS person_id_idx ON Person(id);
+
 -- Vertices first (edge endpoints must exist).
 COPY TAG Person FROM 'Person.csv' WITH (HEADER true, DELIMITER '|');
 COPY TAG Comment_ FROM 'Comment.csv' WITH (HEADER true, DELIMITER '|');

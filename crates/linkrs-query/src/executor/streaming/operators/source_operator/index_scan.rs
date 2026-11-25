@@ -77,7 +77,7 @@ pub(crate) fn next(op: &mut SourceOperator) -> Result<Option<DataChunk>, QueryEr
     next_index_chunk(op, "IndexScan", &vertex_projection)
 }
 
-fn build_index_scan_plan(
+pub(crate) fn build_index_scan_plan(
     storage: &Arc<RwLock<dyn QueryStorage>>,
     space_name: &str,
     index_id: u64,

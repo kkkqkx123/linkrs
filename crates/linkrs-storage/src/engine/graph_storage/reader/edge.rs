@@ -18,6 +18,89 @@ use linkrs_core::{Edge, EdgeDirection, StorageError, StorageResult, Value};
 use crate::engine::graph_storage::reader::ttl_filter::edge_is_expired;
 use crate::engine::graph_storage::reader::utils::*;
 
+use super::vertex::get_vertex_property_columns_with_handles_batch;
+
+/// Existence-only reverse-CSR read for ordered destination scans.
+///
+/// One batched adjacency pass stages candidate source endpoints; a second
+/// batched vertex read applies source visibility, label and TTL. No edges,
+/// properties or destination rows are materialized.
+pub(crate) fn incoming_edge_exists_batch(
+    ctx: &GraphStorageContext,
+    space: &str,
+    dst_ids: &[VertexId],
+    src_tag: &str,
+    dst_tag: &str,
+    edge_type: &str,
+) -> StorageResult<Vec<bool>> {
+    let mut exists = vec![false; dst_ids.len()];
+    if dst_ids.is_empty() {
+        return Ok(exists);
+    }
+    record_schema_read(ctx, space);
+    let info = ctx
+        .schema_manager()
+        .get_edge_type(space, edge_type)?
+        .ok_or_else(|| {
+            StorageError::not_found(format!("Edge type {edge_type} not found in space {space}"))
+        })?;
+    if info.src_tag_name != src_tag || info.dst_tag_name != dst_tag {
+        return Err(StorageError::invalid_operation(format!(
+            "Edge type {edge_type} endpoints do not match {src_tag} -> {dst_tag}"
+        )));
+    }
+    let src_label = endpoint_label_id(ctx, space, &info.src_tag_name)?
+        .ok_or_else(|| StorageError::label_not_found(src_tag.to_string()))?;
+    let dst_label = endpoint_label_id(ctx, space, &info.dst_tag_name)?
+        .ok_or_else(|| StorageError::label_not_found(dst_tag.to_string()))?;
+    let ts = ctx.get_read_timestamp();
+    let mut staged = Vec::new();
+    let mut seen = HashSet::new();
+    ctx.visit_in_nbrs_batched(
+        info.edge_type_id,
+        src_label,
+        dst_label,
+        dst_ids,
+        ts,
+        |index, _, label, nbr| {
+            if label == src_label && seen.insert((index, nbr.endpoint, label)) {
+                staged.push((index, nbr.endpoint, label));
+            }
+        },
+    );
+    if staged.is_empty() {
+        return Ok(exists);
+    }
+    let internal_ids: Vec<u32> = staged.iter().map(|(_, internal, _)| *internal).collect();
+    let external_ids = ctx.external_ids_by_internal_batch(src_label, &internal_ids, ts);
+    let candidates: Vec<(usize, VertexId, (u32, LabelId))> = staged
+        .into_iter()
+        .zip(external_ids)
+        .filter_map(|((index, internal, label), external)| {
+            external.map(|external| (index, external, (internal, label)))
+        })
+        .collect();
+    let external: Vec<VertexId> = candidates.iter().map(|(_, id, _)| *id).collect();
+    let handles: Vec<Option<(u32, LabelId)>> = candidates
+        .iter()
+        .map(|(_, _, handle)| Some(*handle))
+        .collect();
+    let present = get_vertex_property_columns_with_handles_batch(
+        ctx,
+        space,
+        src_tag,
+        &external,
+        &[],
+        &handles,
+    )?;
+    for ((index, _, _), visible) in candidates.iter().zip(present) {
+        if visible.is_some() {
+            exists[*index] = true;
+        }
+    }
+    Ok(exists)
+}
+
 pub(crate) fn get_edge(
     ctx: &GraphStorageContext,
     space: &str,
