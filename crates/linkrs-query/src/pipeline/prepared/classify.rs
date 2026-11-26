@@ -131,7 +131,12 @@ pub fn is_direct_dml_statement(stmt: &Stmt) -> bool {
             | Stmt::Merge(_)
             | Stmt::Set(_)
             | Stmt::Remove(_)
-    )
+    ) || is_data_create(stmt)
+}
+
+/// Whether a CREATE statement produces graph data instead of catalog state.
+pub fn is_data_create(stmt: &Stmt) -> bool {
+    stmt.is_data_create()
 }
 
 pub(crate) fn is_direct_dcl(stmt: &Stmt) -> bool {
@@ -159,6 +164,9 @@ pub fn is_transaction(stmt: &Stmt) -> bool {
 }
 
 pub fn is_ddl(stmt: &Stmt) -> bool {
+    if is_data_create(stmt) {
+        return false;
+    }
     matches!(
         stmt,
         Stmt::Create(_)
@@ -215,6 +223,7 @@ pub fn is_read_only_cacheable(stmt: &Stmt) -> bool {
         Stmt::SetOperation(set_op) => {
             is_read_only_cacheable(&set_op.left) && is_read_only_cacheable(&set_op.right)
         }
+        Stmt::Match(m) => m.delete_clause.is_none(),
         _ => !matches!(
             stmt,
             Stmt::Insert(_)
@@ -258,6 +267,14 @@ pub fn is_read_only_cacheable(stmt: &Stmt) -> bool {
                 | Stmt::PurgeExpired(_)
         ),
     }
+}
+
+/// Whether a statement may store an immutable physical plan.
+///
+/// Read statements and statements that produce a DML event are eligible.
+/// DDL, DCL, diagnostics, and transaction control stay outside this set.
+pub fn is_plan_cacheable(stmt: &Stmt) -> bool {
+    is_read_only_cacheable(stmt) || dml_op_from_stmt(stmt).is_some()
 }
 
 #[cfg(test)]
@@ -423,5 +440,35 @@ mod tests {
         assert!(!is_global_catalog_change(&parse(
             "CREATE TAG IF NOT EXISTS Person(name: STRING)"
         )));
+    }
+
+    #[test]
+    fn data_create_is_dml_not_ddl() {
+        let data = parse("CREATE (n:Person {name: 'Alice'})");
+        assert!(is_data_create(&data));
+        assert!(!is_ddl(&data));
+        assert!(is_direct_dml_statement(&data));
+        assert_eq!(classify_statement(&data), StatementClass::Dml);
+        assert!(is_plan_cacheable(&data));
+
+        let schema = parse("CREATE TAG Person(name: STRING)");
+        assert!(!is_data_create(&schema));
+        assert!(is_ddl(&schema));
+        assert!(!is_plan_cacheable(&schema));
+    }
+
+    #[test]
+    fn match_delete_is_write_and_plan_cacheable() {
+        let stmt = parse("MATCH (n:Person) WHERE n.age > 65 DELETE VERTEX n");
+        assert_eq!(classify_statement(&stmt), StatementClass::Dml);
+        assert!(!is_read_only_cacheable(&stmt));
+        assert!(is_plan_cacheable(&stmt));
+    }
+
+    #[test]
+    fn copy_is_plan_cacheable_without_shape_normalization() {
+        let stmt = parse("COPY VERTEX person FROM \"people.csv\"");
+        assert!(!is_read_only_cacheable(&stmt));
+        assert!(is_plan_cacheable(&stmt));
     }
 }

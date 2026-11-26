@@ -278,9 +278,14 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         // staged rows are invisible to those counts.
         let in_write_context =
             crate::context::staged_writes_visible(request.operation_context.as_ref());
-        let cache_context =
-            self.plan_cache_context(space_name.clone(), param_signature, in_write_context);
-        let compiled_key = if super::prepared::is_read_only_cacheable(stmt) {
+        let optimizer_epochs = super::prepared::is_read_only_cacheable(stmt);
+        let cache_context = self.plan_cache_context_with_epochs(
+            space_name.clone(),
+            param_signature,
+            in_write_context,
+            optimizer_epochs,
+        );
+        let compiled_key = if optimizer_epochs {
             self.compiled_plan_memo_key(query_text, &query_context, param_signature)
         } else {
             None
@@ -342,6 +347,17 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         let (optimized_plan, mut times) =
             self.optimize_from_bound(query_context.clone(), bound, ast)?;
         times.cache_probe_us = cache_start.elapsed().as_micros() as u64;
+        let cache_context = self.plan_cache_context_with_epochs(
+            space_name.clone(),
+            param_signature,
+            in_write_context,
+            optimizer_epochs,
+        );
+        let dml_memo_key = if dml_shape_cacheable {
+            Some(self.prebind_key(query_text, cache_context.clone()))
+        } else {
+            None
+        };
         if let Some(spec) = optimized_plan.partition_spec() {
             if let Some(cached) =
                 self.plan_cache
@@ -358,7 +374,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                     // Statistics and feedback may have advanced while the
                     // optimized plan cache was being reused; re-arm the
                     // pre-bind memo under the current epochs.
-                    if super::prepared::is_read_only_cacheable(stmt) {
+                    if optimizer_epochs {
                         if let Some(key) =
                             self.compiled_plan_memo_key(query_text, &query_context, param_signature)
                         {
@@ -375,14 +391,15 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         let plan = self.build_physical_plan(&optimized_plan, &query_context)?;
         // The key is rebuilt after optimization because statistics collection
         // and feedback folding may have advanced their epochs on this compile.
-        if super::prepared::is_read_only_cacheable(stmt) && plan.partition_spec().is_some() {
+        if optimizer_epochs && plan.partition_spec().is_some() {
             if let Some(key) =
                 self.compiled_plan_memo_key(query_text, &query_context, param_signature)
             {
                 self.compiled_plan_memo.store(key, plan.clone());
             }
         }
-        let cacheable = super::prepared::is_read_only_cacheable(stmt) || dml_shape_cacheable;
+        let cacheable = super::prepared::is_plan_cacheable(stmt);
+        let is_dml = super::prepared::dml_op_from_stmt(stmt).is_some();
         if cacheable {
             if let Some(key) = dml_memo_key.clone() {
                 self.dml_plan_memo.store(key, plan.clone());
@@ -397,7 +414,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                     crate::cache::plan_cache::PlanCachePutContext::from_identity(
                         cache_context,
                         dependent_tables,
-                        dml_shape_cacheable,
+                        is_dml,
                         false,
                     ),
                 );
@@ -410,7 +427,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                     crate::cache::plan_cache::PlanCachePutContext::from_identity(
                         cache_context,
                         dependent_tables,
-                        dml_shape_cacheable,
+                        is_dml,
                         false,
                     ),
                 );

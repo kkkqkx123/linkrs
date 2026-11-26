@@ -258,6 +258,17 @@ crate::define_stmt_helpers! {
 }
 
 impl Stmt {
+    /// Whether a CREATE statement writes graph data instead of catalog state.
+    pub fn is_data_create(&self) -> bool {
+        match self {
+            Stmt::Create(create) => matches!(
+                &create.target,
+                CreateTarget::Node { .. } | CreateTarget::Edge { .. } | CreateTarget::Path { .. }
+            ),
+            _ => false,
+        }
+    }
+
     pub fn kind(&self) -> &'static str {
         match self {
             Stmt::Create(_) => "CREATE",

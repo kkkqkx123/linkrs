@@ -24,6 +24,8 @@
 //! | Parameter type signature | part of hash | same | Types only, values excluded, so same-type re-execution reuses plans |
 //! | Optimizer version     | `cost_epoch` snapshot | same | Any cost config change retires cached plans |
 //! | Planning config hash  | partitioning config hash | same | Partitioning policy change retires cached plans |
+//! | Statistics epoch      | collector epoch snapshot | same | ANALYZE and automatic refresh retire priced plans |
+//! | Feedback fingerprint  | applied feedback hash | same | Folded optimization feedback retires priced plans |
 //! | Partition fingerprint | range start/end plus source plus layout version, `None` misses `Some` | always absent | Memo never carries it; compatibility check covers layout |
 //!
 //! Invalidation semantics:
@@ -78,6 +80,8 @@ pub struct PlanCachePutContext {
     pub is_transaction: bool,
     pub optimizer_version: u64,
     pub planning_config_hash: u64,
+    pub stats_epoch: u64,
+    pub feedback_fingerprint: u64,
     /// Mirrors `PlanCacheContext::in_write_context` so put and get derive the
     /// same key when the statement runs where staged rows may be visible.
     pub in_write_context: bool,
@@ -102,6 +106,8 @@ impl PlanCachePutContext {
             is_transaction,
             optimizer_version: context.optimizer_version,
             planning_config_hash: context.planning_config_hash,
+            stats_epoch: context.stats_epoch,
+            feedback_fingerprint: context.feedback_fingerprint,
             in_write_context: context.in_write_context,
         }
     }
@@ -116,6 +122,12 @@ pub struct PlanCacheContext {
     pub param_type_signature: Option<u64>,
     pub optimizer_version: u64,
     pub planning_config_hash: u64,
+    /// Bumped by statistics collection so plans priced under an older
+    /// statistics snapshot cannot be reused.
+    pub stats_epoch: u64,
+    /// Hash of applied optimizer feedback so a folded sample cannot leave an
+    /// older plan alive.
+    pub feedback_fingerprint: u64,
     /// Whether the statement runs where uncommitted staged rows may be
     /// visible (an explicit write transaction, or autocommit group mode).
     /// Such a context must not reuse a plan compiled for a plain read:
@@ -181,6 +193,8 @@ impl PlanCacheKey {
         context.index_version.hash(&mut hasher);
         context.optimizer_version.hash(&mut hasher);
         context.planning_config_hash.hash(&mut hasher);
+        context.stats_epoch.hash(&mut hasher);
+        context.feedback_fingerprint.hash(&mut hasher);
         context.in_write_context.hash(&mut hasher);
         let hash = hasher.finish();
 
@@ -237,6 +251,8 @@ impl PlanCacheKey {
         context.index_version.hash(&mut hasher);
         context.optimizer_version.hash(&mut hasher);
         context.planning_config_hash.hash(&mut hasher);
+        context.stats_epoch.hash(&mut hasher);
+        context.feedback_fingerprint.hash(&mut hasher);
         context.in_write_context.hash(&mut hasher);
         let hash = hasher.finish();
 

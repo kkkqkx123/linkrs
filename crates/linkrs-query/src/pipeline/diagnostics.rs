@@ -9,6 +9,7 @@ use crate::storage::QueryStorage;
 use crate::QueryContext;
 use linkrs_core::error::{DBError, DBResult, QueryError};
 use linkrs_core::types::expr::expression_context::ExpressionAnalysisContext;
+use linkrs_core::types::Span;
 use linkrs_core::Value;
 use std::sync::Arc;
 
@@ -49,16 +50,14 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
 
     /// Compile the statement wrapped by an EXPLAIN / PROFILE.
     ///
-    /// Goes through the shared `compile_or_get_cached` path so diagnostic
-    /// targets reuse the plan cache (and warm it for the same statement
-    /// executed directly).  The full request text is used as the cache key
-    /// (the inner statement's source span is not separately extracted).
+    /// The cache key is the source text of the inner statement so diagnostics
+    /// can reuse and warm the same entry as a direct execution.
     fn compile_diagnostic_target(
         &mut self,
         qctx: Arc<QueryContext>,
         inner_stmt: &crate::parser::ast::Stmt,
     ) -> DBResult<Arc<crate::executor::streaming::plan::PhysicalPlan>> {
-        let key_text = qctx.request_context().query.clone();
+        let key_text = source_text_for_span(&qctx.request_context().query, inner_stmt.span())?;
         let expr_ctx = Arc::new(ExpressionAnalysisContext::new());
         let ast = Arc::new(crate::parser::ast::stmt::Ast::new(
             inner_stmt.clone(),
@@ -71,8 +70,9 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                     "EXPLAIN/PROFILE target statement could not be bound".to_string(),
                 ))
             })?;
+        let cacheable = super::prepared::is_read_only_cacheable(inner_stmt);
         let (plan, _) =
-            self.compile_or_get_cached(&key_text, qctx, Some(&bound), inner_stmt, &ast, false)?;
+            self.compile_or_get_cached(&key_text, qctx, Some(&bound), inner_stmt, &ast, cacheable)?;
         Ok(plan)
     }
 
@@ -487,5 +487,42 @@ fn numeric_count(value: &Value) -> Option<i64> {
         Value::Float(value) => Some(*value as i64),
         Value::Double(value) => Some(*value as i64),
         _ => None,
+    }
+}
+
+fn source_text_for_span(query: &str, span: Span) -> DBResult<String> {
+    let invalid_span = || {
+        DBError::from(QueryError::execution(
+            "diagnostic statement span is outside the query text".to_string(),
+        ))
+    };
+    let line_lengths: Vec<usize> = query.lines().map(|line| line.chars().count()).collect();
+    let start = span
+        .start
+        .to_offset(&line_lengths)
+        .ok_or_else(invalid_span)?;
+    let end = span.end.to_offset(&line_lengths).ok_or_else(invalid_span)? + 1;
+    let chars: Vec<char> = query.chars().collect();
+    if start > end || end > chars.len() {
+        return Err(invalid_span());
+    }
+    Ok(chars[start..end].iter().collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inner_statement_span_is_sliced_from_source() {
+        let query = "EXPLAIN MATCH (n) RETURN n";
+        let all = Span::from_coords(1, 1, 1, query.chars().count());
+        assert_eq!(source_text_for_span(query, all).expect("valid span"), query);
+
+        let inner = Span::from_coords(1, 9, 1, query.chars().count());
+        assert_eq!(
+            source_text_for_span(query, inner).expect("valid span"),
+            "MATCH (n) RETURN n"
+        );
     }
 }

@@ -259,6 +259,8 @@ impl QueryPlanCache {
             is_transaction,
             optimizer_version,
             planning_config_hash,
+            stats_epoch,
+            feedback_fingerprint,
             in_write_context,
         } = context;
         let query_bytes = query.len();
@@ -272,6 +274,8 @@ impl QueryPlanCache {
                 param_type_signature: param_type_sig,
                 optimizer_version,
                 planning_config_hash,
+                stats_epoch,
+                feedback_fingerprint,
                 in_write_context,
             },
         );
@@ -426,6 +430,8 @@ impl QueryPlanCache {
             is_transaction,
             optimizer_version,
             planning_config_hash,
+            stats_epoch,
+            feedback_fingerprint,
             in_write_context,
         } = context;
         let param_type_sig = Self::compute_param_type_signature(&param_positions);
@@ -439,6 +445,8 @@ impl QueryPlanCache {
                 param_type_signature: param_type_sig,
                 optimizer_version,
                 planning_config_hash,
+                stats_epoch,
+                feedback_fingerprint,
                 in_write_context,
             },
         );

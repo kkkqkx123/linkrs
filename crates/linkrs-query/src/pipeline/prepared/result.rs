@@ -10,7 +10,7 @@ use crate::executor::streaming::StreamingQueryResult;
 use crate::storage::QueryStorage;
 
 use super::super::compiler::CompileTimes;
-use super::classify::{is_read_only_cacheable, is_transaction};
+use super::classify::{is_plan_cacheable, is_transaction};
 use super::{PreparedRequest, StatementClass};
 use crate::executor::streaming::transaction_scope::TransactionScope;
 use crate::planning::planner::PlannerError;
@@ -377,7 +377,7 @@ impl<S: QueryStorage + 'static> crate::pipeline::QueryPipelineManager<S> {
         stmt: &crate::parser::ast::Stmt,
         execution_time_ms: f64,
     ) {
-        if !is_read_only_cacheable(stmt) {
+        if !is_plan_cacheable(stmt) {
             return;
         }
         let space_name = query_context
@@ -408,7 +408,7 @@ impl<S: QueryStorage + 'static> crate::pipeline::QueryPipelineManager<S> {
         stream: &StreamingQueryResult,
         request: &PreparedRequest,
     ) {
-        if !is_read_only_cacheable(&request.stmt) {
+        if !is_plan_cacheable(&request.stmt) {
             return;
         }
         let space_name = request

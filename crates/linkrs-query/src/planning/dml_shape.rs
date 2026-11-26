@@ -11,10 +11,10 @@
 //! statements) together with the ordered literal values used for
 //! execution-time binding.
 //!
-//! Scope: the direct write statements (INSERT / DELETE / UPDATE / MERGE /
-//! SET / REMOVE) — see `crate::pipeline::prepared::is_direct_dml_statement`
-//! for the authoritative candidate set (`normalize_shape` below accepts a
-//! subset of it: no COPY).
+//! Scope: direct write statements (INSERT / DELETE / UPDATE / MERGE / SET /
+//! REMOVE and data-form CREATE) — see
+//! `crate::pipeline::prepared::is_direct_dml_statement` for the authoritative
+//! candidate set (`normalize_shape` below accepts a subset: no COPY).
 //! Read queries are deliberately excluded: their plans depend on constant
 //! values (constant folding, index selection) and users already have
 //! explicit `$param` binding for parameterized read reuse.
@@ -28,9 +28,11 @@ use crate::parser::ast::Stmt;
 use linkrs_core::types::expr::{ContextualExpression, Expression};
 use linkrs_core::Value;
 
+mod create;
 mod delete;
 mod insert;
 mod merge;
+mod pattern;
 mod set_remove;
 mod update;
 
@@ -60,11 +62,9 @@ pub fn normalize_shape(stmt: &Stmt) -> Option<DmlShape> {
         Stmt::Merge(s) => merge::render_merge(s, &mut values)?,
         Stmt::Set(s) => set_remove::render_set(s, &mut values)?,
         Stmt::Remove(s) => set_remove::render_remove(s, &mut values)?,
+        Stmt::Create(s) if stmt.is_data_create() => create::render_create(s, &mut values)?,
         _ => return None,
     };
-    if values.is_empty() {
-        return None;
-    }
     Some(DmlShape {
         normalized_text,
         values,
@@ -465,9 +465,47 @@ mod tests {
     }
 
     #[test]
-    fn remove_without_literals_is_skipped() {
+    fn remove_without_literals_is_normalized() {
         let query = "REMOVE v.name, v.age";
         let stmt = parse(query);
+        let shape = normalize_shape(&stmt).expect("shape should normalize");
+        assert_eq!(shape.normalized_text, query);
+        assert!(shape.values.is_empty());
+    }
+
+    #[test]
+    fn parameterized_dml_without_literals_is_normalized() {
+        let query = "INSERT VERTEX person(name) VALUES @id: (@name)";
+        let stmt = parse(query);
+        let shape = normalize_shape(&stmt).expect("shape should normalize");
+        assert_eq!(shape.normalized_text, query);
+        assert!(shape.values.is_empty());
+    }
+
+    #[test]
+    fn normalizes_data_create_node() {
+        let query = "CREATE (n:Person {name: \"Alice\"})";
+        let stmt = parse(query);
+        let shape = normalize_shape(&stmt).expect("shape should normalize");
+        assert_eq!(shape.normalized_text, "CREATE (n:Person {name: @__dml_0})");
+        assert_eq!(shape.values.len(), 1);
+    }
+
+    #[test]
+    fn normalizes_data_create_path() {
+        let query = "CREATE (a:Person {name: \"Alice\"})-[:KNOWS {since: 2020}]->(b:Person)";
+        let stmt = parse(query);
+        let shape = normalize_shape(&stmt).expect("shape should normalize");
+        assert_eq!(
+            shape.normalized_text,
+            "CREATE (a:Person {name: @__dml_0})-[:KNOWS {since: @__dml_1}]->(b:Person)"
+        );
+        assert_eq!(shape.values.len(), 2);
+    }
+
+    #[test]
+    fn schema_create_is_not_normalized() {
+        let stmt = parse("CREATE TAG Person(name: STRING)");
         assert!(normalize_shape(&stmt).is_none());
     }
 

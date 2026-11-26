@@ -31,6 +31,8 @@ fn cache_key_covers_all_compatibility_dimensions() {
         param_type_signature: Some(3),
         optimizer_version: 4,
         planning_config_hash: 5,
+        stats_epoch: 6,
+        feedback_fingerprint: 7,
         in_write_context: false,
     };
     let key = PlanCacheKey::from_query_with_context("MATCH (n) RETURN n", base.clone());
@@ -53,6 +55,14 @@ fn cache_key_covers_all_compatibility_dimensions() {
         },
         PlanCacheContext {
             index_version: Some(7),
+            ..base.clone()
+        },
+        PlanCacheContext {
+            stats_epoch: 8,
+            ..base.clone()
+        },
+        PlanCacheContext {
+            feedback_fingerprint: 8,
             ..base.clone()
         },
     ] {
@@ -267,6 +277,8 @@ fn partitioned_plan_hit_respects_compatibility_context() {
         param_type_signature: Some(99),
         optimizer_version: 2,
         planning_config_hash: 3,
+        stats_epoch: 4,
+        feedback_fingerprint: 5,
         in_write_context: false,
     };
     // The put path derives the param signature from the param positions;
@@ -293,6 +305,8 @@ fn partitioned_plan_hit_respects_compatibility_context() {
             index_version: context.index_version,
             optimizer_version: context.optimizer_version,
             planning_config_hash: context.planning_config_hash,
+            stats_epoch: context.stats_epoch,
+            feedback_fingerprint: context.feedback_fingerprint,
             ..PlanCachePutContext::default()
         },
     );

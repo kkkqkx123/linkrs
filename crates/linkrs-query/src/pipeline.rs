@@ -120,7 +120,7 @@ pub struct QueryPipelineManager<S: QueryStorage + 'static> {
     pub(crate) compiled_plan_memo: PrebindPlanMemo<CompiledPlanMemoKey>,
     /// Bumped by every statistics collection so an explicit ANALYZE retires
     /// plans priced under the previous statistics snapshot.
-    pub(crate) compiled_plan_stats_epoch: AtomicU64,
+    pub(crate) plan_stats_epoch: AtomicU64,
     /// Parsed ASTs of normalized DML templates (`INSERT ... VALUES
     /// (@__dml_0, ...)`), avoiding a re-parse per execution. Bounded
     /// multi-entry map keyed by exact normalized text. Unlike plan memos it
@@ -204,7 +204,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             dml_shape_cache_enabled: true,
             dml_plan_memo: PrebindPlanMemo::new(DML_PLAN_MEMO_CAP, "dml"),
             compiled_plan_memo: PrebindPlanMemo::new(COMPILED_PLAN_MEMO_CAP, "read"),
-            compiled_plan_stats_epoch: AtomicU64::new(0),
+            plan_stats_epoch: AtomicU64::new(0),
             dml_template_ast: BoundedLru::new(DML_SHAPE_CACHE_CAP),
             dml_template_ast_parse_count: std::sync::atomic::AtomicU64::new(0),
             dml_template_ast_hit_count: std::sync::atomic::AtomicU64::new(0),
@@ -323,7 +323,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                 }
             }
         };
-        self.compiled_plan_stats_epoch
+        self.plan_stats_epoch
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let stats_manager = self.optimizer_engine.stats_manager().clone();
         let schema_version = self
@@ -520,7 +520,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             dml_shape_cache_enabled: true,
             dml_plan_memo: PrebindPlanMemo::new(DML_PLAN_MEMO_CAP, "dml"),
             compiled_plan_memo: PrebindPlanMemo::new(COMPILED_PLAN_MEMO_CAP, "read"),
-            compiled_plan_stats_epoch: AtomicU64::new(0),
+            plan_stats_epoch: AtomicU64::new(0),
             dml_template_ast: BoundedLru::new(DML_SHAPE_CACHE_CAP),
             dml_template_ast_parse_count: std::sync::atomic::AtomicU64::new(0),
             dml_template_ast_hit_count: std::sync::atomic::AtomicU64::new(0),
@@ -705,6 +705,8 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             crate::context::staged_writes_visible(request.operation_context.as_ref());
         let context =
             self.plan_cache_context(space_name.clone(), param_type_signature, in_write_context);
+        let stats_epoch = context.stats_epoch;
+        let feedback_fingerprint = context.feedback_fingerprint;
         let stats_stamp = space_name
             .as_deref()
             .and_then(|space| self.optimizer_engine.stats_manager().space_stamp(space));
@@ -715,8 +717,8 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         Some(CompiledPlanMemoKey {
             identity: self.prebind_key(query_text, context),
             stats_stamp,
-            stats_epoch: self.compiled_plan_stats_epoch.load(Ordering::Relaxed),
-            feedback_fingerprint: self.optimizer_engine.feedback_state_fingerprint(),
+            stats_epoch,
+            feedback_fingerprint,
             layout_version,
         })
     }
@@ -794,8 +796,8 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         crate::cache::plan_cache::QueryPlanCache::compute_param_type_signature(&positions)
     }
 
-    /// Single construction of the plan-cache identity context shared by the
-    /// memo key, the plan-cache lookup and the plan-cache put paths, so every
+    /// Construction of the plan-cache identity context shared by the memo
+    /// key, the plan-cache lookup and the plan-cache put paths, so every
     /// cache key derives its dimensions from one place.
     pub(crate) fn plan_cache_context(
         &self,
@@ -803,7 +805,32 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         param_type_signature: Option<u64>,
         in_write_context: bool,
     ) -> crate::cache::PlanCacheContext {
+        self.plan_cache_context_with_epochs(
+            space_name,
+            param_type_signature,
+            in_write_context,
+            true,
+        )
+    }
+
+    /// DML plans stay independent of statistics and feedback epochs so an
+    /// ANALYZE run does not retire a hot write template.
+    pub(crate) fn plan_cache_context_with_epochs(
+        &self,
+        space_name: Option<String>,
+        param_type_signature: Option<u64>,
+        in_write_context: bool,
+        include_optimizer_epochs: bool,
+    ) -> crate::cache::PlanCacheContext {
         let planning_config = self.dml_planning_config();
+        let (stats_epoch, feedback_fingerprint) = if include_optimizer_epochs {
+            (
+                self.plan_stats_epoch.load(Ordering::Relaxed),
+                self.optimizer_engine.feedback_state_fingerprint(),
+            )
+        } else {
+            (0, 0)
+        };
         crate::cache::PlanCacheContext {
             space_name,
             schema_version: Some(
@@ -817,6 +844,8 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             param_type_signature,
             optimizer_version: planning_config.optimizer_version,
             planning_config_hash: planning_config.config_hash,
+            stats_epoch,
+            feedback_fingerprint,
             in_write_context,
         }
     }
@@ -843,7 +872,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         let param_sig = self.memo_param_signature(&normalized_text, parameters);
         self.prebind_key(
             &normalized_text,
-            self.plan_cache_context(space_name, param_sig, in_write_context),
+            self.plan_cache_context_with_epochs(space_name, param_sig, in_write_context, false),
         )
     }
 
