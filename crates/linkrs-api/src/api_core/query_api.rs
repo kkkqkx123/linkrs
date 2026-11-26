@@ -363,6 +363,7 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
                     cache_probe_us: profile.stages.cache_probe_us,
                     plan_cache_hit: profile.stages.plan_cache_hit,
                     compiled_plan_memo_hit: profile.stages.compiled_plan_memo_hit,
+                    dml_plan_memo_hit: profile.stages.dml_plan_memo_hit,
                 },
             )),
         }
@@ -423,9 +424,7 @@ where
     }
 
     pub fn dml_plan_memo_hits(&self) -> u64 {
-        self.pipeline_manager
-            .last_dml_plan_hits
-            .load(std::sync::atomic::Ordering::Relaxed)
+        self.pipeline_manager.dml_plan_memo_hits()
     }
 
     /// Hits on the read-only compiled physical-plan memo.
@@ -436,6 +435,11 @@ where
     /// Checked-serve rejections on the compiled physical-plan memo.
     pub fn compiled_plan_memo_failure_count(&self) -> u64 {
         self.pipeline_manager.compiled_plan_memo_failure_count()
+    }
+
+    /// Checked-serve rejections on the DML pre-bind plan memo.
+    pub fn dml_plan_memo_failure_count(&self) -> u64 {
+        self.pipeline_manager.dml_plan_memo_failure_count()
     }
 
     pub fn dml_template_ast_parse_count(&self) -> u64 {

@@ -100,6 +100,7 @@ pub struct ResultMetadata {
     pub cache_probe_us: u64,
     pub plan_cache_hit: bool,
     pub compiled_plan_memo_hit: bool,
+    pub dml_plan_memo_hit: bool,
 }
 
 impl QueryResult {
@@ -129,6 +130,7 @@ impl QueryResult {
                 cache_probe_us: result.metadata.cache_probe_us,
                 plan_cache_hit: result.metadata.plan_cache_hit,
                 compiled_plan_memo_hit: result.metadata.compiled_plan_memo_hit,
+                dml_plan_memo_hit: result.metadata.dml_plan_memo_hit,
             },
         }
     }
@@ -371,6 +373,7 @@ impl Default for ResultMetadata {
             cache_probe_us: 0,
             plan_cache_hit: false,
             compiled_plan_memo_hit: false,
+            dml_plan_memo_hit: false,
         }
     }
 }

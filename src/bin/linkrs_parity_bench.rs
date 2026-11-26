@@ -84,6 +84,7 @@ struct CompileDetail {
     cache_probe_us: Vec<u64>,
     cache_hits: usize,
     compiled_memo_hits: usize,
+    dml_memo_hits: usize,
 }
 
 impl CompileDetail {
@@ -98,6 +99,9 @@ impl CompileDetail {
         }
         if metadata.compiled_plan_memo_hit {
             self.compiled_memo_hits += 1;
+        }
+        if metadata.dml_plan_memo_hit {
+            self.dml_memo_hits += 1;
         }
     }
 }
@@ -1526,6 +1530,7 @@ fn write_run_result(
             "  \"compiled_plan_memo_hits\": {},",
             detail.compiled_memo_hits
         );
+        let _ = writeln!(json, "  \"dml_plan_memo_hits\": {},", detail.dml_memo_hits);
     }
     match execute {
         Some(values) => {

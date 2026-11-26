@@ -5,8 +5,8 @@ mod frontend;
 mod merge_conditional;
 pub mod prepared;
 
-use crate::cache::{ParameterizedQueryHandler, PlanCacheConfig, PlanCacheKey, QueryPlanCache};
-use crate::executor::streaming::plan::PhysicalPlan;
+use crate::cache::prebind_plan_memo::{PrebindPlanKey, PrebindPlanMemo};
+use crate::cache::{ParameterizedQueryHandler, PlanCacheConfig, PlanCacheContext, QueryPlanCache};
 use crate::executor::streaming::pool::SharedScheduler;
 use crate::executor::streaming::query_registry::QueryRegistry;
 use crate::executor::streaming::SessionTransactionController;
@@ -35,15 +35,15 @@ use std::sync::Arc;
 /// are split across `frontend`, `compiler` and `execution` by responsibility
 /// and must not be reordered or duplicated; later refactors keep this order.
 ///
-/// Capacity of the DML shape caches below. Single-entry caching thrashed on
-/// alternating shapes (A,B,A,B re-parsed and re-bound every time); a small
-/// bounded map keeps the common bulk-load shapes resident while bounding
-/// memory. Lookup is a linear scan, which is cheap at this size.
+/// Capacity of the DML template AST cache. Single-entry caching thrashed on
+/// alternating shapes (A,B,A,B re-parsed every time); a small bounded map
+/// keeps the common bulk-load shapes resident while bounding memory.
 pub(crate) const DML_SHAPE_CACHE_CAP: usize = 16;
 
-/// Capacity of the read-only compiled-plan memo. It follows the DML memo
-/// because both are linear lookup tables on the query hot path.
-pub(crate) const COMPILED_PLAN_MEMO_CAP: usize = DML_SHAPE_CACHE_CAP;
+/// Capacities of the two independent pre-bind memo instances. Lookup is a
+/// linear scan, which is cheap at this size.
+pub(crate) const DML_PLAN_MEMO_CAP: usize = DML_SHAPE_CACHE_CAP;
+pub(crate) const COMPILED_PLAN_MEMO_CAP: usize = 16;
 
 pub struct QueryPipelineManager<S: QueryStorage + 'static> {
     pub(crate) stats_manager: Arc<StatsManager>,
@@ -110,75 +110,27 @@ pub struct QueryPipelineManager<S: QueryStorage + 'static> {
     /// Display labels of per-space cost profile overrides (space -> label).
     pub(crate) space_cost_profile_labels: HashMap<String, String>,
     pub(crate) dml_shape_cache_enabled: bool,
-    /// Fast path for repeated same-shape DML: skips bind and serves the last
-    /// compiled physical plans directly. Bounded multi-entry map keyed by
-    /// [`DmlPlanMemoKey`]; see that struct for the key dimensions.
-    pub(crate) dml_plan_memo: parking_lot::Mutex<Vec<DmlPlanMemoEntry>>,
-    /// Read-only compiled physical plans whose partition layout is known only
-    /// after optimization. Keys carry the pre-bind identity plus stats and
-    /// feedback epochs so a hit can skip bind without a partition fingerprint.
-    pub(crate) compiled_plan_memo: parking_lot::Mutex<Vec<CompiledPlanMemoEntry>>,
-    pub compiled_plan_memo_hits: AtomicU64,
-    pub(crate) compiled_plan_memo_failures: AtomicU64,
+    /// Pre-bind identity for shape-normalized DML. Serving validates the
+    /// layout separately because the key carries no partition fingerprint.
+    pub(crate) dml_plan_memo: PrebindPlanMemo<PrebindPlanKey>,
+    /// Read-only pre-bind identity extended with the optimizer epochs that
+    /// are only known after planning. Kept in its own instance so hot DML
+    /// shapes cannot evict read plans.
+    pub(crate) compiled_plan_memo: PrebindPlanMemo<CompiledPlanMemoKey>,
     /// Bumped by every statistics collection so an explicit ANALYZE retires
     /// plans priced under the previous statistics snapshot.
     pub(crate) compiled_plan_stats_epoch: AtomicU64,
-    pub last_dml_plan_hits: std::sync::atomic::AtomicU64,
-    /// Unified checked-serve failure counter across the memo, plain
-    /// plan-cache, and partitioned paths. Every `serve_checked` rejection
-    /// bumps this counter and falls through to replan; no hit is served
-    /// without passing the single checked exit.
-    pub(crate) dml_memo_failures: std::sync::atomic::AtomicU64,
     /// Parsed ASTs of normalized DML templates (`INSERT ... VALUES
     /// (@__dml_0, ...)`), avoiding a re-parse per execution. Bounded
-    /// multi-entry map keyed by exact normalized text.
+    /// multi-entry map keyed by exact normalized text. Unlike plan memos it
+    /// survives DDL because templates carry no schema references.
     pub(crate) dml_template_ast:
         parking_lot::Mutex<Vec<(String, Arc<crate::parser::ast::stmt::Ast>)>>,
     pub(crate) dml_template_ast_parse_count: std::sync::atomic::AtomicU64,
     pub(crate) dml_template_ast_hit_count: std::sync::atomic::AtomicU64,
-    pub(crate) dml_bind_skipped_count: std::sync::atomic::AtomicU64,
     /// Retained password-history depth threaded into every query context so
     /// user-management plans rotate history uniformly across channels.
     pub(crate) password_history_depth: usize,
-}
-
-/// Lookup key for one [`DmlPlanMemoEntry`].
-///
-/// Mirrors the [`crate::cache::PlanCacheKey`] dimensions that are computable
-/// *before* binding (the whole point of the memo is to skip bind): query
-/// shape, space, schema/index generations, parameter type signature, and the
-/// optimizer/planning configuration. The post-planning partition fingerprint
-/// used by the plan cache cannot be part of this key; instead memo hits are
-/// validated with [`crate::executor::streaming::plan::PhysicalPlanValidator::check_compatibility`]
-/// before being served.
-/// Memoized DML plan key: a fingerprint-less plan key over shape-normalized text.
-///
-/// Constructed only via [`DmlPlanMemoKey::from_normalized`] so the prepare-time
-/// bind-skip probe and the compile-time serve/store paths stay identical.
-/// Dimensions are the unified invalidation set (space, schema generation,
-/// index generation, optimizer/cost version, planning config hash, parameter
-/// type signature); the partition fingerprint is absent by construction and
-/// covered post-hoc by the single checked exit
-/// (`QueryPlanCache::serve_checked`).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct DmlPlanMemoKey {
-    pub inner: crate::cache::PlanCacheKey,
-}
-
-impl DmlPlanMemoKey {
-    pub fn from_context(normalized_text: String, context: crate::cache::PlanCacheContext) -> Self {
-        Self {
-            inner: crate::cache::PlanCacheKey::fingerprint_less_from_context(
-                &normalized_text,
-                context,
-            ),
-        }
-    }
-}
-
-pub(crate) struct DmlPlanMemoEntry {
-    pub key: DmlPlanMemoKey,
-    pub plan: Arc<PhysicalPlan>,
 }
 
 /// Identity of a compiled read-only plan that can be served before binding.
@@ -190,16 +142,11 @@ pub(crate) struct DmlPlanMemoEntry {
 /// absent; checked-serve is the single layout validator on the hit path.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct CompiledPlanMemoKey {
-    pub(crate) inner: PlanCacheKey,
+    pub(crate) identity: PrebindPlanKey,
     pub(crate) stats_stamp: Option<(u64, u64)>,
     pub(crate) stats_epoch: u64,
     pub(crate) feedback_fingerprint: u64,
     pub(crate) layout_version: Option<u64>,
-}
-
-pub(crate) struct CompiledPlanMemoEntry {
-    pub key: CompiledPlanMemoKey,
-    pub plan: Arc<PhysicalPlan>,
 }
 
 impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
@@ -255,17 +202,12 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             default_cost_profile_label: String::new(),
             space_cost_profile_labels: HashMap::new(),
             dml_shape_cache_enabled: true,
-            dml_plan_memo: parking_lot::Mutex::new(Vec::new()),
-            compiled_plan_memo: parking_lot::Mutex::new(Vec::new()),
-            compiled_plan_memo_hits: AtomicU64::new(0),
-            compiled_plan_memo_failures: AtomicU64::new(0),
+            dml_plan_memo: PrebindPlanMemo::new(DML_PLAN_MEMO_CAP, "dml"),
+            compiled_plan_memo: PrebindPlanMemo::new(COMPILED_PLAN_MEMO_CAP, "read"),
             compiled_plan_stats_epoch: AtomicU64::new(0),
-            last_dml_plan_hits: std::sync::atomic::AtomicU64::new(0),
-            dml_memo_failures: std::sync::atomic::AtomicU64::new(0),
             dml_template_ast: parking_lot::Mutex::new(Vec::new()),
             dml_template_ast_parse_count: std::sync::atomic::AtomicU64::new(0),
             dml_template_ast_hit_count: std::sync::atomic::AtomicU64::new(0),
-            dml_bind_skipped_count: std::sync::atomic::AtomicU64::new(0),
             password_history_depth: 0,
         }
     }
@@ -576,17 +518,12 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             default_cost_profile_label: String::new(),
             space_cost_profile_labels: HashMap::new(),
             dml_shape_cache_enabled: true,
-            dml_plan_memo: parking_lot::Mutex::new(Vec::new()),
-            compiled_plan_memo: parking_lot::Mutex::new(Vec::new()),
-            compiled_plan_memo_hits: AtomicU64::new(0),
-            compiled_plan_memo_failures: AtomicU64::new(0),
+            dml_plan_memo: PrebindPlanMemo::new(DML_PLAN_MEMO_CAP, "dml"),
+            compiled_plan_memo: PrebindPlanMemo::new(COMPILED_PLAN_MEMO_CAP, "read"),
             compiled_plan_stats_epoch: AtomicU64::new(0),
-            last_dml_plan_hits: std::sync::atomic::AtomicU64::new(0),
-            dml_memo_failures: std::sync::atomic::AtomicU64::new(0),
             dml_template_ast: parking_lot::Mutex::new(Vec::new()),
             dml_template_ast_parse_count: std::sync::atomic::AtomicU64::new(0),
             dml_template_ast_hit_count: std::sync::atomic::AtomicU64::new(0),
-            dml_bind_skipped_count: std::sync::atomic::AtomicU64::new(0),
             password_history_depth: 0,
         }
     }
@@ -643,13 +580,18 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         self.plan_cache.stats()
     }
 
+    /// Clear both pre-bind memo instances without touching the DML template
+    /// AST cache. DDL and full cache clears share this single entry point.
+    pub(crate) fn clear_prebind_memos(&self) {
+        self.dml_plan_memo.clear();
+        self.compiled_plan_memo.clear();
+    }
+
     pub fn clear_plan_cache(&self) {
         self.plan_cache.clear();
-        // The DML shape caches feed plan construction, so a full clear must
-        // cover them too; otherwise `clear_plan_cache` would leave the bind
-        // fast path serving plans the plan cache itself just dropped.
-        self.dml_plan_memo.lock().clear();
-        self.compiled_plan_memo.lock().clear();
+        self.clear_prebind_memos();
+        // Templates are derived from text only, but a full cache clear also
+        // drops their parse cache so the next execution starts from scratch.
         self.dml_template_ast.lock().clear();
         log::info!("Query plan cache cleared");
     }
@@ -701,34 +643,45 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             .load(std::sync::atomic::Ordering::Relaxed)
     }
 
-    pub fn dml_bind_skipped_count(&self) -> u64 {
-        self.dml_bind_skipped_count
-            .load(std::sync::atomic::Ordering::Relaxed)
+    /// Hits on the shape-normalized DML pre-bind memo.
+    pub fn dml_plan_memo_hits(&self) -> u64 {
+        self.dml_plan_memo.hits()
     }
 
-    /// Unified checked-serve failure count across the memo, plain
-    /// plan-cache, and partitioned paths. Every `serve_checked` rejection
-    /// lands here before falling through to replan.
-    pub fn dml_memo_failure_count(&self) -> u64 {
-        self.dml_memo_failures
-            .load(std::sync::atomic::Ordering::Relaxed)
+    /// Number of shape-normalized plans currently memoized.
+    pub fn dml_plan_memo_len(&self) -> usize {
+        self.dml_plan_memo.len()
+    }
+
+    /// Checked-serve rejections attributed to the DML namespace.
+    pub fn dml_plan_memo_failure_count(&self) -> u64 {
+        self.dml_plan_memo.failures()
+    }
+
+    /// Bind steps skipped because the DML memo carried a usable identity.
+    pub fn dml_bind_skipped_count(&self) -> u64 {
+        self.dml_plan_memo.bind_skips()
     }
 
     /// Hits on the read-only compiled physical-plan memo.
     pub fn compiled_plan_memo_hits(&self) -> u64 {
-        self.compiled_plan_memo_hits
-            .load(std::sync::atomic::Ordering::Relaxed)
+        self.compiled_plan_memo.hits()
     }
 
-    /// Checked-serve rejections on the compiled physical-plan memo.
+    /// Checked-serve rejections attributed to the read namespace.
     pub fn compiled_plan_memo_failure_count(&self) -> u64 {
-        self.compiled_plan_memo_failures
-            .load(std::sync::atomic::Ordering::Relaxed)
+        self.compiled_plan_memo.failures()
+    }
+
+    /// Bind steps skipped because a read plan was already available, either
+    /// in the compiled memo or in the plain plan cache.
+    pub fn compiled_plan_bind_skipped_count(&self) -> u64 {
+        self.compiled_plan_memo.bind_skips()
     }
 
     /// Number of compiled physical plans currently memoized.
     pub fn compiled_plan_memo_len(&self) -> usize {
-        self.compiled_plan_memo.lock().len()
+        self.compiled_plan_memo.len()
     }
 
     /// Build the pre-bind identity of a compiled read-only plan.
@@ -760,45 +713,12 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             .as_ref()
             .map(|storage| storage.read().layout_version());
         Some(CompiledPlanMemoKey {
-            inner: PlanCacheKey::fingerprint_less_from_context(query_text, context),
+            identity: self.prebind_key(query_text, context),
             stats_stamp,
             stats_epoch: self.compiled_plan_stats_epoch.load(Ordering::Relaxed),
             feedback_fingerprint: self.optimizer_engine.feedback_state_fingerprint(),
             layout_version,
         })
-    }
-
-    /// Non-serving probe used before binding. The served path still runs the
-    /// shared checked exit, so a candidate that later fails validation simply
-    /// rebinds and recompiles.
-    pub(crate) fn contains_compiled_plan(&self, key: &CompiledPlanMemoKey) -> bool {
-        self.compiled_plan_memo
-            .lock()
-            .iter()
-            .any(|entry| entry.key == *key)
-    }
-
-    /// Look up a compiled plan by full identity, with move-to-front reuse.
-    pub(crate) fn find_compiled_plan(
-        &self,
-        key: &CompiledPlanMemoKey,
-    ) -> Option<Arc<PhysicalPlan>> {
-        let mut guard = self.compiled_plan_memo.lock();
-        let pos = guard.iter().position(|entry| entry.key == *key)?;
-        if pos > 0 {
-            let entry = guard.remove(pos);
-            guard.insert(0, entry);
-        }
-        Some(guard[0].plan.clone())
-    }
-
-    /// Store a compiled plan, replacing a same-key entry and evicting the
-    /// least recently used entry beyond the memo capacity.
-    pub(crate) fn store_compiled_plan(&self, key: CompiledPlanMemoKey, plan: Arc<PhysicalPlan>) {
-        let mut guard = self.compiled_plan_memo.lock();
-        guard.retain(|entry| entry.key != key);
-        guard.insert(0, CompiledPlanMemoEntry { key, plan });
-        guard.truncate(COMPILED_PLAN_MEMO_CAP);
     }
 
     /// Microseconds spent in the last statistics collection pass.
@@ -901,18 +821,28 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         }
     }
 
-    /// Single memo-key constructor shared by the prepare-time probe and the
-    /// compile-time serve/store paths.
+    /// Single fingerprint-less identity constructor for both pre-bind memos.
+    /// Read keys extend it with optimizer epochs; DML keys use it directly.
+    pub(crate) fn prebind_key(
+        &self,
+        query_text: &str,
+        context: PlanCacheContext,
+    ) -> PrebindPlanKey {
+        PrebindPlanKey::from_context(query_text, context)
+    }
+
+    /// Construct the DML pre-bind identity shared by the prepare-time probe
+    /// and the compile-time serve/store paths.
     pub(crate) fn dml_memo_key_for(
         &self,
         normalized_text: String,
         space_name: Option<String>,
         parameters: &std::collections::HashMap<String, linkrs_core::Value>,
         in_write_context: bool,
-    ) -> DmlPlanMemoKey {
+    ) -> PrebindPlanKey {
         let param_sig = self.memo_param_signature(&normalized_text, parameters);
-        DmlPlanMemoKey::from_context(
-            normalized_text,
+        self.prebind_key(
+            &normalized_text,
             self.plan_cache_context(space_name, param_sig, in_write_context),
         )
     }
@@ -944,31 +874,6 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         let mut guard = self.dml_template_ast.lock();
         guard.retain(|(text, _)| text != &normalized_text);
         guard.insert(0, (normalized_text, ast));
-        guard.truncate(DML_SHAPE_CACHE_CAP);
-    }
-
-    /// Look up a memoized DML physical plan by full key. Serves only as a
-    /// candidate: callers must still validate the plan with
-    /// `PhysicalPlanValidator::check_compatibility` before serving it, since
-    /// the memo key cannot capture post-planning layout changes.
-    pub(crate) fn find_dml_plan(&self, key: &DmlPlanMemoKey) -> Option<Arc<PhysicalPlan>> {
-        let mut guard = self.dml_plan_memo.lock();
-        let pos = guard.iter().position(|entry| entry.key == *key)?;
-        if pos > 0 {
-            let entry = guard.remove(pos);
-            guard.insert(0, entry);
-        }
-        Some(guard[0].plan.clone())
-    }
-
-    /// Store a memoized DML physical plan, replacing any same-key entry and
-    /// evicting the least recently used entry beyond [`DML_SHAPE_CACHE_CAP`].
-    /// Stale keys (e.g. from before a schema-generation bump) never match
-    /// new lookups and age out through this cap.
-    pub(crate) fn store_dml_plan(&self, key: DmlPlanMemoKey, plan: Arc<PhysicalPlan>) {
-        let mut guard = self.dml_plan_memo.lock();
-        guard.retain(|entry| entry.key != key);
-        guard.insert(0, DmlPlanMemoEntry { key, plan });
         guard.truncate(DML_SHAPE_CACHE_CAP);
     }
 }

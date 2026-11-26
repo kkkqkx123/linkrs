@@ -281,6 +281,7 @@ pub struct ExecutionMetadata {
     pub cache_probe_us: u64,
     pub plan_cache_hit: bool,
     pub compiled_plan_memo_hit: bool,
+    pub dml_plan_memo_hit: bool,
 }
 
 /// Transaction handler

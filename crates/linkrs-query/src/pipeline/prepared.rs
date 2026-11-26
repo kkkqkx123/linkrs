@@ -267,7 +267,7 @@ impl<S: QueryStorage + 'static> crate::pipeline::QueryPipelineManager<S> {
                 &query_context.request_context().parameters,
                 in_write_context,
             );
-            self.find_dml_plan(&key).is_some()
+            self.dml_plan_memo.contains(&key)
         } else {
             false
         };
@@ -294,7 +294,7 @@ impl<S: QueryStorage + 'static> crate::pipeline::QueryPipelineManager<S> {
             if let Some(key) =
                 self.compiled_plan_memo_key(&effective_query, &query_context, param_sig)
             {
-                compiled_memo_hit = self.contains_compiled_plan(&key);
+                compiled_memo_hit = self.compiled_plan_memo.contains(&key);
             }
             if !compiled_memo_hit {
                 let in_write_context = crate::context::staged_writes_visible(
@@ -318,8 +318,13 @@ impl<S: QueryStorage + 'static> crate::pipeline::QueryPipelineManager<S> {
             None
         };
         let bound = if memo_hit || plain_hit || compiled_memo_hit {
-            self.dml_bind_skipped_count
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            // Count the bind skip in the namespace that supplied the plan:
+            // a DML memo hit must never inflate read metrics, and vice versa.
+            if memo_hit {
+                self.dml_plan_memo.record_bind_skip();
+            } else {
+                self.compiled_plan_memo.record_bind_skip();
+            }
             None
         } else {
             self.bind_parsed_statement(parser_result.ast, query_context.clone())?

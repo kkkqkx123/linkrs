@@ -18,7 +18,6 @@ use linkrs_query::executor::base::ExecutionResult;
 use linkrs_query::optimizer::{OptimizerEngine, PartitioningConfig};
 use linkrs_query::pipeline::QueryPipelineManager;
 use linkrs_query::storage::{GraphStorage, StorageSchemaOps, StorageWriter};
-use parking_lot::RwLock;
 use std::sync::Arc;
 
 const SPACE: &str = "compiled_memo";
@@ -146,7 +145,8 @@ fn repeated_partitioned_read_hits_memo_without_bind_or_optimize() {
     assert_eq!(hot_profile.stages.optimize_us, 0);
     assert_eq!(hot_profile.stages.statistics_us, 0);
     assert_eq!(pipeline.compiled_plan_memo_hits(), 1);
-    assert_eq!(pipeline.dml_bind_skipped_count(), 1);
+    assert_eq!(pipeline.compiled_plan_bind_skipped_count(), 1);
+    assert_eq!(pipeline.dml_bind_skipped_count(), 0);
 }
 
 #[test]
@@ -180,4 +180,38 @@ fn ddl_and_statistics_refresh_retire_the_memo() {
 
     profiled(&mut pipeline, QUERY);
     assert_eq!(pipeline.compiled_plan_memo_hits(), 3);
+}
+
+#[test]
+fn read_and_dml_memos_keep_independent_entries_and_counters() {
+    let mut pipeline = fixture();
+    let (cold_rows, _) = profiled(&mut pipeline, QUERY);
+    let (hot_rows, hot_profile) = profiled(&mut pipeline, QUERY);
+    assert_eq!(hot_rows, cold_rows);
+    assert!(hot_profile.stages.compiled_plan_memo_hit);
+    assert_eq!(pipeline.compiled_plan_memo_hits(), 1);
+
+    for vid in [3000, 3001] {
+        pipeline
+            .execute_query_with_space(
+                &format!("INSERT VERTEX Node(id, value) VALUES {vid}:({vid}, 3000)"),
+                Some(space_info()),
+            )
+            .expect("insert should succeed");
+    }
+    assert!(pipeline.dml_plan_memo_hits() > 0);
+    assert!(pipeline.dml_bind_skipped_count() > 0);
+    assert_eq!(pipeline.dml_plan_memo_len(), 1);
+    assert_eq!(pipeline.compiled_plan_memo_len(), 1);
+
+    // Writes advance the statistics epoch, so the read key may legitimately
+    // rotate once. It must still warm again and serve the same rows.
+    let read_hits_before_writes = 1;
+    let (after_rows, _) = profiled(&mut pipeline, QUERY);
+    assert_eq!(after_rows, cold_rows, "DML must not change queried rows");
+    let (final_rows, final_profile) = profiled(&mut pipeline, QUERY);
+    assert_eq!(final_rows, cold_rows);
+    assert!(final_profile.stages.compiled_plan_memo_hit);
+    assert!(pipeline.compiled_plan_memo_hits() > read_hits_before_writes);
+    assert!(pipeline.compiled_plan_bind_skipped_count() >= 2);
 }

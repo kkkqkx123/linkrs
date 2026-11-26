@@ -23,6 +23,8 @@ pub struct StageMetrics {
     pub plan_cache_hit: bool,
     /// Whether the read-only compiled physical-plan memo served this query.
     pub compiled_plan_memo_hit: bool,
+    /// Whether the shape-normalized DML memo served this query.
+    pub dml_plan_memo_hit: bool,
 }
 
 impl StageMetrics {
@@ -37,6 +39,7 @@ impl StageMetrics {
             cache_probe_us: 0,
             plan_cache_hit: false,
             compiled_plan_memo_hit: false,
+            dml_plan_memo_hit: false,
         }
     }
 

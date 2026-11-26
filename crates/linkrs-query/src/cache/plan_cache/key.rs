@@ -6,15 +6,16 @@
 //!   identity. Read queries and DML both use it. Partitioned plans append a
 //!   layout fingerprint computed from partition ranges, source, and storage
 //!   layout version.
-//! - Level 2 (DML memo): keyed by shape-normalized template text through
-//!   `fingerprint_less_from_context`. The partition fingerprint is absent by
-//!   construction because layout is unknown before binding. Layout
-//!   correctness relies on the single serve-time check
-//!   (`QueryPlanCache::serve_checked`), not on the key.
+//! - Level 2 (pre-bind memos): read and DML each own a bounded instance.
+//!   Both derive their base identity from `fingerprint_less_from_context`;
+//!   the read instance extends it with statistics and feedback epochs. The
+//!   partition fingerprint is absent by construction because layout is
+//!   unknown before binding. Layout correctness relies on the single
+//!   serve-time check (`QueryPlanCache::serve_checked`), not on the key.
 //!
 //! Dimension table (any change here must update memo and plan paths together):
 //!
-//! | Dimension             | Level 1 plan key | Level 2 memo key | Notes |
+//! | Dimension             | Level 1 plan key | Level 2 pre-bind key | Notes |
 //! |-----------------------|------------------|------------------|-------|
 //! | Normalized text       | whitespace-folded query | shape template (`@__dml_N` placeholders) | Memo text is always a template; whitespace folding differs from slow-query `?` grouping which must keep literals distinct |
 //! | Space name            | part of hash, mismatch misses | same | Blocks cross-space reuse |
@@ -32,7 +33,7 @@
 //!   the DDL naturally miss. No entry is rewritten in place.
 //! - Per-space invalidation removes plan-cache entries for one space.
 //!   Global catalog changes (attach/detach) clear the whole plan cache.
-//!   The DML memo is cleared as a linear-table drain on the same path.
+//!   Both pre-bind memos are cleared as linear-table drains on the same path.
 //!   Per-entry table lists stay diagnostic metadata only: generation
 //!   retirement plus space/global clearing is the invalidation mechanism,
 //!   per-table plan invalidation is intentionally not implemented
@@ -42,13 +43,14 @@
 //!   schema-independent; the full clear path does not keep it.
 //! - Template AST retention after DDL is safe because templates contain no
 //!   schema references, only shape placeholders.
-//! - The memo stays a linear table capped at 16 entries. Lookup is a linear
-//!   scan with move-to-front approximation. Stale keys age out through the
-//!   cap; no TTL or weight bookkeeping is used because bind-skip hot-path
-//!   cost is negligible at this size.
-//! - Memo hits must pass the single checked exit before serving.
-//!   Failures fall through to replan and bump the unified checked-serve
-//!   failure counter. Layout correctness never depends on key equality alone.
+//! - Each pre-bind memo is a linear table with its own capacity. Lookup is
+//!   a linear scan with move-to-front approximation. Stale keys age out
+//!   through the cap; no TTL or weight bookkeeping is used because bind-skip
+//!   hot-path cost is negligible at this size.
+//! - Memo hits must pass the single checked exit before serving. Failures
+//!   fall through to replan and bump the failure counter of the namespace
+//!   that owns the candidate. Layout correctness never depends on key
+//!   equality alone.
 use crate::planning::plan::execution_plan::PartitionSpec;
 use std::hash::Hasher;
 

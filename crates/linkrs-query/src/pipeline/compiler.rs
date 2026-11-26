@@ -1,4 +1,4 @@
-use super::QueryPipelineManager;
+use super::{PrebindPlanKey, QueryPipelineManager};
 use crate::binder::BoundStatement;
 use crate::executor::streaming::plan::{
     PhysicalPlan, PhysicalPlanBuildContext, PhysicalPlanBuilder, PhysicalPlanValidator,
@@ -24,6 +24,7 @@ pub(crate) struct CompileTimes {
     pub cache_probe_us: u64,
     pub plan_cache_hit: bool,
     pub compiled_plan_memo_hit: bool,
+    pub dml_plan_memo_hit: bool,
 }
 
 impl CompileTimes {
@@ -35,12 +36,20 @@ impl CompileTimes {
             cache_probe_us: probe_us,
             plan_cache_hit: true,
             compiled_plan_memo_hit: false,
+            dml_plan_memo_hit: false,
         }
     }
 
     fn compiled_memo_hit(probe_us: u64) -> Self {
         Self {
             compiled_plan_memo_hit: true,
+            ..Self::cache_hit(probe_us)
+        }
+    }
+
+    fn dml_memo_hit(probe_us: u64) -> Self {
+        Self {
+            dml_plan_memo_hit: true,
             ..Self::cache_hit(probe_us)
         }
     }
@@ -130,6 +139,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                 cache_probe_us: 0,
                 plan_cache_hit: false,
                 compiled_plan_memo_hit: false,
+                dml_plan_memo_hit: false,
             },
         ))
     }
@@ -276,28 +286,33 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             None
         };
         let dml_memo_key = if dml_shape_cacheable {
-            Some(super::DmlPlanMemoKey::from_context(
-                query_text.to_string(),
-                cache_context.clone(),
-            ))
+            Some(self.prebind_key(query_text, cache_context.clone()))
         } else {
             None
         };
 
         let cache_start = std::time::Instant::now();
         if let Some(key) = compiled_key.as_ref() {
-            if let Some(plan) = self.serve_compiled_plan(key, schema_version) {
+            if let Some(plan) =
+                self.compiled_plan_memo
+                    .serve_prebind(key, &self.plan_cache, schema_version)
+            {
                 return Ok((
                     plan,
                     CompileTimes::compiled_memo_hit(cache_start.elapsed().as_micros() as u64),
                 ));
             }
         }
-        if let Some(plan) = self.serve_dml_memo(dml_memo_key.as_ref(), schema_version) {
-            return Ok((
-                plan,
-                CompileTimes::cache_hit(cache_start.elapsed().as_micros() as u64),
-            ));
+        if let Some(key) = dml_memo_key.as_ref() {
+            if let Some(plan) =
+                self.dml_plan_memo
+                    .serve_prebind(key, &self.plan_cache, schema_version)
+            {
+                return Ok((
+                    plan,
+                    CompileTimes::dml_memo_hit(cache_start.elapsed().as_micros() as u64),
+                ));
+            }
         }
 
         if let Some(plan) = self.serve_plain_cache(
@@ -338,7 +353,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                     .is_ok()
                 {
                     if let Some(key) = dml_memo_key.clone() {
-                        self.store_dml_plan(key, cached.plan.clone());
+                        self.dml_plan_memo.store(key, cached.plan.clone());
                     }
                     // Statistics and feedback may have advanced while the
                     // optimized plan cache was being reused; re-arm the
@@ -347,15 +362,13 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                         if let Some(key) =
                             self.compiled_plan_memo_key(query_text, &query_context, param_signature)
                         {
-                            self.store_compiled_plan(key, cached.plan.clone());
+                            self.compiled_plan_memo.store(key, cached.plan.clone());
                         }
                     }
                     times.plan_cache_hit = true;
                     return Ok((cached.plan.clone(), times));
                 }
-                self.dml_memo_failures
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                log::debug!("Partitioned plan failed checked serve, falling through to rebuild");
+                self.record_shared_checked_failure(dml_memo_key.is_some());
             }
         }
 
@@ -366,13 +379,13 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             if let Some(key) =
                 self.compiled_plan_memo_key(query_text, &query_context, param_signature)
             {
-                self.store_compiled_plan(key, plan.clone());
+                self.compiled_plan_memo.store(key, plan.clone());
             }
         }
         let cacheable = super::prepared::is_read_only_cacheable(stmt) || dml_shape_cacheable;
         if cacheable {
             if let Some(key) = dml_memo_key.clone() {
-                self.store_dml_plan(key, plan.clone());
+                self.dml_plan_memo.store(key, plan.clone());
             }
             if let Some(spec) = plan.partition_spec() {
                 let dependent_tables = collect_dependent_tables(bound);
@@ -406,50 +419,15 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         Ok((plan, times))
     }
 
-    /// Serve a compiled read-only plan through the single checked exit.
-    ///
-    /// The key is fully known before binding, but the plan still carries a
-    /// partition layout decided during optimization. Only the shared
-    /// checked-serve validator decides whether that layout is still usable.
-    pub(crate) fn serve_compiled_plan(
-        &self,
-        key: &super::CompiledPlanMemoKey,
-        schema_version: Option<u64>,
-    ) -> Option<Arc<PhysicalPlan>> {
-        let plan = self.find_compiled_plan(key)?;
-        if self.plan_cache.serve_checked(&plan, schema_version).is_ok() {
-            self.compiled_plan_memo_hits
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            return Some(plan);
+    /// Attribute a checked-serve rejection on a shared plan-cache path to
+    /// the namespace that owns the candidate. Both paths still fall through
+    /// to a fresh compile.
+    fn record_shared_checked_failure(&self, dml_namespace: bool) {
+        if dml_namespace {
+            self.dml_plan_memo.record_failure();
+        } else {
+            self.compiled_plan_memo.record_failure();
         }
-        self.compiled_plan_memo_failures
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        log::debug!("Compiled plan failed checked serve, falling through to replan");
-        None
-    }
-
-    /// Serve a DML memo hit through the single checked exit.
-    ///
-    /// Single resolver for the memo probe shared by the prepare-time
-    /// bind-skip check and the compile-time serve path. Returns the plan
-    /// only after `serve_checked` validates the layout version; check
-    /// failures fall through to replan and bump the failure counter.
-    pub(crate) fn serve_dml_memo(
-        &self,
-        key: Option<&super::DmlPlanMemoKey>,
-        schema_version: Option<u64>,
-    ) -> Option<Arc<PhysicalPlan>> {
-        let key = key?;
-        let plan = self.find_dml_plan(key)?;
-        if self.plan_cache.serve_checked(&plan, schema_version).is_ok() {
-            self.last_dml_plan_hits
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            return Some(plan);
-        }
-        self.dml_memo_failures
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        log::debug!("DML memo plan failed checked serve, falling through to replan");
-        None
     }
 
     /// Serve a plain (non-partitioned) plan-cache hit.
@@ -457,15 +435,16 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
     /// Memo backfill keeps the bind-skip fast path warm when the plan cache
     /// serves a shape-normalized entry first. Partitioned entries are
     /// resolved separately after optimization when the partition spec exists.
-    /// Checked-serve failures share the unified failure counter with the
-    /// memo and partitioned paths and fall through to replan.
+    /// Checked-serve failures are attributed to the owning namespace and
+    /// fall through to replan.
     pub(crate) fn serve_plain_cache(
         &self,
         query_text: &str,
         cache_context: &crate::cache::PlanCacheContext,
-        dml_memo_key: Option<super::DmlPlanMemoKey>,
+        dml_memo_key: Option<PrebindPlanKey>,
         schema_version: Option<u64>,
     ) -> Option<Arc<PhysicalPlan>> {
+        let dml_namespace = dml_memo_key.is_some();
         let cached = self
             .plan_cache
             .get_with_context(query_text, cache_context.clone())?;
@@ -475,13 +454,11 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             .is_ok()
         {
             if let Some(key) = dml_memo_key {
-                self.store_dml_plan(key, cached.plan.clone());
+                self.dml_plan_memo.store(key, cached.plan.clone());
             }
             return Some(cached.plan.clone());
         }
-        self.dml_memo_failures
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        log::debug!("Plain plan cache hit failed checked serve, falling through to replan");
+        self.record_shared_checked_failure(dml_namespace);
         None
     }
 

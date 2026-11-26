@@ -15,6 +15,7 @@
 pub mod config;
 pub mod cte_cache;
 pub mod plan_cache;
+pub(crate) mod prebind_plan_memo;
 pub mod stats;
 
 // Re-export config types

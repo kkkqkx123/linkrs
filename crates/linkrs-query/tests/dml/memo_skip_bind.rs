@@ -280,3 +280,85 @@ fn test_param_type_change_restores_bind_path() {
         Some(&linkrs_core::Value::Double(3.0))
     );
 }
+
+/// Statistics refresh retires read plans but not DML plans: the DML planner
+/// does not price statements, so ANALYZE must not lower its hit rate.
+#[test]
+fn test_analyze_keeps_dml_memo_and_template_ast_warm() {
+    let mut fx = Fixture::new();
+    let space = fx.create_space_with_person_tag("analyze_space");
+
+    fx.insert(
+        &space,
+        "INSERT VERTEX person(name, age) VALUES \"p1\": (\"A\", 1)",
+    );
+    fx.insert(
+        &space,
+        "INSERT VERTEX person(name, age) VALUES \"p2\": (\"B\", 2)",
+    );
+    assert_eq!(fx.pipeline.dml_bind_skipped_count(), 1);
+    let template_parses = fx.pipeline.dml_template_ast_parse_count();
+    assert_eq!(template_parses, 1);
+
+    fx.pipeline
+        .collect_statistics("analyze_space", true)
+        .expect("forced statistics refresh");
+
+    fx.insert(
+        &space,
+        "INSERT VERTEX person(name, age) VALUES \"p3\": (\"C\", 3)",
+    );
+    assert_eq!(
+        fx.pipeline.dml_bind_skipped_count(),
+        2,
+        "ANALYZE must not retire a DML plan"
+    );
+    assert_eq!(
+        fx.pipeline.dml_template_ast_parse_count(),
+        template_parses,
+        "ANALYZE must not reparse the shape template"
+    );
+    assert_eq!(fx.pipeline.dml_plan_memo_failure_count(), 0);
+}
+
+/// DDL drops memoized plans but leaves the schema-independent parsed template.
+#[test]
+fn test_ddl_clears_memo_but_retains_template_ast() {
+    let mut fx = Fixture::new();
+    let space = fx.create_space_with_person_tag("ddl_template_space");
+
+    fx.insert(
+        &space,
+        "INSERT VERTEX person(name, age) VALUES \"p1\": (\"A\", 1)",
+    );
+    fx.insert(
+        &space,
+        "INSERT VERTEX person(name, age) VALUES \"p2\": (\"B\", 2)",
+    );
+    assert_eq!(fx.pipeline.dml_bind_skipped_count(), 1);
+    assert_eq!(fx.pipeline.dml_plan_memo_len(), 1);
+    let template_parses = fx.pipeline.dml_template_ast_parse_count();
+    assert_eq!(template_parses, 1);
+
+    fx.pipeline
+        .execute_query_with_space("ALTER TAG person ADD (note STRING)", Some(space.clone()))
+        .expect("alter tag");
+    assert_eq!(fx.pipeline.dml_plan_memo_len(), 0);
+    assert_eq!(
+        fx.pipeline.dml_template_ast_parse_count(),
+        template_parses,
+        "templates are schema-independent and survive DDL"
+    );
+
+    fx.insert(
+        &space,
+        "INSERT VERTEX person(name, age) VALUES \"p3\": (\"C\", 3)",
+    );
+    assert_eq!(fx.pipeline.dml_bind_skipped_count(), 1);
+    fx.insert(
+        &space,
+        "INSERT VERTEX person(name, age) VALUES \"p4\": (\"D\", 4)",
+    );
+    assert_eq!(fx.pipeline.dml_bind_skipped_count(), 2);
+    assert_eq!(fx.pipeline.dml_template_ast_parse_count(), template_parses);
+}

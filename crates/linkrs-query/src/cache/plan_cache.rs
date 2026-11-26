@@ -638,9 +638,9 @@ impl QueryPlanCache {
         self.stats.clone()
     }
 
-    /// Record a hit without a cache lookup, for the Level 2 same-shape DML
-    /// memo that short-circuits before `get_with_context`. Keeps the hit rate
-    /// accounting consistent with the regular lookup path.
+    /// Record a hit without a cache lookup, for pre-bind memos that
+    /// short-circuit before `get_with_context`. Keeps the hit rate accounting
+    /// consistent with the regular lookup path.
     pub fn record_memo_hit(&self) {
         self.stats.counters.record_hit();
         if let Ok(ref sm_guard) = self.stats_manager.read() {
@@ -650,7 +650,7 @@ impl QueryPlanCache {
         }
     }
 
-    /// Single checked exit for cached plans (memo, plan cache, and
+    /// Single checked exit for cached plans (pre-bind memos, plan cache, and
     /// partitioned entries alike).
     ///
     /// Wraps `PhysicalPlanValidator::check_compatibility` so success and
