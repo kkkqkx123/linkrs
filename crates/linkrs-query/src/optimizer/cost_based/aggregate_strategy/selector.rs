@@ -283,20 +283,32 @@ impl AggregateStrategySelector {
         context: &AggregateContext,
         _group_by_cardinality: u64,
     ) -> f64 {
-        self.cost_calculator.calculate_aggregate_cost(
+        let budget = if context.memory_limit > 0 {
+            context.memory_limit
+        } else {
+            self.cost_calculator.config().memory_pressure_threshold as u64
+        };
+        self.cost_calculator.calculate_aggregate_cost_with_budget(
             context.input_rows,
             context.agg_function_count,
             context.group_keys.len(),
+            budget,
         )
     }
 
     /// Calculating the cost of sorting and aggregation operations
     fn calculate_sort_aggregate_cost(&self, context: &AggregateContext) -> f64 {
         // Sorting cost + Aggregation cost
-        let sort_cost = self.cost_calculator.calculate_sort_cost(
+        let budget = if context.memory_limit > 0 {
+            context.memory_limit
+        } else {
+            self.cost_calculator.config().memory_pressure_threshold as u64
+        };
+        let sort_cost = self.cost_calculator.calculate_sort_cost_with_budget(
             context.input_rows,
             context.group_keys.len(),
             None,
+            budget,
         );
 
         // The aggregated cost after sorting is lower (the data has been grouped).

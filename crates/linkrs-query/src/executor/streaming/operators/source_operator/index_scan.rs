@@ -429,6 +429,7 @@ mod tests {
             chunk_size: 2048,
             partition_id: None,
             physical_operator_id: PhysicalOperatorId(0),
+            ..OperatorConfig::default()
         }
     }
 

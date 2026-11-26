@@ -13,6 +13,7 @@ fn config_for(base: &OperatorBase) -> OperatorConfig {
         chunk_size: base.chunk_size,
         partition_id: base.partition_id,
         physical_operator_id: base.physical_operator_id,
+        spill_mode: base.spill_mode,
     }
 }
 

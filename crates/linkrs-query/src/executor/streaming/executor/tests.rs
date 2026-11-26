@@ -1103,3 +1103,228 @@ fn partial_aggregate_filter_counts_only_qualifying_rows() {
         "partial must hold 2 qualifying rows"
     );
 }
+
+/// Build a runtime with a real spill manager for constrained-memory tests.
+fn pressure_runtime(query_id: u64) -> Arc<ExecutionRuntime> {
+    use crate::executor::base::{MemoryBudget, SearchContext};
+    use crate::executor::streaming::runtime::QueryIdentity;
+    use crate::executor::streaming::spill::{SpillConfig, SpillManager};
+
+    let runtime = Arc::new(ExecutionRuntime::new(
+        QueryIdentity {
+            query_id,
+            session_id: None,
+            space_name: None,
+        },
+        MemoryBudget::new(64 * 1024 * 1024),
+        None,
+        SearchContext::default(),
+    ));
+    let manager = Arc::new(
+        SpillManager::new(
+            SpillConfig {
+                max_spill_files: 2048,
+                ..SpillConfig::default()
+            },
+            query_id,
+        )
+        .expect("spill manager"),
+    );
+    runtime.set_spill_manager(Some(manager));
+    runtime
+}
+
+fn collect_rows(executor: &mut StreamingExecutor) -> Vec<Vec<Value>> {
+    let mut rows = Vec::new();
+    while let Some(chunk) = executor.advance().expect("advance pipeline") {
+        rows.extend(chunk.rows);
+    }
+    executor.close().expect("close pipeline");
+    rows
+}
+
+fn sort_pipeline(
+    rows: Vec<Vec<Value>>,
+    mode: crate::executor::base::SpillMode,
+    query_id: u64,
+) -> (Vec<Vec<Value>>, Arc<ExecutionRuntime>) {
+    use crate::executor::base::MemoryBudget;
+    use crate::executor::streaming::operators::spec::BlockingSpec;
+
+    let runtime = pressure_runtime(query_id);
+    let budget = MemoryBudget::new(64 * 1024 * 1024);
+    let layout = empty_layout();
+    let col_names = vec!["k".to_string(), "v".to_string()];
+    let scan = Box::new(scan_executor(rows, col_names.clone()));
+    let sort = StreamingExecutor::Blocking(
+        OperatorBase::new(10)
+            .with_runtime(Some(runtime.clone()))
+            .with_physical_operator_id(PhysicalOperatorId(100))
+            .with_output_layout(layout.clone())
+            .with_spill_mode(mode),
+        scan,
+        BlockingOperator::from_spec_with_mode(
+            &BlockingSpec::Sort {
+                sort_expressions: vec![linkrs_core::types::expr::Expression::variable("k")],
+                sort_directions: vec![SortDirection::Ascending],
+            },
+            &budget,
+            layout,
+            mode,
+        ),
+    );
+    let mut executor = sort;
+    executor.open().expect("open sort");
+    let rows = collect_rows(&mut executor);
+    (rows, runtime)
+}
+
+#[test]
+fn external_sort_preserves_single_row() {
+    use crate::executor::base::SpillMode;
+
+    let row = vec![Value::BigInt(7), Value::string("only")];
+    let (rows, _) = sort_pipeline(
+        vec![row.clone()],
+        SpillMode::ExternalFromStart { local_limit: 1 },
+        5001,
+    );
+    assert_eq!(rows, vec![row]);
+}
+
+#[test]
+fn external_sort_matches_in_memory_and_records_spill() {
+    use crate::executor::base::SpillMode;
+
+    let rows: Vec<Vec<Value>> = (0..800)
+        .map(|i| {
+            vec![
+                Value::BigInt(800 - i),
+                Value::string(format!("v{}", i % 17)),
+            ]
+        })
+        .collect();
+    let (spilled, runtime) = sort_pipeline(
+        rows.clone(),
+        SpillMode::ExternalFromStart { local_limit: 4096 },
+        5002,
+    );
+    let (plain, _) = sort_pipeline(rows, SpillMode::OnDemand, 5003);
+    assert_eq!(spilled, plain);
+
+    let profile = runtime.profile().flush_to_collector();
+    let total_spilled: u64 = profile
+        .operators
+        .values()
+        .map(|entry| entry.spill_count)
+        .sum();
+    assert!(total_spilled > 0, "external start must write spill runs");
+}
+
+#[test]
+fn concurrent_external_queries_keep_results_isolated() {
+    use crate::executor::base::SpillMode;
+
+    let handles: Vec<_> = (0..4)
+        .map(|worker| {
+            std::thread::spawn(move || {
+                let rows: Vec<Vec<Value>> = (0..300)
+                    .map(|i| {
+                        vec![
+                            Value::BigInt(((i + worker * 37) % 11) as i64),
+                            Value::string(format!("w{}_{}", worker, i)),
+                        ]
+                    })
+                    .collect();
+                let (spilled, _) = sort_pipeline(
+                    rows.clone(),
+                    SpillMode::ExternalFromStart { local_limit: 2048 },
+                    6000 + worker as u64,
+                );
+                let mut expected = rows;
+                expected.sort_by(|a, b| compare_values(&a[0], &b[0]));
+                assert_eq!(spilled, expected);
+            })
+        })
+        .collect();
+    for handle in handles {
+        handle.join().expect("worker thread");
+    }
+}
+
+#[test]
+fn multiple_spilling_operators_preserve_result_set() {
+    use crate::executor::base::SpillMode;
+    use crate::executor::streaming::operators::spec::BlockingSpec;
+
+    let rows: Vec<Vec<Value>> = (0..400)
+        .map(|i| {
+            vec![
+                Value::BigInt((i % 23) as i64),
+                Value::string(format!("s{}", i % 5)),
+            ]
+        })
+        .collect();
+
+    let run = |mode: SpillMode, query_id: u64| {
+        use crate::executor::base::MemoryBudget;
+
+        let runtime = pressure_runtime(query_id);
+        let budget = MemoryBudget::new(64 * 1024 * 1024);
+        let layout = empty_layout();
+        let col_names = vec!["k".to_string(), "v".to_string()];
+        let scan = Box::new(scan_executor(rows.clone(), col_names.clone()));
+        let sort = StreamingExecutor::Blocking(
+            OperatorBase::new(20)
+                .with_runtime(Some(runtime.clone()))
+                .with_physical_operator_id(PhysicalOperatorId(200))
+                .with_output_layout(layout.clone())
+                .with_spill_mode(mode),
+            scan,
+            BlockingOperator::from_spec_with_mode(
+                &BlockingSpec::Sort {
+                    sort_expressions: vec![linkrs_core::types::expr::Expression::variable("k")],
+                    sort_directions: vec![SortDirection::Ascending],
+                },
+                &budget,
+                layout.clone(),
+                mode,
+            ),
+        );
+        let distinct = StreamingExecutor::Blocking(
+            OperatorBase::new(21)
+                .with_runtime(Some(runtime.clone()))
+                .with_physical_operator_id(PhysicalOperatorId(201))
+                .with_output_layout(layout.clone())
+                .with_spill_mode(mode),
+            Box::new(sort),
+            BlockingOperator::from_spec_with_mode(&BlockingSpec::Distinct, &budget, layout, mode),
+        );
+        let mut executor = distinct;
+        executor.open().expect("open multi-operator pipeline");
+        let output = collect_rows(&mut executor);
+        let mut normalized: Vec<String> = output.iter().map(|row| format!("{:?}", row)).collect();
+        normalized.sort();
+        (normalized, runtime)
+    };
+
+    let (external, runtime) = run(SpillMode::ExternalFromStart { local_limit: 2048 }, 7001);
+    let (plain, _) = run(SpillMode::OnDemand, 7002);
+    assert_eq!(external, plain);
+
+    let profile = runtime.profile().flush_to_collector();
+    let profiled_runs: u64 = profile
+        .operators
+        .values()
+        .map(|entry| entry.spill_count)
+        .sum();
+    assert!(profiled_runs > 0, "sort should have spilled");
+    let total_runs = runtime
+        .columnar_stats()
+        .spill_runs
+        .load(std::sync::atomic::Ordering::Relaxed);
+    assert!(
+        total_runs > profiled_runs,
+        "partitioned distinct should add spill runs beyond the sort path"
+    );
+}

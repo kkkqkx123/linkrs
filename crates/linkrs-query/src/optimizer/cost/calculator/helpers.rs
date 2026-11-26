@@ -10,6 +10,13 @@ use linkrs_core::value::Value;
 use super::super::config::ROWS_PER_PAGE;
 use super::CostCalculator;
 
+/// Estimated disk work for one blocking operator.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct SpillCostEstimate {
+    pub spill_bytes: u64,
+    pub io_cost: f64,
+}
+
 impl CostCalculator {
     // ==================== Auxiliary Methods ====================
 
@@ -119,6 +126,29 @@ impl CostCalculator {
             base_cost * penalty + memory_cost
         } else {
             base_cost + memory_cost
+        }
+    }
+
+    /// Estimate spill I/O from the row count, the shared row width and the
+    /// memory available to this operator. `passes` counts run writes/reads.
+    pub fn estimate_spill_cost(
+        &self,
+        rows: u64,
+        budget_bytes: u64,
+        passes: u64,
+    ) -> SpillCostEstimate {
+        let working_set = rows.saturating_mul(self.config.row_width_bytes as u64);
+        let spill_bytes = working_set.saturating_sub(budget_bytes);
+        if spill_bytes == 0 || passes == 0 {
+            return SpillCostEstimate::default();
+        }
+        let page_bytes = ROWS_PER_PAGE
+            .saturating_mul(self.config.row_width_bytes as u64)
+            .max(1);
+        let pages = spill_bytes.div_ceil(page_bytes);
+        SpillCostEstimate {
+            spill_bytes,
+            io_cost: pages as f64 * self.config.external_sort_page_cost * passes as f64,
         }
     }
 

@@ -65,6 +65,8 @@ mod join;
 mod scan;
 mod traverse;
 
+pub use helpers::SpillCostEstimate;
+
 impl Default for CostCalculator {
     fn default() -> Self {
         Self {

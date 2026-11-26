@@ -1,6 +1,6 @@
 //! Filtering, projection, sorting, aggregation and set-operation cost models.
 
-use super::super::config::{ROWS_PER_PAGE, TOPN_RATIO};
+use super::super::config::TOPN_RATIO;
 use super::CostCalculator;
 
 impl CostCalculator {
@@ -46,6 +46,22 @@ impl CostCalculator {
         sort_columns: usize,
         limit: Option<i64>,
     ) -> f64 {
+        self.calculate_sort_cost_with_budget(
+            input_rows,
+            sort_columns,
+            limit,
+            self.config.memory_pressure_threshold as u64,
+        )
+    }
+
+    /// Sorting cost priced against an explicit operator memory budget.
+    pub fn calculate_sort_cost_with_budget(
+        &self,
+        input_rows: u64,
+        sort_columns: usize,
+        limit: Option<i64>,
+        budget_bytes: u64,
+    ) -> f64 {
         if input_rows == 0 {
             return 0.0;
         }
@@ -74,15 +90,10 @@ impl CostCalculator {
             * self.config.cpu_operator_cost
             * self.config.sort_comparison_cost;
 
-        // Determine whether to use external sorting.
-        if input_rows > self.config.memory_sort_threshold {
-            // External sorting: Temporary files need to be read from and written to.
-            let pages = (input_rows / ROWS_PER_PAGE).max(1);
-            let io_cost = pages as f64 * self.config.external_sort_page_cost * 2.0; // Read and write twice
-            cpu_cost + io_cost
-        } else {
-            cpu_cost
-        }
+        // External sorting is priced by the estimated working set that does
+        // not fit the operator budget, not by a row-count threshold alone.
+        let spill = self.estimate_spill_cost(input_rows, budget_bytes, 2);
+        cpu_cost + spill.io_cost
     }
 
     /// Calculating the cost of implementing the “Limit” feature
@@ -121,6 +132,22 @@ impl CostCalculator {
         agg_functions: usize,
         group_by_keys: usize,
     ) -> f64 {
+        self.calculate_aggregate_cost_with_budget(
+            input_rows,
+            agg_functions,
+            group_by_keys,
+            self.config.memory_pressure_threshold as u64,
+        )
+    }
+
+    /// Aggregate cost priced against an explicit operator memory budget.
+    pub fn calculate_aggregate_cost_with_budget(
+        &self,
+        input_rows: u64,
+        agg_functions: usize,
+        group_by_keys: usize,
+        budget_bytes: u64,
+    ) -> f64 {
         // The computational cost of basic aggregate functions
         let agg_cost = input_rows as f64 * agg_functions as f64 * self.config.cpu_operator_cost;
 
@@ -132,13 +159,21 @@ impl CostCalculator {
             0.0
         };
 
-        agg_cost + hash_cost
+        let spill = if group_by_keys > 0 {
+            self.estimate_spill_cost(input_rows, budget_bytes, 2)
+        } else {
+            Default::default()
+        };
+        agg_cost + hash_cost + spill.io_cost
     }
 
     /// Calculating the cost of deduplication (using a hash table)
     pub fn calculate_dedup_cost(&self, input_rows: u64) -> f64 {
         // The overhead associated with hash insertion and checking
-        input_rows as f64 * self.config.cpu_operator_cost * 2.0
+        let cpu = input_rows as f64 * self.config.cpu_operator_cost * 2.0;
+        let spill =
+            self.estimate_spill_cost(input_rows, self.config.memory_pressure_threshold as u64, 2);
+        cpu + spill.io_cost
     }
 
     // ==================== Data Processing and Set Operations ====================

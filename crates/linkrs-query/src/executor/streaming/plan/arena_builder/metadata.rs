@@ -228,7 +228,9 @@ pub(super) fn populate_runtime_metadata(operators: &mut [PhysicalOperatorSpec]) 
             }
             _ => StateOwnership::TreeLocal,
         };
-        operator.properties = derive_physical_properties(&operator.spec);
+        let working_set_bytes = operator.estimated_cardinality.unwrap_or(0.0).max(0.0) as u64
+            * crate::optimizer::cost::config::ESTIMATED_ROW_WIDTH_BYTES as u64;
+        operator.properties = derive_physical_properties(&operator.spec, working_set_bytes);
     }
 }
 
@@ -399,30 +401,55 @@ fn choice_reason_for_spec(spec: &OperatorKindSpec) -> Option<String> {
 ///
 /// This makes Phase D requirement #7 observable: properties are derived from
 /// the node / spec, not hardcoded at each call site.
-pub(super) fn derive_physical_properties(spec: &OperatorKindSpec) -> PhysicalProperties {
+pub(super) fn derive_physical_properties(
+    spec: &OperatorKindSpec,
+    working_set_bytes: u64,
+) -> PhysicalProperties {
+    let spill_threshold = if working_set_bytes > 0 {
+        working_set_bytes
+    } else {
+        SPILL_DEFAULT_THRESHOLD
+    };
     match spec {
         OperatorKindSpec::Source(_) => PhysicalProperties::single_streaming(),
         OperatorKindSpec::Unary(_) => PhysicalProperties::single_streaming(),
         OperatorKindSpec::Blocking(spec) => {
             match spec {
-                BlockingSpec::Sort { .. } => {
-                    PhysicalProperties::single_blocking_spillable(SPILL_DEFAULT_THRESHOLD)
+                // These blocking operators have a real disk spill path.
+                BlockingSpec::Sort { .. }
+                | BlockingSpec::Aggregate { .. }
+                | BlockingSpec::GroupBy { .. }
+                | BlockingSpec::WindowFunction { .. }
+                | BlockingSpec::Window { .. }
+                | BlockingSpec::Distinct
+                | BlockingSpec::Materialize
+                | BlockingSpec::DataCollect
+                | BlockingSpec::RollUpApply { .. } => {
+                    PhysicalProperties::single_blocking_spillable(spill_threshold)
                 }
-                BlockingSpec::PartialAggregate { .. } | BlockingSpec::FinalAggregate { .. } => {
-                    // Partial / final aggregate requires budget tracking but
-                    // does not spill at the operator level.
+                // Partial/final aggregates and bounded top-k operators only
+                // track the shared budget; they have no spill implementation.
+                BlockingSpec::PartialAggregate { .. }
+                | BlockingSpec::FinalAggregate { .. }
+                | BlockingSpec::TopN { .. }
+                | BlockingSpec::LocalTopKDistinct { .. }
+                | BlockingSpec::LocalTopKRows { .. } => {
                     PhysicalProperties::single_blocking_with_budget()
                 }
-                // All other blocking operators (Aggregate, GroupBy, Distinct,
-                // TopN, Window, Materialize, DataCollect, RollUpApply) need
-                // a memory budget.
-                _ => PhysicalProperties::single_blocking_with_budget(),
             }
         }
-        OperatorKindSpec::Join(_)
-        | OperatorKindSpec::Set(_)
-        | OperatorKindSpec::Apply(_)
-        | OperatorKindSpec::Wco(_) => PhysicalProperties::single_blocking_with_budget(),
+        // Grace hash joins spill their build side; other join shapes only
+        // track the shared budget.
+        OperatorKindSpec::Join(join_spec) => match join_spec {
+            crate::executor::streaming::operators::spec::JoinSpec::HashJoin { .. }
+            | crate::executor::streaming::operators::spec::JoinSpec::HashLeftJoin { .. } => {
+                PhysicalProperties::single_blocking_spillable(spill_threshold)
+            }
+            _ => PhysicalProperties::single_blocking_with_budget(),
+        },
+        OperatorKindSpec::Set(_) | OperatorKindSpec::Apply(_) | OperatorKindSpec::Wco(_) => {
+            PhysicalProperties::single_blocking_with_budget()
+        }
         OperatorKindSpec::Exchange(_) => PhysicalProperties::single_blocking(),
         OperatorKindSpec::Graph(_) | OperatorKindSpec::RecursiveFragment(_) => {
             PhysicalProperties::single_streaming()
@@ -1301,5 +1328,30 @@ mod tests {
         // A global aggregation emits exactly one row (the single group
         // row, or the default row on empty input), never input * 0.1.
         assert_eq!(aggregate.estimated_cardinality, Some(1.0));
+    }
+
+    #[test]
+    fn spillable_properties_carry_working_set() {
+        use super::super::super::properties::MemoryPolicy;
+
+        let sort = OperatorKindSpec::Blocking(BlockingSpec::Sort {
+            sort_expressions: vec![linkrs_core::types::expr::Expression::variable("k")],
+            sort_directions: vec![crate::executor::streaming::executor::SortDirection::Ascending],
+        });
+        let props = derive_physical_properties(&sort, 8192);
+        assert!(
+            matches!(props.memory_policy, MemoryPolicy::Spillable { threshold } if threshold == 8192)
+        );
+
+        let aggregate = OperatorKindSpec::Blocking(BlockingSpec::Aggregate {
+            group_by_expressions: vec![linkrs_core::types::expr::Expression::variable("k")],
+            aggregate_functions: Vec::new(),
+            aggregate_filters: Vec::new(),
+            output_col_names: Vec::new(),
+        });
+        assert!(matches!(
+            derive_physical_properties(&aggregate, 8192).memory_policy,
+            MemoryPolicy::Spillable { .. }
+        ));
     }
 }

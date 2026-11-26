@@ -349,7 +349,8 @@ pub(super) fn next_distinct(
                             .collect::<Vec<_>>()
                     }
                 };
-                for (row, typed_key) in keys {
+                let mut keys = keys.into_iter();
+                while let Some((row, typed_key)) = keys.next() {
                     let key = project_key(&row, &state.key_cols);
                     let is_new = match typed_key {
                         Some(value) => !state.typed_seen.contains(&value),
@@ -377,8 +378,13 @@ pub(super) fn next_distinct(
                                 }
                                 state.typed_seen.clear();
 
+                                // The triggering row and every unprocessed row
+                                // in this chunk must go to disk; advancing the
+                                // input here would silently drop the tail.
                                 spiller.insert_row(&row, &sm)?;
-                                memory_tracker.release(MemoryBudget::estimate_row_memory(&row));
+                                for (remaining_row, _) in keys.by_ref() {
+                                    spiller.insert_row(&remaining_row, &sm)?;
+                                }
 
                                 state.partition_spiller = Some(spiller);
                                 state.has_spilled = true;
@@ -426,7 +432,9 @@ pub(super) fn next_distinct(
         state.current_partition = 0;
         state.partition_seen.clear();
 
-        return Ok(None);
+        // Re-enter the replay phase instead of reporting exhaustion: callers
+        // treat the first `None` as end of stream.
+        return next_distinct(memory_tracker, state, ctx, input);
     }
 
     // In-memory output phase: drain keys into the output batch, then emit.

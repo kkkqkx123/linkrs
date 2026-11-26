@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
+use crate::executor::base::SpillMode;
 use crate::executor::streaming::chunk::DataChunk;
 use crate::executor::streaming::plan::types::PhysicalOperatorId;
 use crate::executor::streaming::runtime::ExecutionRuntime;
@@ -41,6 +42,7 @@ pub struct OperatorConfig {
     pub chunk_size: usize,
     pub partition_id: Option<usize>,
     pub physical_operator_id: PhysicalOperatorId,
+    pub spill_mode: SpillMode,
 }
 
 impl Default for OperatorConfig {
@@ -49,6 +51,7 @@ impl Default for OperatorConfig {
             chunk_size: 2048,
             partition_id: None,
             physical_operator_id: PhysicalOperatorId(0),
+            spill_mode: SpillMode::OnDemand,
         }
     }
 }
@@ -482,6 +485,7 @@ impl SourceOperator {
                 chunk_size: 2048,
                 partition_id: None,
                 physical_operator_id: PhysicalOperatorId(0),
+                ..OperatorConfig::default()
             },
             frame: None,
         }
@@ -496,6 +500,7 @@ impl SourceOperator {
                 chunk_size: 2048,
                 partition_id: None,
                 physical_operator_id: PhysicalOperatorId(0),
+                ..OperatorConfig::default()
             },
             frame: None,
         }

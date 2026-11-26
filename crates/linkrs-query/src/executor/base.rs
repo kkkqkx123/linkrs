@@ -19,7 +19,7 @@ pub use execution_context::{ExecutionContext, SearchContext};
 pub use execution_result::{DBResult, ExecutionResult, IntoExecutionResult};
 pub use executor_stats::ExecutorStats;
 pub use memory_budget::{
-    MemoryBudget, MemoryReservation, MemoryTracker, MemoryTrackerReservation, Spillable,
+    MemoryBudget, MemoryReservation, MemoryTracker, MemoryTrackerReservation, SpillMode, Spillable,
 };
 #[cfg(feature = "fulltext")]
 pub use traits::FulltextProvider;

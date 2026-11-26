@@ -37,13 +37,32 @@ use super::super::operators::vector_operator::VectorOperator;
 use super::super::operators::wco_operator::WcoIntersectOperator;
 use super::super::runtime::ExecutionRuntime;
 use super::super::subquery::SubqueryExecutor;
+use super::properties::MemoryPolicy;
 use super::types::{
-    FragmentGraph, FragmentId, FragmentSpec, InputContract, OperatorKindSpec, PhysicalPlan,
+    FragmentGraph, FragmentId, FragmentSpec, InputContract, OperatorKindSpec, PhysicalOperatorSpec,
+    PhysicalPlan,
 };
-use crate::executor::base::MemoryTracker;
+use crate::executor::base::{MemoryBudget, MemoryTracker, SpillMode};
 use linkrs_core::error::QueryError;
 
 use super::super::instance::QueryBindings;
+
+/// Turn a plan's spill hint plus the request budget into an operator start mode.
+///
+/// The plan stays cacheable because it only carries the estimated working set;
+/// the request budget decides at materialization time whether external execution
+/// should start immediately.
+fn spill_mode_for(
+    operator: &PhysicalOperatorSpec,
+    budget: &MemoryBudget,
+    spillable_count: usize,
+) -> SpillMode {
+    let MemoryPolicy::Spillable { threshold } = &operator.properties.memory_policy else {
+        return SpillMode::InMemory;
+    };
+    let budget_share = budget.max_bytes / spillable_count.max(1);
+    SpillMode::from_working_set(*threshold, budget_share)
+}
 
 /// Converts an arena [`PhysicalPlan`] into a [`StreamingExecutor`] tree.
 ///
@@ -143,6 +162,17 @@ impl PhysicalPlanMaterializer {
         bindings: &QueryBindings,
     ) -> Result<StreamingExecutor, QueryError> {
         let mut previous = None;
+        let spillable_count = plan
+            .operators
+            .iter()
+            .filter(|operator| {
+                matches!(
+                    &operator.properties.memory_policy,
+                    MemoryPolicy::Spillable { .. }
+                )
+            })
+            .count()
+            .max(1);
 
         for (operator_index, &op_id) in fragment.operators.iter().enumerate() {
             let op_spec = plan.operator(op_id).ok_or_else(|| {
@@ -154,9 +184,11 @@ impl PhysicalPlanMaterializer {
                 .map(|logical_id| logical_id.0)
                 .unwrap_or(op_spec.operator_id.0 as i64);
             let output_layout = Arc::new(op_spec.output_layout.clone());
+            let spill_mode = spill_mode_for(op_spec, &bindings.memory_budget, spillable_count);
             let base = OperatorBase::new(plan_node_id)
                 .with_physical_operator_id(op_spec.operator_id)
-                .with_output_layout(output_layout.clone());
+                .with_output_layout(output_layout.clone())
+                .with_spill_mode(spill_mode);
 
             let mut inputs = if operator_index == 0 {
                 take_external_inputs(&op_spec.input_contract, fragment_roots)?
@@ -195,19 +227,21 @@ impl PhysicalPlanMaterializer {
                 }
                 OperatorKindSpec::Blocking(blocking_spec) => {
                     let child = take_unary_input(fragment.id, op_id, &mut inputs)?;
-                    let op = BlockingOperator::from_spec(
+                    let op = BlockingOperator::from_spec_with_mode(
                         blocking_spec,
                         &bindings.memory_budget,
                         output_layout.clone(),
+                        spill_mode,
                     );
                     StreamingExecutor::Blocking(base, Box::new(child), op)
                 }
                 OperatorKindSpec::Join(join_spec) => {
                     let (left, right) = take_binary_inputs(fragment.id, op_id, inputs)?;
-                    let op = JoinOperator::from_spec(
+                    let op = JoinOperator::from_spec_with_mode(
                         join_spec,
                         &bindings.memory_budget,
                         output_layout.clone(),
+                        spill_mode,
                     );
                     StreamingExecutor::Join(base, Box::new(left), Box::new(right), Box::new(op))
                 }

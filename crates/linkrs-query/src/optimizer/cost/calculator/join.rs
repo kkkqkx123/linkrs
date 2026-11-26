@@ -11,6 +11,23 @@ impl CostCalculator {
     /// `left_rows`: The number of rows in the left table
     /// `right_rows`: The number of rows in the right table
     pub fn calculate_hash_join_cost(&self, left_rows: u64, right_rows: u64) -> f64 {
+        self.calculate_hash_join_cost_with_budget(
+            left_rows,
+            right_rows,
+            self.config.memory_pressure_threshold as u64,
+        )
+    }
+
+    /// Hash join cost priced against the build side's memory budget.
+    ///
+    /// Grace partitioning writes and reads both inputs before serving each
+    /// partition, so four run passes are charged when the build side spills.
+    pub fn calculate_hash_join_cost_with_budget(
+        &self,
+        left_rows: u64,
+        right_rows: u64,
+        budget_bytes: u64,
+    ) -> f64 {
         // The cost of constructing a hash table
         let build_cost = left_rows as f64 * self.config.cpu_tuple_cost;
         // Detection cost
@@ -18,8 +35,9 @@ impl CostCalculator {
         // Hash construction overhead
         let hash_overhead =
             left_rows as f64 * self.config.hash_build_overhead * self.config.cpu_operator_cost;
+        let spill = self.estimate_spill_cost(left_rows.saturating_add(right_rows), budget_bytes, 4);
 
-        build_cost + probe_cost + hash_overhead
+        build_cost + probe_cost + hash_overhead + spill.io_cost
     }
 
     /// Calculating the cost of a hash left join

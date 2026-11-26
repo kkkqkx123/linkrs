@@ -733,6 +733,7 @@ impl StreamingExecutor {
             chunk_size: self.base().chunk_size,
             partition_id: self.base().partition_id,
             physical_operator_id: self.base().physical_operator_id,
+            spill_mode: self.base().spill_mode,
         };
         self.inject_context(runtime, config);
         let start = Instant::now();

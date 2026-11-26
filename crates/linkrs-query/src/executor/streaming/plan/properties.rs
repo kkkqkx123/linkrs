@@ -57,7 +57,9 @@ impl Default for Parallelism {
 /// - `RequiresBudget`: operator tracks memory via `MemoryTracker` but does NOT
 ///   spill. When budget is exceeded, returns `ResourceExhausted`.
 /// - `Spillable`: operator can spill to disk when budget is exceeded.
-///   `threshold` is a plan-level trigger hint in bytes.
+///   `threshold` is the plan-estimated working set in bytes; the request
+///   budget decides at materialization time whether external execution starts
+///   immediately.
 #[derive(Debug, Clone, Default)]
 pub enum MemoryPolicy {
     #[default]

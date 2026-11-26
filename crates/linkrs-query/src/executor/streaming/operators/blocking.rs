@@ -145,6 +145,20 @@ impl BlockingOperator {
         memory_budget: &crate::executor::base::MemoryBudget,
         output_layout: Arc<SlotLayout>,
     ) -> Self {
+        Self::from_spec_with_mode(
+            spec,
+            memory_budget,
+            output_layout,
+            crate::executor::base::SpillMode::OnDemand,
+        )
+    }
+
+    pub fn from_spec_with_mode(
+        spec: &super::spec::BlockingSpec,
+        memory_budget: &crate::executor::base::MemoryBudget,
+        output_layout: Arc<SlotLayout>,
+        spill_mode: crate::executor::base::SpillMode,
+    ) -> Self {
         let kind = match spec {
             super::spec::BlockingSpec::Sort {
                 sort_expressions,
@@ -152,7 +166,10 @@ impl BlockingOperator {
             } => BlockingOperatorKind::Sort {
                 sort_expressions: sort_expressions.clone(),
                 sort_directions: sort_directions.clone(),
-                memory_tracker: crate::executor::base::MemoryTracker::new(memory_budget.clone()),
+                memory_tracker: crate::executor::base::MemoryTracker::for_mode(
+                    spill_mode,
+                    memory_budget.clone(),
+                ),
                 state: None,
             },
             super::spec::BlockingSpec::Aggregate {
@@ -165,14 +182,20 @@ impl BlockingOperator {
                 aggregate_functions: aggregate_functions.clone(),
                 aggregate_filters: aggregate_filters.clone(),
                 output_col_names: output_col_names.clone(),
-                memory_tracker: crate::executor::base::MemoryTracker::new(memory_budget.clone()),
+                memory_tracker: crate::executor::base::MemoryTracker::for_mode(
+                    spill_mode,
+                    memory_budget.clone(),
+                ),
                 state: None,
             },
             super::spec::BlockingSpec::GroupBy {
                 group_by_expressions,
             } => BlockingOperatorKind::GroupBy {
                 group_by_expressions: group_by_expressions.clone(),
-                memory_tracker: crate::executor::base::MemoryTracker::new(memory_budget.clone()),
+                memory_tracker: crate::executor::base::MemoryTracker::for_mode(
+                    spill_mode,
+                    memory_budget.clone(),
+                ),
                 state: None,
             },
             super::spec::BlockingSpec::WindowFunction {
@@ -185,7 +208,10 @@ impl BlockingOperator {
                 partition_by_exprs: partition_by_exprs.clone(),
                 order_by_exprs: order_by_exprs.clone(),
                 order_by_directions: order_by_directions.clone(),
-                memory_tracker: crate::executor::base::MemoryTracker::new(memory_budget.clone()),
+                memory_tracker: crate::executor::base::MemoryTracker::for_mode(
+                    spill_mode,
+                    memory_budget.clone(),
+                ),
                 state: None,
             },
             super::spec::BlockingSpec::Window {
@@ -198,7 +224,10 @@ impl BlockingOperator {
                 partition_by_exprs: partition_by_exprs.clone(),
                 order_by_exprs: order_by_exprs.clone(),
                 order_by_directions: order_by_directions.clone(),
-                memory_tracker: crate::executor::base::MemoryTracker::new(memory_budget.clone()),
+                memory_tracker: crate::executor::base::MemoryTracker::for_mode(
+                    spill_mode,
+                    memory_budget.clone(),
+                ),
                 state: None,
             },
             super::spec::BlockingSpec::TopN {
@@ -209,11 +238,17 @@ impl BlockingOperator {
                 n: *n,
                 sort_expressions: sort_expressions.clone(),
                 sort_directions: sort_directions.clone(),
-                memory_tracker: crate::executor::base::MemoryTracker::new(memory_budget.clone()),
+                memory_tracker: crate::executor::base::MemoryTracker::for_mode(
+                    spill_mode,
+                    memory_budget.clone(),
+                ),
                 state: None,
             },
             super::spec::BlockingSpec::Distinct => BlockingOperatorKind::Distinct {
-                memory_tracker: crate::executor::base::MemoryTracker::new(memory_budget.clone()),
+                memory_tracker: crate::executor::base::MemoryTracker::for_mode(
+                    spill_mode,
+                    memory_budget.clone(),
+                ),
                 state: None,
             },
             super::spec::BlockingSpec::LocalTopKDistinct {
@@ -225,7 +260,10 @@ impl BlockingOperator {
                 limit: *limit,
                 direction: *direction,
                 key_name: key_name.clone(),
-                memory_tracker: crate::executor::base::MemoryTracker::new(memory_budget.clone()),
+                memory_tracker: crate::executor::base::MemoryTracker::for_mode(
+                    spill_mode,
+                    memory_budget.clone(),
+                ),
                 state: None,
             },
             super::spec::BlockingSpec::LocalTopKRows {
@@ -237,15 +275,24 @@ impl BlockingOperator {
                 limit: *limit,
                 direction: *direction,
                 key_name: key_name.clone(),
-                memory_tracker: crate::executor::base::MemoryTracker::new(memory_budget.clone()),
+                memory_tracker: crate::executor::base::MemoryTracker::for_mode(
+                    spill_mode,
+                    memory_budget.clone(),
+                ),
                 state: None,
             },
             super::spec::BlockingSpec::Materialize => BlockingOperatorKind::Materialize {
-                memory_tracker: crate::executor::base::MemoryTracker::new(memory_budget.clone()),
+                memory_tracker: crate::executor::base::MemoryTracker::for_mode(
+                    spill_mode,
+                    memory_budget.clone(),
+                ),
                 state: None,
             },
             super::spec::BlockingSpec::DataCollect => BlockingOperatorKind::DataCollect {
-                memory_tracker: crate::executor::base::MemoryTracker::new(memory_budget.clone()),
+                memory_tracker: crate::executor::base::MemoryTracker::for_mode(
+                    spill_mode,
+                    memory_budget.clone(),
+                ),
                 state: None,
             },
             super::spec::BlockingSpec::RollUpApply { rollup_expressions } => {
@@ -267,7 +314,10 @@ impl BlockingOperator {
                 aggregate_functions: aggregate_functions.clone(),
                 aggregate_filters: aggregate_filters.clone(),
                 output_col_names: output_col_names.clone(),
-                memory_tracker: crate::executor::base::MemoryTracker::new(memory_budget.clone()),
+                memory_tracker: crate::executor::base::MemoryTracker::for_mode(
+                    spill_mode,
+                    memory_budget.clone(),
+                ),
                 state: None,
             },
             super::spec::BlockingSpec::FinalAggregate {
@@ -278,7 +328,10 @@ impl BlockingOperator {
                 group_by_expressions: group_by_expressions.clone(),
                 aggregate_functions: aggregate_functions.clone(),
                 output_col_names: output_col_names.clone(),
-                memory_tracker: crate::executor::base::MemoryTracker::new(memory_budget.clone()),
+                memory_tracker: crate::executor::base::MemoryTracker::for_mode(
+                    spill_mode,
+                    memory_budget.clone(),
+                ),
                 state: None,
             },
         };

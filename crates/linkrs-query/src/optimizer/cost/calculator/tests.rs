@@ -310,3 +310,51 @@ fn test_get_type_cost_factor() {
         calculator.config.graph_type_cost_factor
     );
 }
+
+#[test]
+fn spill_cost_scales_with_working_set_and_passes() {
+    let calculator = CostCalculator::new(Arc::new(StatisticsManager::new()));
+    let rows = 1_000_000;
+
+    let roomy = calculator.estimate_spill_cost(rows, u64::MAX, 2);
+    assert_eq!(roomy.spill_bytes, 0);
+    assert_eq!(roomy.io_cost, 0.0);
+
+    let spilled = calculator.estimate_spill_cost(rows, 0, 2);
+    assert!(spilled.spill_bytes > 0);
+    assert!(spilled.io_cost > 0.0);
+    assert_eq!(
+        calculator.estimate_spill_cost(rows, 0, 4).io_cost,
+        spilled.io_cost * 2.0
+    );
+}
+
+#[test]
+fn blocking_operator_costs_include_spill_io() {
+    let calculator = CostCalculator::with_config(
+        Arc::new(StatisticsManager::new()),
+        crate::optimizer::cost::CostModelConfig {
+            memory_pressure_threshold: 1,
+            ..crate::optimizer::cost::CostModelConfig::default()
+        },
+    );
+
+    let rows = 100_000;
+    assert!(
+        calculator.calculate_sort_cost_with_budget(rows, 1, None, 1)
+            > calculator.calculate_sort_cost_with_budget(rows, 1, None, u64::MAX)
+    );
+    assert!(
+        calculator.calculate_aggregate_cost_with_budget(rows, 1, 1, 1)
+            > calculator.calculate_aggregate_cost_with_budget(rows, 1, 1, u64::MAX)
+    );
+    assert!(
+        calculator.calculate_hash_join_cost_with_budget(rows, rows, 1)
+            > calculator.calculate_hash_join_cost_with_budget(rows, rows, u64::MAX)
+    );
+    assert_eq!(
+        calculator.estimate_spill_cost(0, 0, 2),
+        super::SpillCostEstimate::default()
+    );
+    assert!(ESTIMATED_ROW_WIDTH_BYTES > 0);
+}

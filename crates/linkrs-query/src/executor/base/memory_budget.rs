@@ -9,6 +9,35 @@ use std::sync::Arc;
 
 static BUDGET_COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
+/// How an operator starts buffering before its spill fallback engages.
+///
+/// The physical plan supplies this hint; the request budget decides whether
+/// the hint is applied at materialization time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SpillMode {
+    /// Operator does not spill and tracks memory against the shared budget.
+    InMemory,
+    /// Operator buffers normally and spills when the shared budget is hit.
+    #[default]
+    OnDemand,
+    /// Operator caps its own buffer first so the existing spill path starts
+    /// with the first rows instead of after the whole query budget is spent.
+    ExternalFromStart { local_limit: usize },
+}
+
+impl SpillMode {
+    /// Choose a start mode from the plan's estimated working set and the
+    /// operator's share of the query budget.
+    pub fn from_working_set(working_set_bytes: u64, budget_share_bytes: usize) -> Self {
+        if budget_share_bytes > 0 && working_set_bytes > budget_share_bytes as u64 {
+            let local_limit = (budget_share_bytes / 16).clamp(4096, 64 * 1024);
+            Self::ExternalFromStart { local_limit }
+        } else {
+            Self::OnDemand
+        }
+    }
+}
+
 /// Memory budget for a single query execution.
 ///
 /// Each blocking operator should call `try_reserve` before
@@ -133,15 +162,35 @@ pub struct MemoryTracker {
     budget: MemoryBudget,
     peak_bytes: usize,
     current_bytes: usize,
+    local_limit: usize,
 }
 
 impl MemoryTracker {
     /// Create a new tracker backed by `budget`.
     pub fn new(budget: MemoryBudget) -> Self {
+        Self::with_local_limit(budget, usize::MAX)
+    }
+
+    /// Create a tracker with an additional per-operator cap.
+    ///
+    /// The shared budget stays authoritative; the local cap only makes the
+    /// operator reach its existing spill path earlier.
+    pub fn with_local_limit(budget: MemoryBudget, local_limit: usize) -> Self {
         Self {
             budget,
             peak_bytes: 0,
             current_bytes: 0,
+            local_limit,
+        }
+    }
+
+    /// Create the tracker described by a physical plan's spill mode.
+    pub fn for_mode(mode: SpillMode, budget: MemoryBudget) -> Self {
+        match mode {
+            SpillMode::ExternalFromStart { local_limit } => {
+                Self::with_local_limit(budget, local_limit)
+            }
+            SpillMode::InMemory | SpillMode::OnDemand => Self::new(budget),
         }
     }
 
@@ -150,6 +199,15 @@ impl MemoryTracker {
     /// Updates the per-operator peak tracker and returns an error when
     /// the global budget is exceeded.
     pub fn try_reserve(&mut self, bytes: usize) -> Result<(), QueryError> {
+        // A single large row must be bufferable; otherwise an external-start
+        // operator could fail before it has anything to spill. The next row
+        // will cross the cap and trigger the spill path.
+        if self.current_bytes > 0 && self.current_bytes.saturating_add(bytes) > self.local_limit {
+            return Err(QueryError::execution(format!(
+                "Memory budget exceeded: operator local limit {} bytes exceeded",
+                self.local_limit,
+            )));
+        }
         self.budget.try_reserve(bytes)?;
         self.current_bytes += bytes;
         self.peak_bytes = self.peak_bytes.max(self.current_bytes);
@@ -339,5 +397,43 @@ mod tests {
         assert_eq!(budget.current(), 0);
         assert_eq!(tracker.current(), 0);
         assert_eq!(tracker.peak(), 32);
+    }
+}
+
+#[cfg(test)]
+mod spill_mode_tests {
+    use super::*;
+
+    #[test]
+    fn local_limit_forces_spill_before_shared_budget() {
+        let budget = MemoryBudget::new(1024);
+        let mut tracker = MemoryTracker::for_mode(
+            SpillMode::ExternalFromStart { local_limit: 32 },
+            budget.clone(),
+        );
+        tracker.try_reserve(16).expect("first reservation");
+        assert!(tracker.try_reserve(32).is_err());
+        assert_eq!(tracker.current(), 16);
+        assert_eq!(budget.current(), 16);
+        tracker.reset();
+        assert_eq!(budget.current(), 0);
+    }
+
+    #[test]
+    fn single_row_may_exceed_local_limit() {
+        let mut tracker = MemoryTracker::with_local_limit(MemoryBudget::new(1024), 1);
+        tracker.try_reserve(64).expect("single oversized row");
+        assert_eq!(tracker.current(), 64);
+        assert!(tracker.try_reserve(1).is_err());
+    }
+
+    #[test]
+    fn working_set_above_budget_share_starts_external() {
+        assert_eq!(
+            SpillMode::from_working_set(1024, 128),
+            SpillMode::ExternalFromStart { local_limit: 4096 }
+        );
+        assert_eq!(SpillMode::from_working_set(64, 128), SpillMode::OnDemand);
+        assert_eq!(SpillMode::from_working_set(1024, 0), SpillMode::OnDemand);
     }
 }

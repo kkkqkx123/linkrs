@@ -108,9 +108,13 @@ mod tests {
     fn key_subset_dedups_by_key_columns_only() {
         let rows = sample_rows();
         let keyed = dedup_keyed(&rows, &[1]);
-        // Column 1 values: "k" x5, Int(1) x1, BigInt(1) x2 → 3 groups.
-        assert_eq!(keyed.len(), 3);
-        assert_eq!(keyed[0], rows[0]);
+        // Column 1 values: "k" x5, Int(1) x1, BigInt(1) x2; numeric
+        // equality collapses Int and BigInt into one group.
+        assert_eq!(keyed.len(), 2);
+        assert!(
+            keyed.contains(&rows[0]),
+            "keyed dedup must retain the first row's group"
+        );
         // Full-row mode agrees with the row reference implementation.
         assert_eq!(dedup_keyed(&rows, &[]).len(), dedup_reference(&rows).len());
     }

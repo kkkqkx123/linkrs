@@ -183,6 +183,20 @@ impl JoinOperator {
         memory_budget: &crate::executor::base::MemoryBudget,
         output_layout: Arc<SlotLayout>,
     ) -> Self {
+        Self::from_spec_with_mode(
+            spec,
+            memory_budget,
+            output_layout,
+            crate::executor::base::SpillMode::OnDemand,
+        )
+    }
+
+    pub fn from_spec_with_mode(
+        spec: &super::spec::JoinSpec,
+        memory_budget: &crate::executor::base::MemoryBudget,
+        output_layout: Arc<SlotLayout>,
+        spill_mode: crate::executor::base::SpillMode,
+    ) -> Self {
         let kind = match spec {
             super::spec::JoinSpec::HashJoin {
                 join_condition,
@@ -195,7 +209,10 @@ impl JoinOperator {
                 probe_keys: probe_keys.clone(),
                 build_side: HashJoinBuildSide::new(),
                 build_done: false,
-                memory_tracker: crate::executor::base::MemoryTracker::new(memory_budget.clone()),
+                memory_tracker: crate::executor::base::MemoryTracker::for_mode(
+                    spill_mode,
+                    memory_budget.clone(),
+                ),
                 right_col_names: Vec::new(),
                 build_side_select: *build_side,
                 grace: grace_join::GraceJoinState::default(),
@@ -211,7 +228,10 @@ impl JoinOperator {
                 probe_keys: probe_keys.clone(),
                 build_side: HashJoinBuildSide::new(),
                 build_done: false,
-                memory_tracker: crate::executor::base::MemoryTracker::new(memory_budget.clone()),
+                memory_tracker: crate::executor::base::MemoryTracker::for_mode(
+                    spill_mode,
+                    memory_budget.clone(),
+                ),
                 right_col_names: Vec::new(),
                 build_side_select: *build_side,
                 grace: grace_join::GraceJoinState::default(),

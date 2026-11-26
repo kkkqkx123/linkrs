@@ -7,6 +7,7 @@ use super::super::spill::SpillManager;
 use super::super::state::{
     GlobalState, GlobalStateKey, LocalState, LocalStateKey, StateArenaSet, TaskId,
 };
+use crate::executor::base::SpillMode;
 use crate::executor::streaming::plan::types::PhysicalOperatorId;
 use crate::executor::streaming::slot::SlotLayout;
 use linkrs_core::Arena;
@@ -101,6 +102,8 @@ pub struct OperatorBase {
     /// fallback for this operator (see `StreamingExecutor::reset`). Surfaced
     /// in EXPLAIN as `reset:fallback` so un-resettable paths stay auditable.
     pub reset_used_fallback: bool,
+    /// Start mode derived from the physical plan and the request budget.
+    pub spill_mode: SpillMode,
 }
 
 impl OperatorBase {
@@ -115,7 +118,14 @@ impl OperatorBase {
             physical_operator_id: PhysicalOperatorId(plan_node_id.unsigned_abs() as usize),
             output_layout: Arc::new(SlotLayout::new(Vec::new())),
             reset_used_fallback: false,
+            spill_mode: SpillMode::OnDemand,
         }
+    }
+
+    /// Set the spill start mode carried into every operator at `open()`.
+    pub fn with_spill_mode(mut self, spill_mode: SpillMode) -> Self {
+        self.spill_mode = spill_mode;
+        self
     }
 
     /// Lock and return the partition-local operator state arena from the runtime.

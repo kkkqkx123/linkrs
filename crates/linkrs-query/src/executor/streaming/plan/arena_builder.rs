@@ -143,9 +143,11 @@ impl PhysicalPlanBuilder {
     ) -> Result<PhysicalPlan, PlanBuildError> {
         metadata::propagate_layouts(operators, fragments)?;
         metadata::populate_input_contracts(operators, fragments)?;
+        // Row estimates feed the spill working-set hint carried by
+        // `MemoryPolicy`, so they must be populated before runtime properties.
+        metadata::populate_estimated_rows(operators, fragments);
         metadata::populate_runtime_metadata(operators);
         metadata::populate_choice_reasons(operators);
-        metadata::populate_estimated_rows(operators, fragments);
 
         let output = operators
             .iter()

@@ -672,7 +672,9 @@ pub(super) fn build_ordered_existence_group(
         key_column: proof.key_column.clone(),
         key_type: proof.key_type.clone(),
         limit: proof.limit,
-        batch_size: proof.limit.clamp(1, exec_ctx.ordered_existence_batch_limit.max(1)),
+        batch_size: proof
+            .limit
+            .clamp(1, exec_ctx.ordered_existence_batch_limit.max(1)),
         proof: proof.reason.clone(),
         generation: proof.generation,
         output_layout: layout.clone(),

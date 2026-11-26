@@ -23,7 +23,7 @@ pub mod node_estimators;
 pub mod selectivity;
 
 pub use assigner::CostAssigner;
-pub use calculator::CostCalculator;
+pub use calculator::{CostCalculator, SpillCostEstimate};
 pub use config::{CostModelConfig, StrategyThresholds};
 pub use estimate::NodeCostEstimate;
 pub use selectivity::SelectivityEstimator;
