@@ -1,12 +1,11 @@
 //! Merge the rules for obtaining neighbors and performing projection operations.
 
+use super::graph_scan_merge::merge_project;
 use crate::optimizer::heuristic::context::RewriteContext;
 use crate::optimizer::heuristic::pattern::Pattern;
 use crate::optimizer::heuristic::result::{RewriteResult, TransformResult};
 use crate::optimizer::heuristic::rule::{MergeRule, RewriteRule};
 use crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
-use crate::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
-use linkrs_core::Expression;
 
 /// Merge the rules for obtaining neighbors and performing projection operations.
 ///
@@ -63,53 +62,10 @@ impl RewriteRule for MergeGetNbrsAndProjectRule {
         _ctx: &mut RewriteContext,
         node: &PlanNodeEnum,
     ) -> RewriteResult<Option<TransformResult>> {
-        // Check whether it is a GetNeighbors node.
-        let get_neighbors = match node {
-            PlanNodeEnum::GetNeighbors(n) => n,
-            _ => return Ok(None),
-        };
-
-        // GetNeighbors uses the MultipleInputNode and needs to retrieve the dependencies.
-        let deps = get_neighbors.dependencies();
-        if deps.is_empty() {
-            return Ok(None);
-        }
-
-        // Check whether the first dependency is a Project node.
-        let project_node = match deps.first() {
-            Some(PlanNodeEnum::Project(n)) => n,
-            _ => return Ok(None),
-        };
-
-        // Check whether the Project only projects one column.
-        let columns = project_node.columns();
-        if columns.len() != 1 {
-            return Ok(None);
-        }
-
-        // Obtain the input for the Project as the new input.
-        let project_input = project_node.input().clone();
-
-        // Create a new GetNeighbors node.
-        let mut new_get_neighbors = get_neighbors.clone();
-
-        // Update the source reference to the expression in the Project column.
-        let src_expr = columns[0].expression.clone();
-        if let Some(expr_meta) = src_expr.expression() {
-            if let Expression::Variable(name) = expr_meta.inner() {
-                new_get_neighbors.set_src_vids(name.clone());
-            }
-        }
-
-        // Remove the existing dependencies and set up the new input.
-        new_get_neighbors.deps_mut().clear();
-        new_get_neighbors.deps_mut().push(project_input);
-
-        let mut result = TransformResult::new();
-        result.erase_curr = true;
-        result.add_new_node(PlanNodeEnum::GetNeighbors(new_get_neighbors));
-
-        Ok(Some(result))
+        merge_project(node, |node| match node {
+            PlanNodeEnum::GetNeighbors(scan) => Some(scan),
+            _ => None,
+        })
     }
 }
 
@@ -132,6 +88,7 @@ impl MergeRule for MergeGetNbrsAndProjectRule {
 mod tests {
     use super::*;
     use crate::planning::plan::core::nodes::access::graph_scan_node::GetNeighborsNode;
+    use crate::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
     use crate::planning::plan::core::nodes::control_flow::start_node::StartNode;
     use crate::planning::plan::core::nodes::operation::project_node::ProjectNode;
     use linkrs_core::types::ContextualExpression;

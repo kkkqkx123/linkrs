@@ -168,55 +168,6 @@ pub struct PlanCacheKey {
 }
 
 impl PlanCacheKey {
-    /// Creating Cache Keys from Query Text
-    pub fn from_query(query: &str) -> Self {
-        let hash = Self::hash_query(query);
-        Self {
-            hash,
-            query_text: query.to_string(),
-            partition_fingerprint: None,
-            space_name: None,
-            schema_version: None,
-            param_type_signature: None,
-            index_version: None,
-            optimizer_version: 0,
-            planning_config_hash: 0,
-        }
-    }
-
-    /// Create a key scoped to a specific space and schema version.
-    ///
-    /// `param_type_signature` is a hash of the parameter types (not
-    /// values) so the same query with different param values but same types
-    /// reuses the cached plan.
-    pub fn from_query_with_space(
-        query: &str,
-        space_name: Option<String>,
-        schema_version: Option<u64>,
-    ) -> Self {
-        Self::from_query_with_full_context(query, space_name, schema_version, None, None)
-    }
-
-    /// Create a key with all available context dimensions.
-    pub fn from_query_with_full_context(
-        query: &str,
-        space_name: Option<String>,
-        schema_version: Option<u64>,
-        param_type_signature: Option<u64>,
-        index_version: Option<u64>,
-    ) -> Self {
-        Self::from_query_with_context(
-            query,
-            PlanCacheContext {
-                space_name,
-                schema_version,
-                index_version,
-                param_type_signature,
-                ..Default::default()
-            },
-        )
-    }
-
     pub fn from_query_with_context(query: &str, context: PlanCacheContext) -> Self {
         use std::hash::Hash;
 

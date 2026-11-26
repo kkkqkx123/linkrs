@@ -531,43 +531,10 @@ impl<S: StorageClient> SchemaApi<S> {
         Ok(fields)
     }
 
-    /// Convert the DataType to a Value (for use with index field types).
+    /// Convert the DataType to the value used for index field types.
     fn datatype_to_value(data_type: &linkrs_core::DataType) -> linkrs_core::Value {
-        use linkrs_core::value::date_time::{DateTimeValue, DateValue, TimeValue};
-        use linkrs_core::value::NullType;
-        use linkrs_core::DataType;
-        use linkrs_core::Value;
-
-        match data_type {
-            DataType::SmallInt => Value::SmallInt(0),
-            DataType::Int => Value::Int(0),
-            DataType::BigInt => Value::BigInt(0),
-            DataType::Float => Value::Float(0.0),
-            DataType::Double => Value::Double(0.0),
-            DataType::String | DataType::FixedString(_) => Value::string(""),
-            DataType::Bool => Value::Bool(false),
-            DataType::Date => Value::Date(DateValue {
-                year: 1970,
-                month: 1,
-                day: 1,
-            }),
-            DataType::DateTime => Value::DateTime(DateTimeValue {
-                year: 1970,
-                month: 1,
-                day: 1,
-                hour: 0,
-                minute: 0,
-                sec: 0,
-                microsec: 0,
-            }),
-            DataType::Time => Value::Time(TimeValue {
-                hour: 0,
-                minute: 0,
-                sec: 0,
-                microsec: 0,
-            }),
-            _ => Value::Null(NullType::Null),
-        }
+        linkrs_core::TypeUtils::get_default_value(data_type)
+            .unwrap_or_else(|| linkrs_core::Value::Null(linkrs_core::value::NullType::Null))
     }
 }
 

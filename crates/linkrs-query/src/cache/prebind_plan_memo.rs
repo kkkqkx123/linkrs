@@ -5,9 +5,9 @@
 //! and counters are identical. Separate instances keep a hot namespace from
 //! evicting plans in the other one.
 
+use super::bounded_lru::BoundedLru;
 use super::{PlanCacheContext, PlanCacheKey, QueryPlanCache};
 use crate::executor::streaming::plan::PhysicalPlan;
-use parking_lot::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -28,19 +28,13 @@ impl PrebindPlanKey {
     }
 }
 
-struct PrebindPlanEntry<K> {
-    key: K,
-    plan: Arc<PhysicalPlan>,
-}
-
-/// One namespace of pre-bound plans with linear move-to-front lookup.
+/// One namespace of pre-bound plans.
 ///
 /// The read and DML memos are separate instances so neither can evict the
 /// other's entries. Hit, failure and bind-skip counters are likewise scoped
 /// to the namespace that owns this instance.
 pub(crate) struct PrebindPlanMemo<K: PartialEq> {
-    entries: Mutex<Vec<PrebindPlanEntry<K>>>,
-    capacity: usize,
+    entries: BoundedLru<K, Arc<PhysicalPlan>>,
     namespace: &'static str,
     hits: AtomicU64,
     failures: AtomicU64,
@@ -50,8 +44,7 @@ pub(crate) struct PrebindPlanMemo<K: PartialEq> {
 impl<K: PartialEq> PrebindPlanMemo<K> {
     pub(crate) fn new(capacity: usize, namespace: &'static str) -> Self {
         Self {
-            entries: Mutex::new(Vec::new()),
-            capacity,
+            entries: BoundedLru::new(capacity),
             namespace,
             hits: AtomicU64::new(0),
             failures: AtomicU64::new(0),
@@ -62,27 +55,18 @@ impl<K: PartialEq> PrebindPlanMemo<K> {
     /// Existence probe used before binding. Deliberately leaves entry order
     /// untouched: only the compile path serves a plan and counts a hit.
     pub(crate) fn contains(&self, key: &K) -> bool {
-        self.entries.lock().iter().any(|entry| entry.key == *key)
+        self.entries.contains(key)
     }
 
     /// Look up a candidate plan, moving the matching entry to the front.
     fn get(&self, key: &K) -> Option<Arc<PhysicalPlan>> {
-        let mut guard = self.entries.lock();
-        let position = guard.iter().position(|entry| entry.key == *key)?;
-        if position > 0 {
-            let entry = guard.remove(position);
-            guard.insert(0, entry);
-        }
-        Some(guard[0].plan.clone())
+        self.entries.get(key)
     }
 
     /// Store a plan, replacing a same-key entry and evicting the least
     /// recently used entry past the capacity.
     pub(crate) fn store(&self, key: K, plan: Arc<PhysicalPlan>) {
-        let mut guard = self.entries.lock();
-        guard.retain(|entry| entry.key != key);
-        guard.insert(0, PrebindPlanEntry { key, plan });
-        guard.truncate(self.capacity);
+        self.entries.store(key, plan);
     }
 
     /// Serve a memo candidate through the one checked exit. Layout failures
@@ -95,6 +79,7 @@ impl<K: PartialEq> PrebindPlanMemo<K> {
     ) -> Option<Arc<PhysicalPlan>> {
         let plan = self.get(key)?;
         if plan_cache.serve_checked(&plan, schema_version).is_ok() {
+            plan_cache.record_memo_hit();
             self.hits.fetch_add(1, Ordering::Relaxed);
             return Some(plan);
         }
@@ -130,10 +115,10 @@ impl<K: PartialEq> PrebindPlanMemo<K> {
     }
 
     pub(crate) fn len(&self) -> usize {
-        self.entries.lock().len()
+        self.entries.len()
     }
 
     pub(crate) fn clear(&self) {
-        self.entries.lock().clear();
+        self.entries.clear();
     }
 }

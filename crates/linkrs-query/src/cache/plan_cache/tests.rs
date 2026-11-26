@@ -3,9 +3,12 @@ use crate::planning::plan::execution_plan::PartitionSource;
 
 #[test]
 fn test_plan_cache_key() {
-    let key1 = PlanCacheKey::from_query("SELECT * FROM users");
-    let key2 = PlanCacheKey::from_query("SELECT * FROM users");
-    let key3 = PlanCacheKey::from_query("SELECT * FROM posts");
+    let key1 =
+        PlanCacheKey::from_query_with_context("SELECT * FROM users", PlanCacheContext::default());
+    let key2 =
+        PlanCacheKey::from_query_with_context("SELECT * FROM users", PlanCacheContext::default());
+    let key3 =
+        PlanCacheKey::from_query_with_context("SELECT * FROM posts", PlanCacheContext::default());
 
     assert_eq!(key1, key2);
     assert_ne!(key1, key3);
@@ -13,7 +16,8 @@ fn test_plan_cache_key() {
 
 #[test]
 fn test_plan_cache_key_verify() {
-    let key = PlanCacheKey::from_query("SELECT * FROM users");
+    let key =
+        PlanCacheKey::from_query_with_context("SELECT * FROM users", PlanCacheContext::default());
     assert!(key.verify_query("SELECT * FROM users"));
     assert!(!key.verify_query("SELECT * FROM posts"));
 }
@@ -319,4 +323,60 @@ fn partitioned_plan_hit_respects_compatibility_context() {
             .is_none(),
         "a schema-version bump must miss the partitioned entry"
     );
+}
+
+#[test]
+fn plain_cache_hit_is_counted_once_after_checked_serve() {
+    use crate::executor::streaming::parameters::ParameterSchema;
+    use crate::executor::streaming::plan::types::{
+        CapabilitySet, FragmentGraph, FragmentId, OutputContract, PipelineMode, PlanCompatibility,
+        PlanFingerprint,
+    };
+    use crate::executor::streaming::slot::SlotLayout;
+    use std::collections::HashMap;
+
+    let cache = QueryPlanCache::default();
+    let query = "MATCH (n) RETURN n";
+    let plan = Arc::new(PhysicalPlan {
+        operators: Vec::new(),
+        logical_to_physical: HashMap::new(),
+        fragments: FragmentGraph::new(Vec::new(), FragmentId(0)),
+        root_fragment: FragmentId(0),
+        output: OutputContract {
+            output_layout: SlotLayout::new(Vec::new()),
+            always_produces_row: false,
+            nullability: Vec::new(),
+            ordering: Vec::new(),
+            delivery_streamable: true,
+            pipeline_mode: PipelineMode::Pipelined,
+        },
+        compatibility: PlanCompatibility {
+            fingerprint: PlanFingerprint {
+                version: 1,
+                hash: 0,
+            },
+            layout_version: None,
+            required_capabilities: CapabilitySet::EMPTY,
+            planning_config_hash: 0,
+            optimizer_version: 0,
+        },
+        required_capabilities: CapabilitySet::EMPTY,
+        parameter_schema: ParameterSchema {
+            params: Vec::new(),
+            name_to_slot: HashMap::new(),
+        },
+        diagnostics: crate::planning::plan::PlanDiagnostics::default(),
+        statistics_summary: String::new(),
+        partition_spec: None,
+    });
+    cache.put_with_context(query, plan, Vec::new(), Default::default());
+
+    let hits_before = cache.stats_snapshot().hits;
+    let cached = cache
+        .get_with_context(query, PlanCacheContext::default())
+        .expect("plain cache lookup should hit");
+    cache
+        .serve_checked(&cached.plan, None)
+        .expect("empty plan is compatible with the default schema version");
+    assert_eq!(cache.stats_snapshot().hits, hits_before + 1);
 }

@@ -1,7 +1,8 @@
-//! Rules that push the filtering conditions to the left hash join operation
+//! Push filter conditions into the preserved side of a left join.
 //!
-//! This rule identifies the Filter -> LeftJoin mode.
-//! And push the filtering conditions to both sides of the connection.
+//! A left join emits NULL-extended rows for unmatched left inputs. Only
+//! predicates on the left side can move below the join without changing
+//! which rows survive; right-side predicates stay above it.
 
 use crate::optimizer::heuristic::context::RewriteContext;
 use crate::optimizer::heuristic::expression_utils::{check_col_name, split_filter};
@@ -14,7 +15,7 @@ use crate::planning::plan::core::nodes::operation::filter_node::FilterNode;
 use linkrs_core::types::ContextualExpression;
 use linkrs_core::Expression;
 
-/// Rules that push the filtering conditions to the left hash join operation
+/// Push left-side predicates below a left join.
 ///
 /// # Conversion example
 ///
@@ -29,18 +30,21 @@ use linkrs_core::Expression;
 ///
 /// After:
 /// ```text
+///   Filter(b.col2 < 20)
+///           |
 ///   LeftJoin
 ///   /          \
-/// Filter      Filter
-/// (a.col1>10) (b.col2<20)
-///   |            |
-/// Left        Right
+/// Filter      Right
+/// (a.col1>10)
+///   |
+/// Left
 /// ```
 ///
 /// # Applicable Conditions
 ///
-/// The filtering criteria can be separated into conditions on the left and right sides.
-/// The conditions can be safely pushed out to both sides.
+/// Only predicates whose columns belong to the preserved left input are
+/// pushed. A predicate on the right input would turn unmatched rows into
+/// matches once the upper filter is removed, so it remains above the join.
 #[derive(Debug)]
 pub struct PushFilterDownLeftJoinRule;
 
@@ -92,32 +96,24 @@ impl RewriteRule for PushFilterDownLeftJoinRule {
         // Obtaining the context is necessary for creating a ContextualExpression.
         let ctx = filter_condition.context().clone();
 
-        // Obtain the column names for the left and right inputs.
+        // Obtain the column names for the preserved left input.
         let left_col_names = join.left_input().col_names().to_vec();
-        let right_col_names = join.right_input().col_names().to_vec();
 
-        // Define the function for the left-side selector.
+        // Only the preserved left side may absorb a predicate. Right-side
+        // columns are NULL on unmatched rows; pushing such a predicate below
+        // the join would change the filtering result.
         let left_picker = |expr: &Expression| -> bool { check_col_name(&left_col_names, expr) };
-
-        // Define the function for the selector on the right side.
-        let right_picker = |expr: &Expression| -> bool { check_col_name(&right_col_names, expr) };
-
-        // Split filter criteria
         let (left_picked, left_remained) = split_filter(filter_condition, left_picker);
-        let (right_picked, right_remained) = split_filter(filter_condition, right_picker);
 
-        // If there are no conditions that allow for the transformation to be performed, then no conversion will take place.
-        if left_picked.is_none() && right_picked.is_none() {
+        if left_picked.is_none() {
             return Ok(None);
         }
 
-        // Create a new LeftJoin node.
+        // Create a new LeftJoin node. The right input stays unchanged.
         let mut new_join = join.clone();
         let mut new_left = join.left_input().clone();
-        let mut new_right = join.right_input().clone();
 
-        // Handle the push from the lower left side.
-        let left_pushed = left_picked.is_some();
+        // Handle the push into the preserved left input.
         if let Some(left_filter) = left_picked {
             let left_expr = match left_filter.expression() {
                 Some(meta) => meta.inner().clone(),
@@ -135,42 +131,14 @@ impl RewriteRule for PushFilterDownLeftJoinRule {
             new_left = PlanNodeEnum::Filter(left_filter_node);
         }
 
-        // Handle the push from the lower right corner.
-        let right_pushed = right_picked.is_some();
-        if let Some(right_filter) = right_picked {
-            let right_expr = match right_filter.expression() {
-                Some(meta) => meta.inner().clone(),
-                None => return Ok(None),
-            };
-            let right_expr_meta = linkrs_core::types::expr::ExpressionMeta::new(right_expr);
-            let right_id = ctx.register_expression(right_expr_meta);
-            let right_ctx_expr = ContextualExpression::new(right_id, ctx.clone());
-            let right_filter_node = FilterNode::new(new_right, right_ctx_expr).map_err(|e| {
-                crate::optimizer::heuristic::result::RewriteError::rewrite_failed(format!(
-                    "Failed to create FilterNode: {:?}",
-                    e
-                ))
-            })?;
-            new_right = PlanNodeEnum::Filter(right_filter_node);
-        }
-
-        // Update the input for the Join node.
+        // Only the left input is narrowed; unmatched rows must still be
+        // produced from the right input.
         new_join.set_left_input(new_left);
-        new_join.set_right_input(new_right);
 
         // Construct the translation result.
         let mut result = TransformResult::new();
 
-        // Check whether there are any remaining filter conditions.
-        let remaining_condition = if left_pushed && right_pushed {
-            None
-        } else if left_pushed {
-            right_remained
-        } else {
-            left_remained
-        };
-
-        if let Some(remained) = remaining_condition {
+        if let Some(remained) = left_remained {
             result.erase_curr = false;
             let mut new_filter = filter_node.clone();
             let remained_expr = match remained.expression() {
@@ -252,5 +220,61 @@ mod tests {
         let join_enum = PlanNodeEnum::LeftJoin(join);
 
         assert!(rule.can_push_down(&filter_enum, &join_enum));
+    }
+
+    #[test]
+    fn right_predicate_stays_above_left_join() {
+        let mut left = StartNode::new();
+        left.set_col_names(vec!["a".to_string()]);
+        let mut right = StartNode::new();
+        right.set_col_names(vec!["b".to_string()]);
+        let join = LeftJoinNode::new(
+            PlanNodeEnum::Start(left),
+            PlanNodeEnum::Start(right),
+            vec![],
+            vec![],
+        )
+        .expect("left join should build");
+
+        let property = |name: &str| Expression::Property {
+            object: Box::new(Expression::Variable(name.to_string())),
+            property: name.to_string(),
+        };
+        let condition = Expression::Binary {
+            op: linkrs_core::BinaryOperator::And,
+            left: Box::new(property("a")),
+            right: Box::new(property("b")),
+        };
+        let ctx = Arc::new(ExpressionAnalysisContext::new());
+        let id = ctx.register_expression(linkrs_core::types::expr::ExpressionMeta::new(condition));
+        let filter = FilterNode::new(
+            PlanNodeEnum::LeftJoin(join),
+            ContextualExpression::new(id, ctx),
+        )
+        .expect("filter should build");
+
+        let rule = PushFilterDownLeftJoinRule::new();
+        let result = rule
+            .apply(&mut RewriteContext::new(), &PlanNodeEnum::Filter(filter))
+            .expect("rewrite should succeed")
+            .expect("left predicate should be pushed");
+        let rewritten = result
+            .new_nodes
+            .iter()
+            .find_map(|node| match node {
+                PlanNodeEnum::LeftJoin(join) => Some(join),
+                _ => None,
+            })
+            .expect("rewritten left join should be present");
+
+        assert!(matches!(rewritten.left_input(), PlanNodeEnum::Filter(_)));
+        assert!(matches!(rewritten.right_input(), PlanNodeEnum::Start(_)));
+        assert!(
+            result
+                .new_nodes
+                .iter()
+                .any(|node| matches!(node, PlanNodeEnum::Filter(_))),
+            "right predicate must remain in an upper filter"
+        );
     }
 }

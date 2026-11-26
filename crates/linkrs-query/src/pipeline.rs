@@ -5,6 +5,7 @@ mod frontend;
 mod merge_conditional;
 pub mod prepared;
 
+use crate::cache::bounded_lru::BoundedLru;
 use crate::cache::prebind_plan_memo::{PrebindPlanKey, PrebindPlanMemo};
 use crate::cache::{ParameterizedQueryHandler, PlanCacheConfig, PlanCacheContext, QueryPlanCache};
 use crate::executor::streaming::pool::SharedScheduler;
@@ -124,8 +125,7 @@ pub struct QueryPipelineManager<S: QueryStorage + 'static> {
     /// (@__dml_0, ...)`), avoiding a re-parse per execution. Bounded
     /// multi-entry map keyed by exact normalized text. Unlike plan memos it
     /// survives DDL because templates carry no schema references.
-    pub(crate) dml_template_ast:
-        parking_lot::Mutex<Vec<(String, Arc<crate::parser::ast::stmt::Ast>)>>,
+    pub(crate) dml_template_ast: BoundedLru<String, Arc<crate::parser::ast::stmt::Ast>>,
     pub(crate) dml_template_ast_parse_count: std::sync::atomic::AtomicU64,
     pub(crate) dml_template_ast_hit_count: std::sync::atomic::AtomicU64,
     /// Retained password-history depth threaded into every query context so
@@ -205,7 +205,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             dml_plan_memo: PrebindPlanMemo::new(DML_PLAN_MEMO_CAP, "dml"),
             compiled_plan_memo: PrebindPlanMemo::new(COMPILED_PLAN_MEMO_CAP, "read"),
             compiled_plan_stats_epoch: AtomicU64::new(0),
-            dml_template_ast: parking_lot::Mutex::new(Vec::new()),
+            dml_template_ast: BoundedLru::new(DML_SHAPE_CACHE_CAP),
             dml_template_ast_parse_count: std::sync::atomic::AtomicU64::new(0),
             dml_template_ast_hit_count: std::sync::atomic::AtomicU64::new(0),
             password_history_depth: 0,
@@ -521,7 +521,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             dml_plan_memo: PrebindPlanMemo::new(DML_PLAN_MEMO_CAP, "dml"),
             compiled_plan_memo: PrebindPlanMemo::new(COMPILED_PLAN_MEMO_CAP, "read"),
             compiled_plan_stats_epoch: AtomicU64::new(0),
-            dml_template_ast: parking_lot::Mutex::new(Vec::new()),
+            dml_template_ast: BoundedLru::new(DML_SHAPE_CACHE_CAP),
             dml_template_ast_parse_count: std::sync::atomic::AtomicU64::new(0),
             dml_template_ast_hit_count: std::sync::atomic::AtomicU64::new(0),
             password_history_depth: 0,
@@ -592,7 +592,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         self.clear_prebind_memos();
         // Templates are derived from text only, but a full cache clear also
         // drops their parse cache so the next execution starts from scratch.
-        self.dml_template_ast.lock().clear();
+        self.dml_template_ast.clear();
         log::info!("Query plan cache cleared");
     }
 
@@ -853,15 +853,10 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         &self,
         normalized_text: &str,
     ) -> Option<Arc<crate::parser::ast::stmt::Ast>> {
-        let mut guard = self.dml_template_ast.lock();
-        let pos = guard.iter().position(|(text, _)| text == normalized_text)?;
-        if pos > 0 {
-            let entry = guard.remove(pos);
-            guard.insert(0, entry);
-        }
+        let ast = self.dml_template_ast.get(normalized_text)?;
         self.dml_template_ast_hit_count
             .fetch_add(1, Ordering::Relaxed);
-        Some(guard[0].1.clone())
+        Some(ast)
     }
 
     /// Store a parsed normalized-DML template AST, evicting the least
@@ -871,9 +866,6 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         normalized_text: String,
         ast: Arc<crate::parser::ast::stmt::Ast>,
     ) {
-        let mut guard = self.dml_template_ast.lock();
-        guard.retain(|(text, _)| text != &normalized_text);
-        guard.insert(0, (normalized_text, ast));
-        guard.truncate(DML_SHAPE_CACHE_CAP);
+        self.dml_template_ast.store(normalized_text, ast);
     }
 }

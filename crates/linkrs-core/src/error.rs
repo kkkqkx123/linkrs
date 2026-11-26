@@ -414,9 +414,6 @@ impl ToPublicError for DBError {
 /// Harmonized result types
 pub type DBResult<T> = Result<T, DBError>;
 
-// LinkrsResult was previously aliased here for backward compatibility.
-// Use DBResult directly for new code.
-
 // ==================== Tests ====================
 
 #[cfg(test)]

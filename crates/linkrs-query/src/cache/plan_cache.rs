@@ -495,37 +495,10 @@ impl QueryPlanCache {
         Some(hasher.finish())
     }
 
-    /// Record the statistics on the execution of the plan.
-    ///
-    /// # Parameter
-    /// - `query`: Query content
-    /// - `execution_time_ms`: Execution time (in milliseconds)
-    pub fn record_execution(&self, query: &str, execution_time_ms: f64) {
-        let key = PlanCacheKey::from_query(query);
-
-        if let Some(plan) = self.cache.get(&key) {
-            let alpha = 0.1;
-            let new_avg = plan.avg_execution_time_ms * (1.0 - alpha) + execution_time_ms * alpha;
-
-            let updated_plan = Arc::new(CachedPlan {
-                execution_count: plan.execution_count + 1,
-                avg_execution_time_ms: new_avg,
-                ..(*plan).clone()
-            });
-
-            self.cache.insert(key, updated_plan);
-        }
-    }
-
     /// Record execution with space context.
     ///
-    /// index_version must match the value used during `put_with_context` to
-    /// locate the cached plan; otherwise the keys will differ and the record
-    /// will miss.
-    ///
-    /// `param_type_signature` must match the signature used during
-    /// `put_with_context` (i.e. the hash of the parameter *types*) or the
-    /// record will miss for parameterized queries.
+    /// The context must match the one used during `put_with_context`,
+    /// including the parameter type signature, or the record will miss.
     pub fn record_execution_with_space(
         &self,
         query: &str,
@@ -535,12 +508,15 @@ impl QueryPlanCache {
         index_version: Option<u64>,
         param_type_signature: Option<u64>,
     ) {
-        let key = PlanCacheKey::from_query_with_full_context(
+        let key = PlanCacheKey::from_query_with_context(
             query,
-            space_name,
-            schema_version,
-            param_type_signature,
-            index_version,
+            PlanCacheContext {
+                space_name,
+                schema_version,
+                index_version,
+                param_type_signature,
+                ..Default::default()
+            },
         );
 
         if let Some(plan) = self.cache.get(&key) {
@@ -555,25 +531,6 @@ impl QueryPlanCache {
 
             self.cache.insert(key, updated_plan);
         }
-    }
-
-    /// Check whether the query has been cached.
-    pub fn contains(&self, query: &str) -> bool {
-        let key = PlanCacheKey::from_query(query);
-        self.cache.contains_key(&key)
-    }
-
-    /// Invalidate the cache entry
-    pub fn invalidate(&self, query: &str) -> bool {
-        let key = PlanCacheKey::from_query(query);
-        let removed = self.cache.remove(&key).is_some();
-
-        if removed {
-            self.stats.counters.record_eviction();
-            self.update_stats();
-        }
-
-        removed
     }
 
     /// Invalidate all cache entries for a given space.
@@ -638,9 +595,8 @@ impl QueryPlanCache {
         self.stats.clone()
     }
 
-    /// Record a hit without a cache lookup, for pre-bind memos that
-    /// short-circuit before `get_with_context`. Keeps the hit rate accounting
-    /// consistent with the regular lookup path.
+    /// Record a hit for a pre-bind memo that bypassed `get_with_context`.
+    /// Called only after `serve_checked` accepts the memo candidate.
     pub fn record_memo_hit(&self) {
         self.stats.counters.record_hit();
         if let Ok(ref sm_guard) = self.stats_manager.read() {
@@ -653,10 +609,10 @@ impl QueryPlanCache {
     /// Single checked exit for cached plans (pre-bind memos, plan cache, and
     /// partitioned entries alike).
     ///
-    /// Wraps `PhysicalPlanValidator::check_compatibility` so success and
-    /// failure accounting stays aligned: success records a memo hit, failure
-    /// is reported to the caller for the memo-failure counter. Callers must
-    /// not duplicate the check inline.
+    /// Only validates compatibility. Cache lookups already recorded their
+    /// hit; a pre-bind memo that bypasses lookup records it itself after this
+    /// check succeeds. Keeping accounting outside the validator prevents a
+    /// plain cache hit from being counted twice.
     pub fn serve_checked(
         &self,
         plan: &Arc<crate::executor::streaming::plan::PhysicalPlan>,
@@ -666,9 +622,7 @@ impl QueryPlanCache {
             plan,
             schema_version,
         )
-        .map_err(linkrs_core::error::DBError::from)?;
-        self.record_memo_hit();
-        Ok(())
+        .map_err(linkrs_core::error::DBError::from)
     }
 
     /// Get statistics snapshot

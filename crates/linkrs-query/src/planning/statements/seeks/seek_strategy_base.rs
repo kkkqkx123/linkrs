@@ -390,6 +390,39 @@ pub struct StrategySelection {
     pub estimated_rows: usize,
 }
 
+/// Compare two scalar values used by property-seek predicates.
+pub(crate) fn compare_values(left: &Value, right: &Value) -> Option<i32> {
+    match (left, right) {
+        (Value::SmallInt(i1), Value::SmallInt(i2)) => Some(i1.cmp(i2) as i32),
+        (Value::Int(i1), Value::Int(i2)) => Some(i1.cmp(i2) as i32),
+        (Value::BigInt(i1), Value::BigInt(i2)) => Some(i1.cmp(i2) as i32),
+        (Value::Float(f1), Value::Float(f2)) => f1.partial_cmp(f2).map(|c| c as i32),
+        (Value::Double(f1), Value::Double(f2)) => f1.partial_cmp(f2).map(|c| c as i32),
+        (Value::String(s1), Value::String(s2)) => Some(s1.cmp(s2) as i32),
+        _ => None,
+    }
+}
+
+/// Whether a multi-label pattern needs a strategy that handles label unions.
+pub(crate) fn has_distinct_multi_labels(labels: &[String]) -> bool {
+    labels
+        .iter()
+        .collect::<std::collections::HashSet<_>>()
+        .len()
+        > 1
+}
+
+/// Whether a vertex satisfies every label in a single-label pattern.
+pub(crate) fn vertex_matches_single_label(
+    vertex: &linkrs_core::Vertex,
+    pattern: &NodePattern,
+) -> bool {
+    if pattern.labels.is_empty() {
+        return true;
+    }
+    pattern.labels.iter().all(|label| vertex.tag.name == *label)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

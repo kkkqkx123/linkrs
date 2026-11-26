@@ -8,7 +8,10 @@
 //! - Variable binding in parameterized queries
 
 use super::seek_strategy::SeekStrategy;
-use super::seek_strategy_base::{IndexInfo, SeekResult, SeekStrategyContext, SeekStrategyType};
+use super::seek_strategy_base::{
+    compare_values, has_distinct_multi_labels, vertex_matches_single_label, IndexInfo, SeekResult,
+    SeekStrategyContext, SeekStrategyType,
+};
 use crate::storage::StorageReader;
 use linkrs_core::{StorageError, Value};
 
@@ -214,16 +217,16 @@ impl VariablePropIndexSeek {
         match pred.op {
             VariablePredicateOp::Eq => value == var_value,
             VariablePredicateOp::Ne => value != var_value,
-            VariablePredicateOp::Lt => Self::compare_values(value, var_value)
+            VariablePredicateOp::Lt => compare_values(value, var_value)
                 .map(|c| c < 0)
                 .unwrap_or(false),
-            VariablePredicateOp::Le => Self::compare_values(value, var_value)
+            VariablePredicateOp::Le => compare_values(value, var_value)
                 .map(|c| c <= 0)
                 .unwrap_or(false),
-            VariablePredicateOp::Gt => Self::compare_values(value, var_value)
+            VariablePredicateOp::Gt => compare_values(value, var_value)
                 .map(|c| c > 0)
                 .unwrap_or(false),
-            VariablePredicateOp::Ge => Self::compare_values(value, var_value)
+            VariablePredicateOp::Ge => compare_values(value, var_value)
                 .map(|c| c >= 0)
                 .unwrap_or(false),
             VariablePredicateOp::In => {
@@ -232,37 +235,6 @@ impl VariablePropIndexSeek {
             }
         }
     }
-
-    /// Compare two values
-    fn compare_values(left: &Value, right: &Value) -> Option<i32> {
-        match (left, right) {
-            (Value::SmallInt(i1), Value::SmallInt(i2)) => Some(i1.cmp(i2) as i32),
-            (Value::Int(i1), Value::Int(i2)) => Some(i1.cmp(i2) as i32),
-            (Value::BigInt(i1), Value::BigInt(i2)) => Some(i1.cmp(i2) as i32),
-            (Value::Float(f1), Value::Float(f2)) => f1.partial_cmp(f2).map(|c| c as i32),
-            (Value::Double(f1), Value::Double(f2)) => f1.partial_cmp(f2).map(|c| c as i32),
-            (Value::String(s1), Value::String(s2)) => Some(s1.cmp(s2) as i32),
-            _ => None,
-        }
-    }
-}
-
-fn has_distinct_multi_labels(labels: &[String]) -> bool {
-    labels
-        .iter()
-        .collect::<std::collections::HashSet<_>>()
-        .len()
-        > 1
-}
-
-fn vertex_matches_single_label(
-    vertex: &linkrs_core::Vertex,
-    pattern: &super::seek_strategy_base::NodePattern,
-) -> bool {
-    if pattern.labels.is_empty() {
-        return true;
-    }
-    pattern.labels.iter().all(|label| vertex.tag.name == *label)
 }
 
 impl SeekStrategy for VariablePropIndexSeek {

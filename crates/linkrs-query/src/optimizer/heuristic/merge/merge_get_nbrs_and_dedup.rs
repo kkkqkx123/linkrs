@@ -1,11 +1,11 @@
 //! Combine the rules for retrieving neighboring elements and performing deduplication operations.
 
+use super::graph_scan_merge::merge_dedup;
 use crate::optimizer::heuristic::context::RewriteContext;
 use crate::optimizer::heuristic::pattern::Pattern;
 use crate::optimizer::heuristic::result::{RewriteResult, TransformResult};
 use crate::optimizer::heuristic::rule::{MergeRule, RewriteRule};
 use crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
-use crate::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
 
 /// Combine the rules for obtaining neighboring elements and performing deduplication operations.
 ///
@@ -62,44 +62,10 @@ impl RewriteRule for MergeGetNbrsAndDedupRule {
         _ctx: &mut RewriteContext,
         node: &PlanNodeEnum,
     ) -> RewriteResult<Option<TransformResult>> {
-        // Check whether it is a GetNeighbors node.
-        let get_neighbors = match node {
-            PlanNodeEnum::GetNeighbors(n) => n,
-            _ => return Ok(None),
-        };
-
-        // GetNeighbors uses the MultipleInputNode and needs to retrieve the dependencies.
-        let deps = get_neighbors.dependencies();
-        if deps.is_empty() {
-            return Ok(None);
-        }
-
-        // Check whether the first dependency is a Dedup node.
-        let dedup_node = match deps.first() {
-            Some(PlanNodeEnum::Dedup(n)) => n,
-            _ => return Ok(None),
-        };
-
-        // Use the input from Dedup as the new input.
-        let dedup_input = dedup_node.input().clone();
-
-        // Create a new GetNeighbors node.
-        let mut new_get_neighbors = get_neighbors.clone();
-
-        // Set the deduplication flag
-        if !new_get_neighbors.dedup() {
-            new_get_neighbors.set_dedup(true);
-        }
-
-        // Remove the existing dependencies and set up the new input.
-        new_get_neighbors.deps_mut().clear();
-        new_get_neighbors.deps_mut().push(dedup_input);
-
-        let mut result = TransformResult::new();
-        result.erase_curr = true;
-        result.add_new_node(PlanNodeEnum::GetNeighbors(new_get_neighbors));
-
-        Ok(Some(result))
+        merge_dedup(node, |node| match node {
+            PlanNodeEnum::GetNeighbors(scan) => Some(scan),
+            _ => None,
+        })
     }
 }
 
@@ -122,6 +88,7 @@ impl MergeRule for MergeGetNbrsAndDedupRule {
 mod tests {
     use super::*;
     use crate::planning::plan::core::nodes::access::graph_scan_node::GetNeighborsNode;
+    use crate::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
     use crate::planning::plan::core::nodes::control_flow::start_node::StartNode;
     use crate::planning::plan::core::nodes::graph_operations::graph_operations_node::DedupNode;
 

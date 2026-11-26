@@ -2,6 +2,7 @@
 //!
 //! Provide core functions such as type compatibility checking, type precedence, and type conversion.
 
+use crate::value::date_time::{DateTimeValue, DateValue, TimeValue};
 use crate::value::list::List;
 use crate::{ArrayTypeInfo, DataType, StructTypeInfo, Value};
 use std::sync::Arc;
@@ -598,7 +599,27 @@ impl TypeUtils {
             DataType::BigInt => Some(Value::BigInt(0)),
             DataType::Float => Some(Value::Float(0.0)),
             DataType::Double => Some(Value::Double(0.0)),
-            DataType::String => Some(Value::string("")),
+            DataType::String | DataType::FixedString(_) => Some(Value::string("")),
+            DataType::Date => Some(Value::Date(DateValue {
+                year: 1970,
+                month: 1,
+                day: 1,
+            })),
+            DataType::DateTime => Some(Value::DateTime(DateTimeValue {
+                year: 1970,
+                month: 1,
+                day: 1,
+                hour: 0,
+                minute: 0,
+                sec: 0,
+                microsec: 0,
+            })),
+            DataType::Time => Some(Value::Time(TimeValue {
+                hour: 0,
+                minute: 0,
+                sec: 0,
+                microsec: 0,
+            })),
             DataType::List(_) => Some(Value::list(List::from(Vec::new()))),
             DataType::Map(_) => Some(Value::map(std::collections::HashMap::new())),
             _ => None,
@@ -1127,6 +1148,19 @@ mod tests {
             TypeUtils::get_default_value(&DataType::String),
             Some(Value::string(""))
         );
-        assert!(TypeUtils::get_default_value(&DataType::Date).is_none());
+        assert_eq!(
+            TypeUtils::get_default_value(&DataType::FixedString(8)),
+            Some(Value::string(""))
+        );
+        assert_eq!(
+            TypeUtils::get_default_value(&DataType::Date),
+            Some(Value::Date(DateValue {
+                year: 1970,
+                month: 1,
+                day: 1,
+            }))
+        );
+        assert!(TypeUtils::get_default_value(&DataType::Time).is_some());
+        assert!(TypeUtils::get_default_value(&DataType::DateTime).is_some());
     }
 }

@@ -18,6 +18,7 @@ pub mod wal;
 // Utility modules
 pub mod arena;
 pub mod bloom_filter;
+pub mod column_names;
 pub mod columnar;
 pub mod fs;
 pub mod function;

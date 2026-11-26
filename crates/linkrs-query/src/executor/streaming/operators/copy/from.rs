@@ -194,7 +194,9 @@ fn run_import(
     log::debug!(
         "COPY FROM '{}': bulk-load session engaged: {}",
         file_paths.join(", "),
-        bulk_session.as_ref().is_some_and(|session| session.active()),
+        bulk_session
+            .as_ref()
+            .is_some_and(|session| session.active()),
     );
 
     // Phase timing for import diagnosis is gated by the debug log level, so
@@ -209,9 +211,9 @@ fn run_import(
         // One writer for the whole import: every batch joins the same group
         // window (shared timestamp and transaction), so rebinding per batch
         // only repeats the bind setup without changing semantics.
-        let mut writer = storage.bind_auto_commit_writer(&window).map_err(|e| {
-            QueryError::execution(format!("COPY FROM failed to bind writer: {e}"))
-        })?;
+        let mut writer = storage
+            .bind_auto_commit_writer(&window)
+            .map_err(|e| QueryError::execution(format!("COPY FROM failed to bind writer: {e}")))?;
 
         while !merged.is_eof() {
             if let Some(rt) = &runtime {
@@ -418,13 +420,6 @@ pub(crate) struct ColumnMapping {
     pub(crate) expected_width: usize,
 }
 
-/// Locate a column by case-insensitive name among several aliases.
-fn find_column(headers: &[String], aliases: &[&str]) -> Option<usize> {
-    headers
-        .iter()
-        .position(|h| aliases.iter().any(|a| h.eq_ignore_ascii_case(a)))
-}
-
 /// Resolve the column mapping for one import.
 ///
 /// Header imports locate keys by name (`vid`/`id`/`_id`/`vertex_id`,
@@ -467,14 +462,17 @@ fn build_column_mapping(
 
     match layout {
         KeyLayout::Vertex => {
-            let vid_index =
-                find_column(headers, &["vid", "id", "_id", "vertex_id"]).ok_or_else(|| {
-                    QueryError::execution(
-                        "COPY FROM: header row has no vertex id column \
+            let vid_index = linkrs_core::column_names::find_alias_index(
+                headers,
+                &["vid", "id", "_id", "vertex_id"],
+            )
+            .ok_or_else(|| {
+                QueryError::execution(
+                    "COPY FROM: header row has no vertex id column \
                          (expected one of: vid, id, _id, vertex_id)"
-                            .to_string(),
-                    )
-                })?;
+                        .to_string(),
+                )
+            })?;
             let property_indices = excluded_pairs(headers, &[vid_index]);
             Ok(ColumnMapping {
                 vid_index,
@@ -485,8 +483,12 @@ fn build_column_mapping(
             })
         }
         KeyLayout::Edge => {
-            let src_hit = find_column(headers, &["src", "_src", "source"]);
-            let dst_hit = find_column(headers, &["dst", "_dst", "destination", "dest"]);
+            let src_hit =
+                linkrs_core::column_names::find_alias_index(headers, &["src", "_src", "source"]);
+            let dst_hit = linkrs_core::column_names::find_alias_index(
+                headers,
+                &["dst", "_dst", "destination", "dest"],
+            );
             let (src_index, dst_index) = match (src_hit, dst_hit) {
                 (Some(s), Some(d)) => {
                     if s == d {

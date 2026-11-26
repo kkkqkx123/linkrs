@@ -12,6 +12,7 @@
 //! - `cte_cache`: CTE result cache
 
 // Submodules
+pub(crate) mod bounded_lru;
 pub mod config;
 pub mod cte_cache;
 pub mod plan_cache;

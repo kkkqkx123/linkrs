@@ -9,6 +9,7 @@ use crate::api_core::types::PropertyDef;
 use crate::api_core::{CoreError, CoreResult};
 use crate::embedded::result::QueryResult;
 use crate::embedded::result::Row;
+use linkrs_core::column_names::find_alias_index;
 use linkrs_core::types::storage_ids::VertexId;
 use linkrs_core::DataType;
 use linkrs_core::Edge;
@@ -147,7 +148,8 @@ impl<S: StorageClient + Clone + Send + Sync + 'static + linkrs_storage::UndoTarg
         columns: &[String],
         inner: &QueryResult,
     ) -> CoreResult<QueryResult> {
-        let vid_col = find_result_column(columns, &["vid", "id", "_id", "vertex_id"])
+        let vid_col = find_alias_index(columns, &["vid", "id", "_id", "vertex_id"])
+            .map(|index| columns[index].clone())
             .ok_or_else(|| {
                 CoreError::InvalidParameter(
                     "CREATE TAG ... AS requires the inner query to output a vertex id column (vid/id)"
@@ -224,8 +226,10 @@ impl<S: StorageClient + Clone + Send + Sync + 'static + linkrs_storage::UndoTarg
         columns: &[String],
         inner: &QueryResult,
     ) -> CoreResult<QueryResult> {
-        let src_col = find_result_column(columns, &["src", "_src", "source"]);
-        let dst_col = find_result_column(columns, &["dst", "_dst", "destination", "dest"]);
+        let src_col = find_alias_index(columns, &["src", "_src", "source"])
+            .map(|index| columns[index].clone());
+        let dst_col = find_alias_index(columns, &["dst", "_dst", "destination", "dest"])
+            .map(|index| columns[index].clone());
         let (src_col, dst_col) = match (src_col, dst_col) {
             (Some(s), Some(d)) => {
                 if s == d {
@@ -324,14 +328,6 @@ impl<S: StorageClient + Clone + Send + Sync + 'static + linkrs_storage::UndoTarg
             "Created edge type '{name}' with {count} edges from query"
         )))
     }
-}
-
-/// Locate a result column by case-insensitive name among several aliases.
-fn find_result_column(columns: &[String], aliases: &[&str]) -> Option<String> {
-    columns
-        .iter()
-        .find(|c| aliases.iter().any(|a| c.eq_ignore_ascii_case(a)))
-        .cloned()
 }
 
 /// Derive property definitions from query result columns.

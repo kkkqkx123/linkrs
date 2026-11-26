@@ -5,6 +5,7 @@
 pub mod collapse_consecutive_project;
 pub mod collapse_project;
 pub mod combine_filter;
+pub(crate) mod graph_scan_merge;
 pub mod merge_get_nbrs_and_dedup;
 pub mod merge_get_nbrs_and_project;
 pub mod merge_get_vertices_and_dedup;
