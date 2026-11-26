@@ -1091,11 +1091,18 @@ message CreateVectorIndexRequest {
   VectorIndexOptions options = 4;
 }
 
+message SparseVectorData {
+  repeated uint32 indices = 1;
+  repeated float values = 2;
+}
+
 message VectorIndexOptions {
   int32 dimension = 1;
   DistanceMetric metric = 2;
   string index_type = 3;  // HNSW, FLAT, IVF, etc.
   map<string, string> parameters = 4;
+  // Payload layout: "dense" (default) or "sparse".
+  string kind = 5;
 }
 
 enum DistanceMetric {
@@ -1158,6 +1165,7 @@ message SearchVectorRequest {
   int32 limit = 5;
   SearchFilter filter = 6;
   SearchOptions options = 7;
+  SparseVectorData sparse_vector = 8;
 }
 
 message SearchFilter {
@@ -1182,6 +1190,7 @@ message VectorSearchResult {
   float score = 2;
   map<string, Value> properties = 3;
   repeated float vector = 4;  // If with_vector=true
+  SparseVectorData data = 5;
 }
 
 // ============================================================

@@ -155,7 +155,12 @@ pub fn build_create_collection_body(cfg: &CollectionConfig) -> Result<Value, Vec
     }
 
     let mut body = serde_json::Map::new();
-    body.insert("vectors".to_string(), vectors);
+    if cfg.kind == simvec::VectorKind::Sparse {
+        body.insert("vectors".to_string(), json!({}));
+        body.insert("sparse_vectors".to_string(), json!({ "sparse": {} }));
+    } else {
+        body.insert("vectors".to_string(), vectors);
+    }
 
     if let Some(on_disk) = cfg.on_disk_payload {
         body.insert("on_disk_payload".to_string(), json!(on_disk));
@@ -243,7 +248,7 @@ pub fn build_delete_by_filter_body(filter: Value) -> Value {
 
 #[allow(clippy::too_many_arguments)]
 pub fn build_search_body(
-    vector: Vec<f32>,
+    vector: Value,
     limit: usize,
     offset: Option<usize>,
     score_threshold: Option<f32>,
@@ -253,7 +258,7 @@ pub fn build_search_body(
     nprobe: Option<usize>,
 ) -> Value {
     let mut body = serde_json::Map::new();
-    body.insert("vector".to_string(), json!(vector));
+    body.insert("vector".to_string(), vector);
     body.insert("limit".to_string(), json!(limit));
     body.insert(
         "with_payload".to_string(),
@@ -543,7 +548,7 @@ mod tests {
 
     #[test]
     fn test_build_search_body_minimal() {
-        let body = build_search_body(vec![1.0, 2.0], 10, None, None, None, None, None, None);
+        let body = build_search_body(json!([1.0, 2.0]), 10, None, None, None, None, None, None);
         assert_eq!(body.get("vector").unwrap().as_array().unwrap().len(), 2);
         assert_eq!(body.get("limit").unwrap().as_u64(), Some(10));
         assert_eq!(body.get("with_payload").unwrap().as_bool(), Some(true));
@@ -554,7 +559,7 @@ mod tests {
     fn test_build_search_body_with_options() {
         let filter = serde_json::json!({"must": []});
         let body = build_search_body(
-            vec![1.0],
+            json!([1.0]),
             5,
             Some(2),
             Some(0.5),
@@ -628,7 +633,7 @@ mod tests {
 
     #[test]
     fn test_build_search_batch_body() {
-        let search = build_search_body(vec![1.0], 10, None, None, None, None, None, None);
+        let search = build_search_body(json!([1.0]), 10, None, None, None, None, None, None);
         let body = build_search_batch_body(vec![search]);
         let searches = body.get("searches").unwrap().as_array().unwrap();
         assert_eq!(searches.len(), 1);

@@ -247,6 +247,7 @@ impl RemoteVectorEngine for MockVectorEngine {
                     } else {
                         None
                     },
+                    data: None,
                     vector: if query.with_vector.unwrap_or(false) {
                         Some(point.vector.clone())
                     } else {
@@ -633,6 +634,8 @@ fn matches_condition(condition: &FilterCondition, point: &VectorPoint) -> bool {
                     let nested_point = VectorPoint {
                         id: point.id.clone(),
                         vector: point.vector.clone(),
+                        data: None,
+                        named: std::collections::BTreeMap::new(),
                         payload: Some(nested_payload),
                     };
                     return matches_filter(&Some(*filter.clone()), &nested_point);

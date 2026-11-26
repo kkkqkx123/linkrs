@@ -17,6 +17,7 @@ pub(crate) fn handle(
             space_id,
             index_name: _,
             query_vector,
+            query_data,
             query_text,
             top_k,
             tag_name,
@@ -57,6 +58,10 @@ pub(crate) fn handle(
                         resolved_vector,
                         recall_limit,
                     );
+                    if let Some(data) = query_data {
+                        options.query_data = Some(data.clone());
+                        options.query_vector.clear();
+                    }
                     match threshold {
                         Some(t) if *t > 0.0 => options.threshold = Some(*t),
                         _ => {}

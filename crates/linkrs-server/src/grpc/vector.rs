@@ -248,8 +248,10 @@ impl<
                     "space_name, tag_name and field_name are required",
                 ));
             }
-            if req.vector.is_empty() {
-                return Err(Status::invalid_argument("query vector must not be empty"));
+            if req.vector.is_empty() && req.sparse_vector.is_none() {
+                return Err(Status::invalid_argument(
+                    "dense query vector or sparse_vector must be provided",
+                ));
             }
             if req.limit <= 0 {
                 return Err(Status::invalid_argument("limit must be greater than 0"));
@@ -274,6 +276,11 @@ impl<
                 req.vector,
                 req.limit as usize,
             );
+            if let Some(sparse) = req.sparse_vector {
+                options.query_data =
+                    Some(simvec::VectorData::sparse(sparse.indices, sparse.values));
+                options.query_vector.clear();
+            }
             if let Some(filter) = &req.filter {
                 if !filter.expression.is_empty() {
                     let parsed = crate::http::handlers::vector::parse_vector_filter_expression(
@@ -305,6 +312,17 @@ impl<
                         } else {
                             Vec::new()
                         },
+                        data: r.data.map(|data| match data {
+                            simvec::VectorData::Sparse { indices, values } => {
+                                super::proto::SparseVectorData { indices, values }
+                            }
+                            simvec::VectorData::Dense(_) | simvec::VectorData::Multi(_) => {
+                                super::proto::SparseVectorData {
+                                    indices: Vec::new(),
+                                    values: Vec::new(),
+                                }
+                            }
+                        }),
                     }
                 })
                 .collect();
@@ -795,7 +813,17 @@ pub(crate) fn grpc_collection_config(
         None => None,
     };
     let always_ram = parse_optional_param::<bool>(params, "always_ram")?;
+    let vector_kind = match opts.kind.trim().to_ascii_lowercase().as_str() {
+        "" | "dense" => Some(linkrs_query::parser::ast::vector::VectorIndexKind::Dense),
+        "sparse" => Some(linkrs_query::parser::ast::vector::VectorIndexKind::Sparse),
+        other => {
+            return Err(Status::invalid_argument(format!(
+                "unknown vector kind '{other}', expected dense or sparse"
+            )))
+        }
+    };
     let options = linkrs_query::vector_ddl::CollectionOptions {
+        kind: vector_kind,
         hnsw_m,
         hnsw_ef_construct: hnsw_ef,
         hnsw_full_scan_threshold: parse_optional_param::<usize>(

@@ -168,6 +168,12 @@ pub trait RemoteVectorEngine: Send + Sync + std::fmt::Debug {
     fn name(&self) -> &str;
     fn version(&self) -> &str;
 
+    /// Vector kinds this backend can serve. Qdrant supports dense and sparse;
+    /// backends that only implement the dense path keep the default.
+    fn supported_kinds(&self) -> Vec<crate::types::VectorKind> {
+        vec![crate::types::VectorKind::Dense]
+    }
+
     async fn health_check(&self) -> Result<HealthStatus>;
 
     async fn create_collection(&self, name: &str, config: CollectionConfig) -> Result<()>;

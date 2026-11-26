@@ -30,6 +30,7 @@ pub(crate) fn handle(
             pattern: _,
             field: _,
             query_vector,
+            query_data,
             query_text,
             threshold,
             tag_name,
@@ -53,7 +54,7 @@ pub(crate) fn handle(
                         query_vector.clone()
                     };
                     let thr = threshold.unwrap_or(0.5);
-                    let options = linkrs_sync::vector_sync::SearchOptions::new(
+                    let mut options = linkrs_sync::vector_sync::SearchOptions::new(
                         *space_id,
                         tag_name.clone(),
                         field_name.clone(),
@@ -61,6 +62,10 @@ pub(crate) fn handle(
                         DEFAULT_MATCH_TOP_K,
                     )
                     .with_threshold(thr);
+                    if let Some(data) = query_data {
+                        options.query_data = Some(data.clone());
+                        options.query_vector.clear();
+                    }
                     let _ = ryw_config;
                     let search_results = crate::executor::streaming::helpers::runtime_bridge::wait(
                         "Vector match",

@@ -1,6 +1,8 @@
 use crate::executor::base::ExecutionContext;
 use crate::executor::build_error::PlanBuildError;
-use crate::executor::streaming::operators::spec::{VectorManageCommand, VectorSpec};
+use crate::executor::streaming::operators::spec::{
+    SpecVectorData, VectorManageCommand, VectorSpec,
+};
 
 fn vector_manage_to_command(
     node: &crate::planning::plan::core::nodes::management::manage_node_enums::VectorManageNode,
@@ -13,6 +15,7 @@ fn vector_manage_to_command(
             tag_name: n.tag_name.clone(),
             field_name: n.field_name.clone(),
             vector_size: n.vector_size,
+            kind: n.kind,
             distance: n.distance,
             space_id: n.space_id,
             hnsw_m: n.hnsw_m,
@@ -56,12 +59,13 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_simvec_spec(
     node: &crate::planning::plan::core::nodes::search::vector::data_access::VectorSearchNode,
     exec_ctx: &ExecutionContext,
 ) -> Result<VectorSpec, PlanBuildError> {
-    let (query_vector, query_text) = vector_query_to_vec(&node.query, exec_ctx)?;
+    let (query_vector, query_data, query_text) = vector_query_to_vec(&node.query, exec_ctx)?;
     Ok(VectorSpec::VectorSearch {
         space_name: exec_ctx.space_name.clone().unwrap_or_default(),
         space_id: node.space_id,
         index_name: node.index_name.clone(),
         query_vector,
+        query_data,
         query_text,
         top_k: node.limit as u32,
         tag_name: node.tag_name.clone(),
@@ -81,12 +85,13 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_vector_lookup_s
     // LOOKUP VECTOR resolves to the same index location as SEARCH VECTOR and
     // executes through the identical search path; the query expression keeps
     // its semantics (converted here exactly like a search query vector).
-    let (query_vector, query_text) = vector_query_to_vec(&node.query, exec_ctx)?;
+    let (query_vector, query_data, query_text) = vector_query_to_vec(&node.query, exec_ctx)?;
     Ok(VectorSpec::VectorLookup {
         space_name: exec_ctx.space_name.clone().unwrap_or_default(),
         space_id: node.space_id,
         index_name: node.index_name.clone(),
         query_vector,
+        query_data,
         query_text,
         top_k: node.limit as u32,
         tag_name: node.tag_name.clone(),
@@ -100,12 +105,13 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_vector_match_sp
     node: &crate::planning::plan::core::nodes::search::vector::data_access::VectorMatchNode,
     exec_ctx: &ExecutionContext,
 ) -> Result<VectorSpec, PlanBuildError> {
-    let (query_vector, query_text) = vector_query_to_vec(&node.query, exec_ctx)?;
+    let (query_vector, query_data, query_text) = vector_query_to_vec(&node.query, exec_ctx)?;
     Ok(VectorSpec::VectorMatch {
         space_name: exec_ctx.space_name.clone().unwrap_or_default(),
         pattern: node.pattern.clone(),
         field: node.field.clone(),
         query_vector,
+        query_data,
         query_text,
         threshold: node.threshold,
         tag_name: node.tag_name.clone(),
@@ -120,17 +126,27 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_vector_match_sp
 fn vector_query_to_vec(
     expr: &crate::parser::ast::vector::VectorQueryExpr,
     exec_ctx: &ExecutionContext,
-) -> Result<(Vec<f32>, Option<String>), PlanBuildError> {
+) -> Result<(Vec<f32>, Option<SpecVectorData>, Option<String>), PlanBuildError> {
     match expr.query_type {
         crate::parser::ast::vector::VectorQueryType::Vector => {
             let vec: Vec<f32> = serde_json::from_str(&expr.query_data).unwrap_or_default();
-            Ok((vec, None))
+            Ok((vec, None, None))
+        }
+        crate::parser::ast::vector::VectorQueryType::Sparse => {
+            let data: simvec::VectorData =
+                serde_json::from_str(&expr.query_data).map_err(|_| {
+                    PlanBuildError::capability(
+                        "sparse-vector-query",
+                        format!("Invalid sparse query payload: {}", expr.query_data),
+                    )
+                })?;
+            Ok((Vec::new(), Some(data), None))
         }
         crate::parser::ast::vector::VectorQueryType::Text => {
             // Text queries require embedding at execution time (async);
             // return an empty placeholder vector so the spec can carry the
             // raw text forward for deferred resolution in VectorOperator.
-            Ok((vec![], Some(expr.query_data.clone())))
+            Ok((vec![], None, Some(expr.query_data.clone())))
         }
         crate::parser::ast::vector::VectorQueryType::Parameter => {
             let param_name = expr.query_data.trim_start_matches('$');
@@ -140,8 +156,19 @@ fn vector_query_to_vec(
                     format!("Parameter '${}' is not bound", param_name),
                 )
             })?;
+            if let linkrs_core::Value::Vector(vector) = val {
+                if vector.is_sparse() {
+                    let indices = vector_as_sparse_indices(vector).ok_or_else(|| {
+                        PlanBuildError::capability(
+                            "parameterized-vector-query",
+                            format!("Parameter '${param_name}' is not a valid sparse vector"),
+                        )
+                    })?;
+                    return Ok((Vec::new(), Some(indices), None));
+                }
+            }
             let vec = resolve_param_to_vector(val, param_name)?;
-            Ok((vec, None))
+            Ok((vec, None, None))
         }
     }
 }
@@ -188,5 +215,17 @@ fn resolve_param_to_vector(
                 param_name, val
             ),
         )),
+    }
+}
+
+#[cfg(feature = "vector")]
+fn vector_as_sparse_indices(
+    vector: &linkrs_core::value::VectorValue,
+) -> Option<simvec::VectorData> {
+    match vector {
+        linkrs_core::value::VectorValue::Sparse { indices, values } => {
+            Some(simvec::VectorData::sparse(indices.clone(), values.clone()))
+        }
+        _ => None,
     }
 }

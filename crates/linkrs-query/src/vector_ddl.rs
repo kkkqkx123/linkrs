@@ -8,7 +8,7 @@
 
 #[cfg(feature = "vector")]
 use crate::parser::ast::vector::VectorDistance;
-use crate::parser::ast::vector::{CompressionRatioKind, QuantizationKind};
+use crate::parser::ast::vector::{CompressionRatioKind, QuantizationKind, VectorIndexKind};
 
 /// Map a GQL distance token to the engine metric.
 #[cfg(feature = "vector")]
@@ -57,6 +57,7 @@ pub fn compression_from_str(raw: &str) -> Option<CompressionRatioKind> {
 /// default".
 #[derive(Debug, Clone, Default)]
 pub struct CollectionOptions {
+    pub kind: Option<VectorIndexKind>,
     pub hnsw_m: Option<usize>,
     pub hnsw_ef_construct: Option<usize>,
     pub hnsw_full_scan_threshold: Option<usize>,
@@ -87,7 +88,34 @@ pub fn build_collection_config(
     distance: simvec::DistanceMetric,
     options: &CollectionOptions,
 ) -> Result<simvec::CollectionConfig, String> {
-    let mut config = simvec::CollectionConfig::new(vector_size, distance);
+    let kind = options.kind.unwrap_or_default();
+    let mut config = match kind {
+        VectorIndexKind::Dense => simvec::CollectionConfig::new(vector_size, distance),
+        VectorIndexKind::Sparse => {
+            if !matches!(
+                distance,
+                simvec::DistanceMetric::Cosine | simvec::DistanceMetric::Dot
+            ) {
+                return Err(format!(
+                    "sparse vector indexes support only cosine or dot distance, got {distance:?}"
+                ));
+            }
+            simvec::CollectionConfig::with_sparse(vector_size, distance)
+        }
+    };
+
+    if kind == VectorIndexKind::Sparse
+        && (options.hnsw_m.is_some()
+            || options.hnsw_ef_construct.is_some()
+            || options.hnsw_full_scan_threshold.is_some()
+            || options.hnsw_max_indexing_threads.is_some()
+            || options.hnsw_on_disk.is_some()
+            || options.hnsw_payload_m.is_some()
+            || options.quantization.is_some()
+            || options.vectors_on_disk.is_some())
+    {
+        return Err("sparse vector indexes do not support ANN or quantization options".to_string());
+    }
 
     let has_hnsw = options.hnsw_m.is_some()
         || options.hnsw_ef_construct.is_some()

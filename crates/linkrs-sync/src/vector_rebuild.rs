@@ -389,19 +389,34 @@ impl SyncManager {
                 continue;
             }
             progress.docs_scanned += docs.len() as u64;
+            let config = coordinator
+                .index_manager()
+                .index_info(space_id, tag_name, field_name)
+                .map(|metadata| metadata.config)
+                .ok_or_else(|| {
+                    SyncError::PersistenceError(format!(
+                        "missing index metadata for {space_id}.{tag_name}.{field_name}"
+                    ))
+                })?;
             let mut contexts = Vec::with_capacity(docs.len());
             for doc in &docs {
                 // Only the rebuilt field is backfilled; anything else is
                 // skipped exactly as the live path skips non-vector values
                 // (the temp starts empty, so there is nothing to delete).
-                let Some(vector) = doc
+                let value = doc
                     .properties
                     .iter()
                     .find(|(name, _)| name.as_ref() == field_name)
-                    .and_then(|(_, value)| value.as_vector())
+                    .and_then(|(_, value)| crate::vector_type_conv::core_vector_value(value));
+                let Some(data) = crate::vector_type_conv::core_vector_to_index_data(value, &config)
+                    .map_err(SyncError::PersistenceError)?
                 else {
                     progress.docs_skipped += 1;
                     continue;
+                };
+                let vector = match &data {
+                    simvec::VectorData::Dense(values) => values.clone(),
+                    _ => Vec::new(),
                 };
                 let payload = doc
                     .properties
@@ -419,7 +434,8 @@ impl SyncManager {
                             tag_name,
                             field_name,
                         ),
-                        vector: vector.to_vec(),
+                        vector,
+                        data: Some(data),
                         payload,
                     },
                 ));
@@ -860,11 +876,7 @@ impl SyncManager {
                         );
                         if let Ok(restored) = manager.backend().restore_promote_backup(&live).await
                         {
-                            log::warn!(
-                                "Restored vector live {} from backup {}",
-                                live,
-                                restored
-                            );
+                            log::warn!("Restored vector live {} from backup {}", live, restored);
                         }
                     }
                 }

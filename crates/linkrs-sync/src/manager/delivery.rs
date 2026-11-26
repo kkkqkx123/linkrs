@@ -164,7 +164,9 @@ async fn handle_delivery_error(
             auth_paused_until_ms.store(pause_until, std::sync::atomic::Ordering::Relaxed);
             log::error!(
                 "auth failure for target {}: pausing outbox delivery until {}: {}",
-                target, pause_until, error
+                target,
+                pause_until,
+                error
             );
             outbox
                 .retry(event, now.saturating_add(60_000), error)
@@ -221,7 +223,8 @@ impl super::SyncManager {
         if paused_until > now_for_pause {
             log::warn!(
                 "outbox delivery paused due to auth failure: paused_until={}, now={}",
-                paused_until, now_for_pause
+                paused_until,
+                now_for_pause
             );
             return Ok(0);
         }
@@ -859,12 +862,33 @@ impl super::SyncManager {
                     if !coordinator.index_exists(*space_id, tag_name, field_name) {
                         continue;
                     }
-                    let (vector, vector_change_type) = match (value.as_vector(), change_type) {
-                        (Some(vector), ChangeType::Insert | ChangeType::Update) => (
-                            vector.to_vec(),
-                            crate::vector_sync::VectorChangeType::Insert,
+                    let config = coordinator
+                        .index_manager()
+                        .index_info(*space_id, tag_name, field_name)
+                        .map(|metadata| metadata.config);
+                    let (vector, data, vector_change_type) = match (
+                        crate::vector_type_conv::core_vector_value(value),
+                        change_type,
+                    ) {
+                        (Some(vector), ChangeType::Insert | ChangeType::Update) => {
+                            let config = config.ok_or_else(|| {
+                                format!("missing index metadata for {}.{}", tag_name, field_name)
+                            })?;
+                            let data = crate::vector_type_conv::core_vector_to_index_data(
+                                Some(vector),
+                                &config,
+                            )?;
+                            let vector = match &data {
+                                Some(simvec::VectorData::Dense(values)) => values.clone(),
+                                _ => Vec::new(),
+                            };
+                            (vector, data, crate::vector_sync::VectorChangeType::Insert)
+                        }
+                        _ => (
+                            Vec::new(),
+                            None,
+                            crate::vector_sync::VectorChangeType::Delete,
                         ),
-                        _ => (Vec::new(), crate::vector_sync::VectorChangeType::Delete),
                     };
                     let payload = properties
                         .iter()
@@ -878,6 +902,7 @@ impl super::SyncManager {
                         crate::vector_sync::VectorPointData {
                             id: format_vector_point_id(vertex_id, tag_name, field_name),
                             vector,
+                            data,
                             payload,
                         },
                     ));
@@ -904,6 +929,7 @@ impl super::SyncManager {
                                         &metadata.field_name,
                                     ),
                                     vector: Vec::new(),
+                                    data: None,
                                     payload: HashMap::new(),
                                 },
                             ));

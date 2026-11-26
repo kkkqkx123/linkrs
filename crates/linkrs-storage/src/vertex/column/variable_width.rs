@@ -145,10 +145,16 @@ impl ColumnStorage for VariableWidthColumn {
                     ))
                 })?;
             Ok(Some(Value::Geography(geo)))
-        } else if matches!(
-            self.data_type,
-            DataType::Vector | DataType::VectorDense(_) | DataType::VectorSparse(_)
-        ) {
+        } else if let DataType::VectorSparse(vocab) = &self.data_type {
+            let value: VectorValue = postcard::from_bytes(bytes).map_err(|e| {
+                StorageError::deserialize_error(format!(
+                    "sparse vector payload undecodable at row {}: {}",
+                    row_idx, e
+                ))
+            })?;
+            validate_sparse_vocab(&value, *vocab, row_idx)?;
+            Ok(Some(Value::Vector(value)))
+        } else if matches!(self.data_type, DataType::Vector | DataType::VectorDense(_)) {
             if !bytes.len().is_multiple_of(std::mem::size_of::<f32>()) {
                 return Err(StorageError::deserialize_error(format!(
                     "vector payload length {} not a multiple of 4 at row {}",
@@ -266,9 +272,14 @@ impl ColumnStorage for VariableWidthColumn {
                 }
             }
         }
-        // Wide or unsized dense vectors stay on this base with an explicit
-        // dimension check so a wrong-dimension write fails before appending
-        // payload instead of persisting a corrupt length prefix.
+        // Sparse vectors keep their (index, weight) pairs; dense vectors
+        // stay as raw f32 components. Both validate before appending a
+        // payload so a wrong shape never persists a corrupt length prefix.
+        if let DataType::VectorSparse(vocab) = &self.data_type {
+            if let Some(Value::Vector(value)) = value {
+                validate_sparse_vocab(value, *vocab, row_idx)?;
+            }
+        }
         if let DataType::VectorDense(dim) = &self.data_type {
             if *dim > 0 {
                 if let Some(Value::Vector(vec)) = value {
@@ -495,6 +506,14 @@ pub(crate) fn write_variable_value(data: &mut Vec<u8>, value: &Value) -> Storage
             data.extend_from_slice(&len.to_le_bytes());
             data.extend_from_slice(&bytes);
         }
+        Value::Vector(vec) if vec.is_sparse() => {
+            let bytes = postcard::to_allocvec(vec).map_err(|e| {
+                StorageError::invalid_input(format!("Failed to serialize sparse vector: {e}"))
+            })?;
+            let len = bytes.len() as u64;
+            data.extend_from_slice(&len.to_le_bytes());
+            data.extend_from_slice(&bytes);
+        }
         Value::Vector(vec) => {
             let dense = vec.to_dense();
             let bytes = dense
@@ -553,3 +572,29 @@ pub(crate) fn write_variable_value(data: &mut Vec<u8>, value: &Value) -> Storage
 }
 
 use linkrs_core::value::VectorValue;
+
+fn validate_sparse_vocab(value: &VectorValue, vocab: usize, row_idx: usize) -> StorageResult<()> {
+    let VectorValue::Sparse { indices, values } = value else {
+        return Err(StorageError::invalid_input(format!(
+            "VectorSparse({vocab}) cannot hold a dense vector at row {row_idx}"
+        )));
+    };
+    if indices.len() != values.len() {
+        return Err(StorageError::invalid_input(format!(
+            "sparse vector at row {row_idx} has {} indices and {} values",
+            indices.len(),
+            values.len()
+        )));
+    }
+    if indices.windows(2).any(|pair| pair[0] >= pair[1]) {
+        return Err(StorageError::invalid_input(format!(
+            "sparse vector at row {row_idx} has unsorted or duplicate indices"
+        )));
+    }
+    if indices.last().is_some_and(|last| *last as usize >= vocab) {
+        return Err(StorageError::invalid_input(format!(
+            "sparse index exceeds VectorSparse({vocab}) at row {row_idx}"
+        )));
+    }
+    Ok(())
+}

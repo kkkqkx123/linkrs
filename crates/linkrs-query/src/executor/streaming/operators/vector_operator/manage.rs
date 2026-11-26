@@ -41,6 +41,7 @@ pub(crate) fn handle(
                     tag_name,
                     field_name,
                     vector_size,
+                    kind,
                     distance,
                     space_id,
                     hnsw_m,
@@ -66,6 +67,7 @@ pub(crate) fn handle(
                         // its default.
                         let distance = crate::vector_ddl::distance_metric(*distance);
                         let options = crate::vector_ddl::CollectionOptions {
+                            kind: Some(*kind),
                             hnsw_m: *hnsw_m,
                             hnsw_ef_construct: *hnsw_ef_construct,
                             quantization: *quantization,

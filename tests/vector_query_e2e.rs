@@ -53,6 +53,8 @@ fn point(
     VectorPoint {
         id: PointId::Num(id),
         vector,
+        data: None,
+        named: std::collections::BTreeMap::new(),
         payload: Some(payload),
     }
 }

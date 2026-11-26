@@ -14,6 +14,7 @@ pub mod interceptor;
 pub mod streaming;
 
 use async_trait::async_trait;
+use log::{debug, info, warn};
 use std::collections::HashMap;
 use std::time::Duration;
 use tokio::sync::RwLock;
@@ -21,7 +22,6 @@ use tonic::metadata::Ascii;
 use tonic::metadata::MetadataValue;
 use tonic::transport::Channel;
 use tonic::Request;
-use log::{debug, info, warn};
 
 use super::RemoteVectorEngine;
 use crate::config::VectorClientConfig;
@@ -223,6 +223,13 @@ impl RemoteVectorEngine for QdrantGrpcEngine {
 
     fn version(&self) -> &str {
         QDRANT_GRPC_VERSION
+    }
+
+    fn supported_kinds(&self) -> Vec<crate::types::VectorKind> {
+        vec![
+            crate::types::VectorKind::Dense,
+            crate::types::VectorKind::Sparse,
+        ]
     }
 
     async fn health_check(&self) -> Result<HealthStatus> {

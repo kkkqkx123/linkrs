@@ -14,6 +14,14 @@ pub use simvec::types::VectorFilter as SpecVectorFilter;
 #[derive(Debug, Clone)]
 pub struct SpecVectorFilter;
 
+/// Non-dense query payload carried by vector operators.
+#[cfg(feature = "vector")]
+pub use simvec::VectorData as SpecVectorData;
+
+#[cfg(not(feature = "vector"))]
+#[derive(Debug, Clone)]
+pub struct SpecVectorData;
+
 /// Vector index DDL command payload.
 #[derive(Debug, Clone)]
 pub enum VectorManageCommand {
@@ -22,6 +30,7 @@ pub enum VectorManageCommand {
         tag_name: String,
         field_name: String,
         vector_size: usize,
+        kind: crate::parser::ast::vector::VectorIndexKind,
         distance: VectorDistance,
         space_id: u64,
         hnsw_m: Option<usize>,
@@ -68,6 +77,8 @@ pub enum VectorSpec {
         space_id: u64,
         index_name: String,
         query_vector: Vec<f32>,
+        /// Non-dense query payload; `query_vector` stays empty when set.
+        query_data: Option<SpecVectorData>,
         /// Raw text for TEXT queries; resolved to a vector at execution time
         /// via the embedding service. `None` for Vector/Parameter queries
         /// where the vector is already resolved.
@@ -90,6 +101,8 @@ pub enum VectorSpec {
         space_id: u64,
         index_name: String,
         query_vector: Vec<f32>,
+        /// Non-dense query payload.
+        query_data: Option<SpecVectorData>,
         /// Raw text for TEXT queries; resolved to a vector at execution time.
         query_text: Option<String>,
         top_k: u32,
@@ -103,6 +116,8 @@ pub enum VectorSpec {
         pattern: String,
         field: String,
         query_vector: Vec<f32>,
+        /// Non-dense query payload.
+        query_data: Option<SpecVectorData>,
         /// Raw text for TEXT queries; resolved to a vector at execution time.
         query_text: Option<String>,
         threshold: Option<f32>,

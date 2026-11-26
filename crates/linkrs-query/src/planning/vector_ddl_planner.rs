@@ -186,6 +186,7 @@ impl VectorDdlPlanner {
             config.distance,
             space_id,
         )
+        .with_kind(config.kind)
         .with_hnsw_m(config.hnsw_m)
         .with_hnsw_ef_construct(config.hnsw_ef_construct)
         .with_quantization(

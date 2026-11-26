@@ -17,6 +17,7 @@ pub(crate) fn handle(
             space_id,
             index_name: _,
             query_vector,
+            query_data,
             query_text,
             top_k,
             tag_name,
@@ -46,13 +47,17 @@ pub(crate) fn handle(
                     } else {
                         query_vector.clone()
                     };
-                    let options = linkrs_sync::vector_sync::SearchOptions::new(
+                    let mut options = linkrs_sync::vector_sync::SearchOptions::new(
                         *space_id,
                         tag_name.clone(),
                         field_name.clone(),
                         resolved_vector,
                         *top_k as usize,
                     );
+                    if let Some(data) = query_data {
+                        options.query_data = Some(data.clone());
+                        options.query_vector.clear();
+                    }
                     let _ = ryw_config;
                     let search_results = crate::executor::streaming::helpers::runtime_bridge::wait(
                         "Vector lookup",

@@ -2,7 +2,9 @@
 //!
 //! This module defines plan nodes for vector index management operations.
 
-use crate::parser::ast::vector::{CompressionRatioKind, QuantizationKind, VectorDistance};
+use crate::parser::ast::vector::{
+    CompressionRatioKind, QuantizationKind, VectorDistance, VectorIndexKind,
+};
 use crate::planning::plan::core::node_id_generator::next_node_id;
 use crate::planning::plan::core::nodes::base::memory_estimation::MemoryEstimatable;
 use crate::planning::plan::core::nodes::base::plan_node_category::PlanNodeCategory;
@@ -17,6 +19,7 @@ pub struct CreateVectorIndexParams {
     pub tag_name: String,
     pub field_name: String,
     pub vector_size: usize,
+    pub kind: VectorIndexKind,
     pub distance: VectorDistance,
     pub hnsw_m: Option<usize>,
     pub hnsw_ef_construct: Option<usize>,
@@ -44,6 +47,7 @@ impl CreateVectorIndexParams {
             tag_name,
             field_name,
             vector_size,
+            kind: VectorIndexKind::Dense,
             distance,
             hnsw_m: None,
             hnsw_ef_construct: None,
@@ -54,6 +58,11 @@ impl CreateVectorIndexParams {
             if_not_exists: false,
             space_id,
         }
+    }
+
+    pub fn with_kind(mut self, kind: VectorIndexKind) -> Self {
+        self.kind = kind;
+        self
     }
 
     pub fn with_hnsw_m(mut self, m: Option<usize>) -> Self {
@@ -95,6 +104,7 @@ pub struct CreateVectorIndexNode {
     pub tag_name: String,
     pub field_name: String,
     pub vector_size: usize,
+    pub kind: VectorIndexKind,
     pub distance: VectorDistance,
     pub hnsw_m: Option<usize>,
     pub hnsw_ef_construct: Option<usize>,
@@ -115,6 +125,7 @@ impl CreateVectorIndexNode {
             tag_name: params.tag_name,
             field_name: params.field_name,
             vector_size: params.vector_size,
+            kind: params.kind,
             distance: params.distance,
             hnsw_m: params.hnsw_m,
             hnsw_ef_construct: params.hnsw_ef_construct,

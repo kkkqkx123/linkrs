@@ -388,6 +388,7 @@ fn test_stmt_category_exhaustive() {
                 schema_name: "s".to_string(),
                 field_name: "f".to_string(),
                 config: VectorIndexConfig {
+                    kind: crate::parser::ast::vector::VectorIndexKind::Dense,
                     vector_size: 3,
                     distance: VectorDistance::Cosine,
                     hnsw_m: None,

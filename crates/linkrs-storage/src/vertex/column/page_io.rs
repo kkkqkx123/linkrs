@@ -403,10 +403,23 @@ impl Column {
                     StorageError::deserialize_error(format!("compact geography: {}", e))
                 })?;
             Ok(Value::Geography(geo))
-        } else if matches!(
-            self.data_type,
-            DataType::Vector | DataType::VectorDense(_) | DataType::VectorSparse(_)
-        ) {
+        } else if let DataType::VectorSparse(vocab) = &self.data_type {
+            let value: VectorValue = postcard::from_bytes(bytes).map_err(|e| {
+                StorageError::deserialize_error(format!("compact sparse vector: {e}"))
+            })?;
+            if let VectorValue::Sparse { indices, .. } = &value {
+                if indices.last().is_some_and(|last| *last as usize >= *vocab) {
+                    return Err(StorageError::deserialize_error(format!(
+                        "compact sparse index exceeds VectorSparse({vocab})"
+                    )));
+                }
+            } else {
+                return Err(StorageError::deserialize_error(
+                    "compact sparse vector decoded as dense".to_string(),
+                ));
+            }
+            Ok(Value::Vector(value))
+        } else if matches!(self.data_type, DataType::Vector | DataType::VectorDense(_)) {
             if !bytes.len().is_multiple_of(4) {
                 return Err(StorageError::deserialize_error(
                     "compact vector length not a multiple of 4".to_string(),

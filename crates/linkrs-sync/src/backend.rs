@@ -50,6 +50,11 @@ pub trait VectorEngineHandle: Send + Sync + fmt::Debug + 'static {
         false
     }
 
+    /// Vector kinds this backend can serve.
+    fn supported_kinds(&self) -> Vec<simvec::VectorKind> {
+        vec![simvec::VectorKind::Dense]
+    }
+
     /// Engine health status.
     async fn health_check(&self) -> VectorCoordinatorResult<HealthStatus>;
 
@@ -322,6 +327,14 @@ impl LocalEngineHandle {
 impl VectorEngineHandle for LocalEngineHandle {
     fn engine_name(&self) -> &'static str {
         "local"
+    }
+
+    fn supported_kinds(&self) -> Vec<simvec::VectorKind> {
+        vec![
+            simvec::VectorKind::Dense,
+            simvec::VectorKind::Sparse,
+            simvec::VectorKind::Multi,
+        ]
     }
 
     fn is_in_process(&self) -> bool {
@@ -780,6 +793,10 @@ impl QdrantEngineHandle {
 impl VectorEngineHandle for QdrantEngineHandle {
     fn engine_name(&self) -> &'static str {
         "qdrant"
+    }
+
+    fn supported_kinds(&self) -> Vec<simvec::VectorKind> {
+        vec![simvec::VectorKind::Dense, simvec::VectorKind::Sparse]
     }
 
     async fn health_check(&self) -> VectorCoordinatorResult<HealthStatus> {
@@ -1363,6 +1380,11 @@ impl VectorBackend {
         self.engine.engine_name()
     }
 
+    /// Vector kinds accepted by the selected backend.
+    pub fn supported_kinds(&self) -> Vec<simvec::VectorKind> {
+        self.engine.supported_kinds()
+    }
+
     /// Assemble the vector backend described by `config`.
     ///
     /// This is the single place that turns a `[vector]` configuration into an
@@ -1777,7 +1799,6 @@ impl VectorBackend {
             .scroll_stream(collection, batch_size, with_payload, with_vector)
             .await
     }
-
 }
 
 #[cfg(all(test, feature = "vector-qdrant"))]

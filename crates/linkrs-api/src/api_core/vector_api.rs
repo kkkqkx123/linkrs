@@ -10,7 +10,7 @@ use linkrs_sync::vector_sync::{
 };
 use simvec::{
     types::{IndexConfig, IndexMetadata, PointId},
-    CollectionConfig, DistanceMetric, VectorPoint,
+    CollectionConfig, DistanceMetric, VectorData, VectorPoint,
 };
 use std::sync::Arc;
 
@@ -31,6 +31,8 @@ pub struct VectorSearchResult {
     pub doc_id: PointId,
     pub score: f32,
     pub vector: Option<Vec<f32>>,
+    /// Sparse/Multi payload echoed back by the exact-scan engine.
+    pub data: Option<VectorData>,
     pub payload: Option<std::collections::HashMap<String, serde_json::Value>>,
 }
 
@@ -258,7 +260,7 @@ impl VectorApi {
             field,
         } = mode;
         let manager = &self.sync_manager;
-        let vector = point.vector.clone();
+        let value = point_core_value(&point);
         let payload = point.payload.clone().unwrap_or_default();
         let mut properties: Vec<(Arc<str>, linkrs_core::Value)> = Vec::new();
         for (k, v) in payload {
@@ -266,10 +268,7 @@ impl VectorApi {
                 properties.push((Arc::from(k.as_str()), val));
             }
         }
-        properties.push((
-            Arc::from(field.as_str()),
-            linkrs_core::Value::vector(vector),
-        ));
+        properties.push((Arc::from(field.as_str()), value));
         let vertex_id = linkrs_core::Value::string(point.id.to_string());
         manager
             .on_vertex_change_with_txn(
@@ -301,7 +300,7 @@ impl VectorApi {
         } = mode;
         let manager = &self.sync_manager;
         for point in points {
-            let vector = point.vector.clone();
+            let value = point_core_value(&point);
             let payload = point.payload.clone().unwrap_or_default();
             let mut properties: Vec<(Arc<str>, linkrs_core::Value)> = Vec::new();
             for (k, v) in payload {
@@ -309,10 +308,7 @@ impl VectorApi {
                     properties.push((Arc::from(k.as_str()), val));
                 }
             }
-            properties.push((
-                Arc::from(field.as_str()),
-                linkrs_core::Value::vector(vector),
-            ));
+            properties.push((Arc::from(field.as_str()), value));
             let vertex_id = linkrs_core::Value::string(point.id.to_string());
             manager
                 .on_vertex_change_with_txn(
@@ -462,6 +458,7 @@ impl VectorApi {
                         doc_id: r.id,
                         score: r.score,
                         vector: r.vector.map(|v| v.to_vec()),
+                        data: r.data,
                         payload: r.payload.map(|p| p.into_iter().collect()),
                     })
                     .collect()
@@ -565,5 +562,20 @@ impl VectorApi {
             )
             .await
             .map_err(|e| CoreError::VectorError(e.to_string()))
+    }
+}
+
+/// Convert an index point into the core value written to graph properties.
+fn point_core_value(point: &VectorPoint) -> linkrs_core::Value {
+    match &point.data {
+        Some(VectorData::Sparse { indices, values }) => linkrs_core::Value::Vector(
+            linkrs_core::value::VectorValue::sparse(indices.clone(), values.clone()),
+        ),
+        Some(VectorData::Multi(vectors)) => {
+            let flattened = vectors.iter().flatten().copied().collect::<Vec<f32>>();
+            linkrs_core::Value::vector(flattened)
+        }
+        Some(VectorData::Dense(values)) => linkrs_core::Value::vector(values.clone()),
+        None => linkrs_core::Value::vector(point.vector.clone()),
     }
 }

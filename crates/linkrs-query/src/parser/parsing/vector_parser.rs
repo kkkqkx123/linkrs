@@ -80,6 +80,7 @@ fn parse_vector_index_config(
 ) -> Result<VectorIndexConfig, crate::parser::ParseError> {
     ctx.expect_token(TokenKind::LParen)?;
 
+    let mut kind = crate::parser::ast::vector::VectorIndexKind::Dense;
     let mut vector_size = None;
     let mut distance = VectorDistance::Cosine;
     let mut hnsw_m = None;
@@ -94,6 +95,24 @@ fn parse_vector_index_config(
         ctx.expect_token(TokenKind::Assign)?;
 
         match key.to_lowercase().as_str() {
+            "kind" => {
+                let raw = if matches!(ctx.current_token().kind, TokenKind::StringLiteral(_)) {
+                    ctx.consume_string()?
+                } else {
+                    ctx.consume_identifier()?
+                };
+                kind = match raw.to_lowercase().as_str() {
+                    "dense" => crate::parser::ast::vector::VectorIndexKind::Dense,
+                    "sparse" => crate::parser::ast::vector::VectorIndexKind::Sparse,
+                    _ => {
+                        return Err(crate::parser::ParseError::new(
+                            crate::parser::core::error::ParseErrorKind::SyntaxError,
+                            format!("Unknown vector kind '{raw}', expected dense or sparse"),
+                            ctx.current_position(),
+                        ))
+                    }
+                };
+            }
             "vector_size" => {
                 vector_size = Some(ctx.consume_int()? as usize);
             }
@@ -267,6 +286,16 @@ fn parse_vector_index_config(
     })?;
 
     let mut config = VectorIndexConfig::new(vector_size, distance);
+    config.kind = kind;
+    if kind == crate::parser::ast::vector::VectorIndexKind::Sparse
+        && !matches!(distance, VectorDistance::Cosine | VectorDistance::Dot)
+    {
+        return Err(crate::parser::ParseError::new(
+            crate::parser::core::error::ParseErrorKind::SyntaxError,
+            "sparse vector indexes support only cosine or dot distance".to_string(),
+            ctx.current_position(),
+        ));
+    }
     if let Some(m) = hnsw_m {
         config.hnsw_m = Some(m);
     }
@@ -460,6 +489,9 @@ fn parse_vector_query_expr(
         // vector = [0.1, 0.2, ...]
         let vector_str = parse_vector_literal(ctx)?;
         (VectorQueryType::Vector, vector_str)
+    } else if keyword.to_lowercase() == "sparse" {
+        let sparse_str = parse_sparse_literal(ctx)?;
+        (VectorQueryType::Sparse, sparse_str)
     } else if keyword.to_lowercase() == "text" {
         // text = 'search query'
         let text = ctx.consume_string()?;
@@ -485,6 +517,43 @@ fn parse_vector_query_expr(
 }
 
 /// Parse vector literal
+fn parse_sparse_literal(ctx: &mut ParseContext) -> Result<String, crate::parser::ParseError> {
+    ctx.expect_token(TokenKind::LParen)?;
+    ctx.expect_token(TokenKind::LBracket)?;
+    let mut indices = Vec::new();
+    loop {
+        indices.push(ctx.consume_int()?);
+        if !ctx.consume_optional_token(",") {
+            break;
+        }
+    }
+    ctx.expect_token(TokenKind::RBracket)?;
+    ctx.expect_token(TokenKind::Comma)?;
+    ctx.expect_token(TokenKind::LBracket)?;
+    let mut values = Vec::new();
+    loop {
+        values.push(ctx.consume_float()?);
+        if !ctx.consume_optional_token(",") {
+            break;
+        }
+    }
+    ctx.expect_token(TokenKind::RBracket)?;
+    ctx.expect_token(TokenKind::RParen)?;
+    Ok(format!(
+        "{{\"indices\":[{}],\"values\":[{}]}}",
+        indices
+            .iter()
+            .map(|v| v.to_string())
+            .collect::<Vec<_>>()
+            .join(","),
+        values
+            .iter()
+            .map(|v| v.to_string())
+            .collect::<Vec<_>>()
+            .join(",")
+    ))
+}
+
 fn parse_vector_literal(ctx: &mut ParseContext) -> Result<String, crate::parser::ParseError> {
     ctx.expect_token(TokenKind::LBracket)?;
     let mut elements = Vec::new();

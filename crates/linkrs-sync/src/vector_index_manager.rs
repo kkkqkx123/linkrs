@@ -399,7 +399,9 @@ impl VectorIndexManager {
                     reason: e.to_string(),
                 })?;
 
-            if self.granularity() == CollectionGranularity::Space {
+            if self.granularity() == CollectionGranularity::Space
+                && config.kind == simvec::VectorKind::Dense
+            {
                 if let Err(e) = self
                     .backend
                     .create_payload_index(&collection_name, "group_id", PayloadSchemaType::Keyword)
@@ -466,6 +468,17 @@ impl VectorIndexManager {
         // See `create_vector_index`: compare and register the effective
         // config so engine/store-applied defaults do not false-conflict.
         let config = self.backend.effective_collection_config(&config);
+        if !self.backend.supported_kinds().contains(&config.kind) {
+            return Err(VectorCoordinatorError::IndexCreationFailed {
+                tag_name: tag_name.to_string(),
+                field_name: field_name.to_string(),
+                reason: format!(
+                    "backend {} does not support {} vectors",
+                    self.backend.engine_name(),
+                    config.kind.as_name()
+                ),
+            });
+        }
 
         let loc = VectorIndexLocation::new(space_id, tag_name, field_name);
         let collection_name = self.collection_name_for(&loc);
@@ -484,7 +497,9 @@ impl VectorIndexManager {
                     reason: e.to_string(),
                 })?;
 
-            if self.granularity() == CollectionGranularity::Space {
+            if self.granularity() == CollectionGranularity::Space
+                && config.kind == simvec::VectorKind::Dense
+            {
                 if let Err(e) = self
                     .backend
                     .create_payload_index(&collection_name, "group_id", PayloadSchemaType::Keyword)
@@ -1354,7 +1369,10 @@ impl VectorIndexManager {
             VectorIndexLocation::new(options.space_id, &options.tag_name, &options.field_name);
         let collection_name = self.collection_name_for(&loc);
 
-        let mut query = SearchQuery::new(options.query_vector, options.limit);
+        let mut query = match options.query_data {
+            Some(data) => SearchQuery::with_data(data, options.limit),
+            None => SearchQuery::new(options.query_vector, options.limit),
+        };
 
         if let Some(threshold) = options.threshold {
             query = query.with_score_threshold(threshold);
@@ -1431,10 +1449,10 @@ impl VectorIndexManager {
         &self,
         collection_override: Option<&str>,
         contexts: Vec<super::vector_sync::VectorChangeContext>,
-    ) -> (
+    ) -> VectorCoordinatorResult<(
         HashMap<String, Vec<VectorPoint>>,
         HashMap<String, Vec<String>>,
-    ) {
+    )> {
         use super::vector_sync::VectorChangeType;
 
         let mut upsert_by_collection: HashMap<String, Vec<VectorPoint>> = HashMap::new();
@@ -1448,7 +1466,33 @@ impl VectorIndexManager {
 
             match ctx.change_type {
                 VectorChangeType::Insert => {
-                    let vector = ctx.data.vector;
+                    let metadata = self
+                        .index_info(
+                            ctx.location.space_id,
+                            &ctx.location.tag_name,
+                            &ctx.location.field_name,
+                        )
+                        .ok_or_else(|| {
+                            VectorCoordinatorError::Vector(VectorError::Internal(format!(
+                                "missing index metadata for {}.{}",
+                                ctx.location.tag_name, ctx.location.field_name
+                            )))
+                        })?;
+                    let index_data = crate::vector_type_conv::index_data_from_point_data(&ctx.data);
+                    if let Some(data) = &index_data {
+                        data.validate(metadata.config.vector_size, 1).map_err(|e| {
+                            VectorCoordinatorError::Vector(VectorError::Internal(e.to_string()))
+                        })?;
+                        if data.kind() != metadata.config.kind {
+                            return Err(VectorCoordinatorError::Vector(VectorError::Internal(
+                                format!(
+                                    "index kind {} rejects {} payload",
+                                    metadata.config.kind.as_name(),
+                                    data.kind().as_name()
+                                ),
+                            )));
+                        }
+                    }
                     let mut json_payload: HashMap<String, serde_json::Value> = ctx
                         .data
                         .payload
@@ -1467,7 +1511,18 @@ impl VectorIndexManager {
                         );
                     }
 
-                    let point = VectorPoint::new(point_id, vector).with_payload(json_payload);
+                    let mut point = match index_data {
+                        Some(simvec::VectorData::Dense(values)) => {
+                            VectorPoint::new(point_id, values)
+                        }
+                        Some(data) => VectorPoint::with_data(point_id, data),
+                        None => {
+                            return Err(VectorCoordinatorError::Vector(VectorError::Internal(
+                                format!("insert context {point_id} carries no vector payload"),
+                            )));
+                        }
+                    };
+                    point = point.with_payload(json_payload);
 
                     upsert_by_collection
                         .entry(collection_name)
@@ -1483,7 +1538,7 @@ impl VectorIndexManager {
             }
         }
 
-        (upsert_by_collection, delete_by_collection)
+        Ok((upsert_by_collection, delete_by_collection))
     }
 }
 
@@ -1532,10 +1587,9 @@ mod registry_tests {
                 .expect("create index");
             let location = VectorIndexLocation::new(2, "user", "embedding");
             manager.set_collection_override(&location, "space_vec_2.rebuild-9".to_string());
-            manager.promote_backups.insert(
-                "space_vec_2".to_string(),
-                "space_vec_2.old-8".to_string(),
-            );
+            manager
+                .promote_backups
+                .insert("space_vec_2".to_string(), "space_vec_2.old-8".to_string());
             manager.save_logical_indexes();
         }
 

@@ -45,9 +45,30 @@ pub enum CompressionRatioKind {
     X64,
 }
 
+/// Vector payload layout of an index. Sparse indexes use `vector_size` as
+/// the vocabulary bound.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum VectorIndexKind {
+    #[default]
+    Dense,
+    Sparse,
+}
+
+impl VectorIndexKind {
+    pub fn as_name(self) -> &'static str {
+        match self {
+            VectorIndexKind::Dense => "dense",
+            VectorIndexKind::Sparse => "sparse",
+        }
+    }
+}
+
 /// Vector index configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VectorIndexConfig {
+    #[serde(default)]
+    pub kind: VectorIndexKind,
     pub vector_size: usize,
     pub distance: VectorDistance,
     pub hnsw_m: Option<usize>,
@@ -116,6 +137,8 @@ pub struct VectorQueryExpr {
 pub enum VectorQueryType {
     /// Direct vector: [0.1, 0.2, ...]
     Vector,
+    /// Sparse vector: {"indices":[...],"values":[...]}
+    Sparse,
     /// Text query (requires embedding service)
     Text,
     /// Parameter reference: $param_name
@@ -249,6 +272,7 @@ impl VectorQueryExpr {
 impl VectorIndexConfig {
     pub fn new(vector_size: usize, distance: VectorDistance) -> Self {
         Self {
+            kind: VectorIndexKind::Dense,
             vector_size,
             distance,
             hnsw_m: None,

@@ -292,6 +292,7 @@ pub unsafe extern "C" fn linkrs_vector_search(
                             "doc_id": r.doc_id.to_string(),
                             "score": r.score,
                             "vector": r.vector,
+                            "data": r.data,
                             "payload": r.payload,
                         })
                     })

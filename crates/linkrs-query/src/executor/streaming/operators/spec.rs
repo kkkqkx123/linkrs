@@ -46,5 +46,5 @@ pub use sink::{CopyTarget, SinkSpec};
 pub use source::{BoundIndexPredicate, IndexProjection, SourceSpec};
 pub use txn::TxnSpec;
 pub use unary::UnarySpec;
-pub use vector::{SpecVectorFilter, VectorManageCommand, VectorSpec};
+pub use vector::{SpecVectorData, SpecVectorFilter, VectorManageCommand, VectorSpec};
 pub use wco::WcoSpec;

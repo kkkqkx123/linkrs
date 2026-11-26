@@ -10,7 +10,7 @@ use crate::storage::{
 };
 use linkrs_sync::vector_sync::SearchOptions;
 use linkrs_wire::vector::{
-    PayloadMutationResponse, VectorCountResponse, VectorIndexCreatedResponse,
+    PayloadMutationResponse, SparseVectorData, VectorCountResponse, VectorIndexCreatedResponse,
     VectorIndexDroppedResponse, VectorPoint, VectorPointResponse,
 };
 use simvec::{DistanceMetric, VectorFilter};
@@ -24,6 +24,9 @@ pub struct CreateVectorIndexRequest {
     pub tag_name: String,
     pub field_name: String,
     pub vector_size: usize,
+    /// Payload layout: `dense` (default) or `sparse`.
+    #[serde(default)]
+    pub kind: Option<String>,
     #[serde(default = "default_distance")]
     pub distance: DistanceMetric,
     /// HNSW overrides
@@ -125,7 +128,10 @@ pub struct VectorSearchRequest {
     pub space_id: u64,
     pub tag_name: String,
     pub field_name: String,
+    #[serde(default)]
     pub query_vector: Vec<f32>,
+    #[serde(default)]
+    pub query_data: Option<SparseVectorData>,
     #[serde(default = "default_limit")]
     pub limit: usize,
     pub threshold: Option<f32>,
@@ -168,6 +174,7 @@ pub struct VectorSearchResult {
     pub doc_id: String,
     pub score: f32,
     pub vector: Option<Vec<f32>>,
+    pub data: Option<SparseVectorData>,
     #[schema(value_type = Option<std::collections::HashMap<String, linkrs_wire::query::CellValue>>)]
     pub payload: Option<serde_json::Map<String, serde_json::Value>>,
 }
@@ -274,7 +281,17 @@ pub async fn create_index<
             },
             None => None,
         };
+        let kind = match request.kind.as_deref().unwrap_or("dense") {
+            "dense" => Some(linkrs_query::parser::ast::vector::VectorIndexKind::Dense),
+            "sparse" => Some(linkrs_query::parser::ast::vector::VectorIndexKind::Sparse),
+            other => {
+                return Err(HttpError::BadRequest(format!(
+                    "unknown vector kind '{other}'"
+                )))
+            }
+        };
         let options = linkrs_query::vector_ddl::CollectionOptions {
+            kind,
             hnsw_m: request.hnsw_m,
             hnsw_ef_construct: request.hnsw_ef_construct,
             hnsw_full_scan_threshold: request.hnsw_full_scan_threshold,
@@ -531,6 +548,10 @@ pub async fn search<
             request.query_vector,
             request.limit,
         );
+        if let Some(data) = request.query_data {
+            options.query_data = Some(simvec::VectorData::sparse(data.indices, data.values));
+            options.query_vector.clear();
+        }
 
         if let Some(threshold) = request.threshold {
             options = options.with_threshold(threshold);
@@ -555,6 +576,17 @@ pub async fn search<
                 doc_id: r.doc_id.to_string(),
                 score: r.score,
                 vector: r.vector.map(|v| v.to_vec()),
+                data: r.data.map(|d| match d {
+                    simvec::VectorData::Sparse { indices, values } => {
+                        SparseVectorData { indices, values }
+                    }
+                    simvec::VectorData::Dense(_) | simvec::VectorData::Multi(_) => {
+                        SparseVectorData {
+                            indices: Vec::new(),
+                            values: Vec::new(),
+                        }
+                    }
+                }),
                 payload: r.payload.map(|p| p.into_iter().collect()),
             })
             .collect();
@@ -617,7 +649,17 @@ pub async fn get_vector<
                 success: true,
                 point: Some(VectorPoint {
                     id: p.id.to_string(),
-                    vector: Some(p.vector),
+                    vector: if p.vector.is_empty() {
+                        None
+                    } else {
+                        Some(p.vector)
+                    },
+                    data: match p.data {
+                        Some(simvec::VectorData::Sparse { indices, values }) => {
+                            Some(SparseVectorData { indices, values })
+                        }
+                        _ => None,
+                    },
                     payload: p.payload.map(|payload| {
                         serde_json::to_value(payload)
                             .ok()
@@ -943,10 +985,16 @@ pub async fn scroll<
             .map(|p| VectorSearchResult {
                 doc_id: p.id.to_string(),
                 score: 0.0,
-                vector: if request.with_vector.unwrap_or(false) {
+                vector: if request.with_vector.unwrap_or(false) && !p.vector.is_empty() {
                     Some(p.vector)
                 } else {
                     None
+                },
+                data: match p.data {
+                    Some(simvec::VectorData::Sparse { indices, values }) => {
+                        Some(SparseVectorData { indices, values })
+                    }
+                    _ => None,
                 },
                 payload: p.payload.map(|pay| pay.into_iter().collect()),
             })

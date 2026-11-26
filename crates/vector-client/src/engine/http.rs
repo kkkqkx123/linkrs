@@ -1,8 +1,8 @@
 use async_trait::async_trait;
+use log::{debug, info, warn};
 use serde_json::Value;
 use std::collections::HashMap;
 use tokio::sync::RwLock;
-use log::{debug, info, warn};
 
 use super::RemoteVectorEngine;
 use crate::config::VectorClientConfig;
@@ -408,6 +408,7 @@ impl QdrantEngine {
                 score: inbound_result_score(metric, r.score),
                 payload: parse_payload(r.payload),
                 vector: r.vector.and_then(|v| v.into_vec()),
+                data: None,
             })
             .collect()
     }
@@ -421,6 +422,13 @@ impl RemoteVectorEngine for QdrantEngine {
 
     fn version(&self) -> &str {
         QDRANT_VERSION
+    }
+
+    fn supported_kinds(&self) -> Vec<crate::types::VectorKind> {
+        vec![
+            crate::types::VectorKind::Dense,
+            crate::types::VectorKind::Sparse,
+        ]
     }
 
     async fn health_check(&self) -> Result<HealthStatus> {
@@ -539,16 +547,17 @@ impl RemoteVectorEngine for QdrantEngine {
         );
 
         let id = point_id_to_json(&point.id.to_string());
+        let vector_json = point_vector_json(&point);
         let point_json = if let Some(ref payload) = point.payload {
             serde_json::json!({
                 "id": id,
-                "vector": point.vector,
+                "vector": vector_json,
                 "payload": payload,
             })
         } else {
             serde_json::json!({
                 "id": id,
-                "vector": point.vector,
+                "vector": vector_json,
             })
         };
 
@@ -583,16 +592,17 @@ impl RemoteVectorEngine for QdrantEngine {
             .into_iter()
             .map(|p| {
                 let id = point_id_to_json(&p.id.to_string());
+                let vector_json = point_vector_json(&p);
                 if let Some(ref payload) = p.payload {
                     serde_json::json!({
                         "id": id,
-                        "vector": p.vector,
+                        "vector": vector_json,
                         "payload": payload,
                     })
                 } else {
                     serde_json::json!({
                         "id": id,
-                        "vector": p.vector,
+                        "vector": vector_json,
                     })
                 }
             })
@@ -716,8 +726,14 @@ impl RemoteVectorEngine for QdrantEngine {
             .score_threshold
             .and_then(|t| outbound_score_threshold(metric, t));
 
+        let vector_value = match &query.data {
+            Some(simvec::VectorData::Sparse { indices, values }) => serde_json::json!({
+                "sparse": { "indices": indices, "values": values }
+            }),
+            _ => serde_json::json!(query.vector),
+        };
         let body = build_search_body(
-            query.vector,
+            vector_value,
             params.limit,
             query.offset,
             score_threshold,
@@ -766,7 +782,7 @@ impl RemoteVectorEngine for QdrantEngine {
                     .and_then(|t| outbound_score_threshold(metric, t));
 
                 Ok(build_search_body(
-                    query.vector.clone(),
+                    serde_json::json!(query.vector.clone()),
                     params.limit,
                     query.offset,
                     score_threshold,
@@ -837,6 +853,8 @@ impl RemoteVectorEngine for QdrantEngine {
                 Ok(Some(VectorPoint {
                     id: p.id,
                     vector: p.vector.and_then(|v| v.into_vec()).unwrap_or_default(),
+                    data: None,
+                    named: std::collections::BTreeMap::new(),
                     payload: parse_payload(p.payload),
                 }))
             }
@@ -883,6 +901,8 @@ impl RemoteVectorEngine for QdrantEngine {
                 let vp = VectorPoint {
                     id: p.id,
                     vector: p.vector.and_then(|v| v.into_vec()).unwrap_or_default(),
+                    data: None,
+                    named: std::collections::BTreeMap::new(),
                     payload: parse_payload(p.payload),
                 };
                 (id_str, vp)
@@ -1033,6 +1053,8 @@ impl RemoteVectorEngine for QdrantEngine {
             .map(|p| VectorPoint {
                 id: p.id,
                 vector: p.vector.and_then(|v| v.into_vec()).unwrap_or_default(),
+                data: None,
+                named: std::collections::BTreeMap::new(),
                 payload: parse_payload(p.payload),
             })
             .collect();
@@ -1257,5 +1279,14 @@ mod tests {
         };
         assert_eq!(engine.name(), "qdrant-http");
         assert!(engine.version().contains("HTTP REST"));
+    }
+}
+
+fn point_vector_json(point: &VectorPoint) -> Value {
+    match &point.data {
+        Some(simvec::VectorData::Sparse { indices, values }) => serde_json::json!({
+            "sparse": { "indices": indices, "values": values }
+        }),
+        _ => serde_json::json!(point.vector),
     }
 }

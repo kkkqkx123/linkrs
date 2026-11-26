@@ -10,8 +10,8 @@ use std::sync::Arc;
 
 use dashmap::DashMap;
 use linkrs_core::index_events::{RebuildPhase, RebuildProgress};
-use serde::{Deserialize, Serialize};
 use log::debug;
+use serde::{Deserialize, Serialize};
 
 use crate::backend::VectorBackend;
 use crate::vector_error::VectorCoordinatorResult;
@@ -27,7 +27,10 @@ use simvec::{CollectionConfig, IndexMetadata, VectorFilter};
 #[derive(Debug, Clone)]
 pub struct VectorPointData {
     pub id: String,
+    /// Dense payload; empty for sparse points.
     pub vector: Vec<f32>,
+    /// Non-dense payload; `None` for dense points.
+    pub data: Option<simvec::VectorData>,
     pub payload: HashMap<Arc<str>, Value>,
 }
 
@@ -56,12 +59,28 @@ pub struct SearchOptions {
     pub tag_name: String,
     pub field_name: String,
     pub query_vector: Vec<f32>,
+    /// Non-dense query payload; when set, `query_vector` stays empty.
+    pub query_data: Option<simvec::VectorData>,
     pub limit: usize,
     pub threshold: Option<f32>,
     pub filter: Option<VectorFilter>,
 }
 
 impl SearchOptions {
+    /// Query with a non-dense payload.
+    pub fn with_data(data: simvec::VectorData, limit: usize) -> Self {
+        Self {
+            space_id: 0,
+            tag_name: String::new(),
+            field_name: String::new(),
+            query_vector: Vec::new(),
+            query_data: Some(data),
+            limit,
+            threshold: None,
+            filter: None,
+        }
+    }
+
     pub fn new(
         space_id: u64,
         tag_name: impl Into<String>,
@@ -74,6 +93,7 @@ impl SearchOptions {
             tag_name: tag_name.into(),
             field_name: field_name.into(),
             query_vector,
+            query_data: None,
             limit,
             threshold: None,
             filter: None,
@@ -447,7 +467,7 @@ impl VectorSyncCoordinator {
     ) -> VectorCoordinatorResult<()> {
         let (upsert_by_collection, delete_by_collection) = self
             .index_manager
-            .prepare_change_batch_for_collection(collection_override, contexts);
+            .prepare_change_batch_for_collection(collection_override, contexts)?;
         let upsert_collections = upsert_by_collection.len();
         let delete_collections = delete_by_collection.len();
         self.backend()

@@ -317,3 +317,97 @@ mod tests {
         }
     }
 }
+
+/// Convert a core vector value into the index-side payload. Dense and sparse
+/// values are kept distinct; sparse indices are canonicalized here so the
+/// engine only ever sees strictly increasing non-zero indices.
+pub fn core_vector_to_index_data(
+    value: Option<&linkrs_core::value::VectorValue>,
+    config: &simvec::CollectionConfig,
+) -> Result<Option<simvec::VectorData>, String> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    match value {
+        linkrs_core::value::VectorValue::Dense(values) => {
+            if config.kind != simvec::VectorKind::Dense {
+                return Err(format!(
+                    "index {} expects {} vectors, got dense",
+                    config.vector_size,
+                    config.kind.as_name()
+                ));
+            }
+            if values.len() != config.vector_size {
+                return Err(format!(
+                    "dense vector dimension {} does not match index dimension {}",
+                    values.len(),
+                    config.vector_size
+                ));
+            }
+            Ok(Some(simvec::VectorData::dense(values.clone())))
+        }
+        linkrs_core::value::VectorValue::Sparse { indices, values } => {
+            if config.kind != simvec::VectorKind::Sparse {
+                return Err(format!(
+                    "index {} expects {} vectors, got sparse",
+                    config.vector_size,
+                    config.kind.as_name()
+                ));
+            }
+            if indices.len() != values.len() {
+                return Err(format!(
+                    "sparse indices length {} does not match values length {}",
+                    indices.len(),
+                    values.len()
+                ));
+            }
+            let mut pairs: Vec<(u32, f32)> = indices
+                .iter()
+                .copied()
+                .zip(values.iter().copied())
+                .filter(|(_, weight)| *weight != 0.0)
+                .collect();
+            for (index, weight) in &pairs {
+                if (*index as usize) >= config.vector_size {
+                    return Err(format!(
+                        "sparse index {index} is outside vocabulary size {}",
+                        config.vector_size
+                    ));
+                }
+                if !weight.is_finite() || *weight < 0.0 {
+                    return Err(format!(
+                        "sparse weight for index {index} must be finite and non-negative"
+                    ));
+                }
+            }
+            pairs.sort_by_key(|(index, _)| *index);
+            if pairs.windows(2).any(|w| w[0].0 == w[1].0) {
+                return Err("sparse vector contains duplicate indices".to_string());
+            }
+            let (indices, values): (Vec<u32>, Vec<f32>) = pairs.into_iter().unzip();
+            Ok(Some(simvec::VectorData::sparse(indices, values)))
+        }
+    }
+}
+
+/// Rebuild the index-side payload from a synchronization context.
+pub fn index_data_from_point_data(
+    data: &crate::vector_sync::VectorPointData,
+) -> Option<simvec::VectorData> {
+    if let Some(data) = &data.data {
+        return Some(data.clone());
+    }
+    if data.vector.is_empty() {
+        None
+    } else {
+        Some(simvec::VectorData::dense(data.vector.clone()))
+    }
+}
+
+/// Borrow a vector value from a core `Value` without densifying it.
+pub fn core_vector_value(value: &linkrs_core::Value) -> Option<&linkrs_core::value::VectorValue> {
+    match value {
+        linkrs_core::Value::Vector(vector) => Some(vector),
+        _ => None,
+    }
+}

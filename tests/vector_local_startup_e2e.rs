@@ -29,6 +29,8 @@ fn point(id: i64, vector: Vec<f32>, group_id: &str) -> VectorPoint {
     VectorPoint {
         id: PointId::Num(id as u64),
         vector,
+        data: None,
+        named: std::collections::BTreeMap::new(),
         payload: Some(payload),
     }
 }

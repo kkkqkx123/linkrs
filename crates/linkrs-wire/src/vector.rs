@@ -105,12 +105,21 @@ pub struct VectorIndexDroppedResponse {
     pub message: String,
 }
 
+/// Sparse vector payload in wire form.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct SparseVectorData {
+    pub indices: Vec<u32>,
+    pub values: Vec<f32>,
+}
+
 /// One vector point.
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct VectorPoint {
     pub id: String,
     #[serde(default)]
     pub vector: Option<Vec<f32>>,
+    #[serde(default)]
+    pub data: Option<SparseVectorData>,
     #[serde(default)]
     #[schema(value_type = Option<std::collections::HashMap<String, crate::query::CellValue>>)]
     pub payload: Option<serde_json::Map<String, serde_json::Value>>,

@@ -108,6 +108,7 @@ async fn purge_field_granularity_recreates_collection() {
             VectorPointData {
                 id: "p1".to_string(),
                 vector: vec![1.0, 0.0, 0.0, 0.0],
+                data: None,
                 payload: HashMap::new(),
             },
         )])
@@ -168,6 +169,7 @@ async fn purge_space_granularity_keeps_siblings() {
                 VectorPointData {
                     id: format!("{field}-point"),
                     vector: vec![1.0, 0.0, 0.0, 0.0],
+                    data: None,
                     payload: HashMap::new(),
                 },
             )])
@@ -418,6 +420,7 @@ async fn temp_collections_are_invisible_to_search() {
                 VectorPointData {
                     id: "ghost".to_string(),
                     vector: vec![1.0, 0.0, 0.0, 0.0],
+                    data: None,
                     payload: HashMap::new(),
                 },
             )],
@@ -489,6 +492,7 @@ async fn rebuild_failure_before_publish_leaves_live_untouched() {
             VectorPointData {
                 id: "live-point".to_string(),
                 vector: live_vector.clone(),
+                data: None,
                 payload: HashMap::new(),
             },
         )])
@@ -569,6 +573,7 @@ async fn field_publish_swaps_collection_and_restore_reverses_it() {
             VectorPointData {
                 id: "old-point".to_string(),
                 vector: old_vector.clone(),
+                data: None,
                 payload: HashMap::new(),
             },
         )])
@@ -689,6 +694,7 @@ async fn space_publish_preserves_sibling_slices() {
                 VectorPointData {
                     id: id.to_string(),
                     vector,
+                    data: None,
                     payload: HashMap::new(),
                 },
             )])

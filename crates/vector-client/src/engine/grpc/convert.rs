@@ -36,6 +36,8 @@ impl From<Status> for VectorClientError {
 
 use super::proto;
 
+const SPARSE_VECTOR_NAME: &str = "sparse";
+
 pub fn point_id_to_proto(id: &str) -> proto::PointId {
     if let Ok(num) = id.parse::<u64>() {
         proto::PointId {
@@ -51,12 +53,30 @@ pub fn point_id_to_proto(id: &str) -> proto::PointId {
 pub fn point_struct_to_proto(point: &VectorPoint) -> proto::PointStruct {
     let id = point_id_to_proto(&point.id.to_string());
 
-    let vectors = proto::Vectors {
-        vectors_options: Some(proto::vectors::VectorsOptions::Vector(proto::Vector {
-            data: point.vector.clone(),
-            indices: None,
-            vectors_count: None,
-        })),
+    let vectors = match &point.data {
+        Some(VectorData::Sparse { indices, values }) => proto::Vectors {
+            vectors_options: Some(proto::vectors::VectorsOptions::Vectors(
+                proto::NamedVectors {
+                    vectors: std::collections::HashMap::from([(
+                        SPARSE_VECTOR_NAME.to_string(),
+                        proto::Vector {
+                            data: values.clone(),
+                            indices: Some(proto::SparseIndices {
+                                data: indices.clone(),
+                            }),
+                            vectors_count: None,
+                        },
+                    )]),
+                },
+            )),
+        },
+        _ => proto::Vectors {
+            vectors_options: Some(proto::vectors::VectorsOptions::Vector(proto::Vector {
+                data: point.vector.clone(),
+                indices: None,
+                vectors_count: None,
+            })),
+        },
     };
 
     let payload = point
@@ -232,18 +252,36 @@ pub fn collection_config_to_create(
             },
         });
 
-    let vectors_config = proto::VectorsConfig {
-        config: Some(proto::vectors_config::Config::Params(proto::VectorParams {
-            size: cfg.vector_size as u64,
-            distance: distance as i32,
-            // Nested per-vector params mirror the collection-level values.
-            hnsw_config,
-            quantization_config,
-            on_disk: cfg.vectors_on_disk,
-            datatype: None,
-            multivector_config: None,
-        })),
+    let sparse = cfg.kind == simvec::VectorKind::Sparse;
+    let vectors_config = if sparse {
+        proto::VectorsConfig {
+            config: Some(proto::vectors_config::Config::ParamsMap(
+                std::collections::HashMap::new(),
+            )),
+        }
+    } else {
+        proto::VectorsConfig {
+            config: Some(proto::vectors_config::Config::Params(proto::VectorParams {
+                size: cfg.vector_size as u64,
+                distance: distance as i32,
+                // Nested per-vector params mirror the collection-level values.
+                hnsw_config: hnsw_config.clone(),
+                quantization_config: quantization_config.clone(),
+                on_disk: cfg.vectors_on_disk,
+                datatype: None,
+                multivector_config: None,
+            })),
+        }
     };
+    let sparse_vectors_config = sparse.then(|| proto::SparseVectorConfig {
+        map: std::collections::HashMap::from([(
+            SPARSE_VECTOR_NAME.to_string(),
+            proto::SparseVectorParams {
+                index: None,
+                modifier: None,
+            },
+        )]),
+    });
 
     // Storage-engine hints travel as their own diff messages; an absent
     // sub-block leaves the server default untouched.
@@ -296,7 +334,7 @@ pub fn collection_config_to_create(
         init_from_collection: None,
         quantization_config,
         sharding_method: None,
-        sparse_vectors_config: None,
+        sparse_vectors_config,
         strict_mode_config,
     })
 }
@@ -324,7 +362,12 @@ fn extract_point_core(
     id: &Option<proto::PointId>,
     payload: &std::collections::HashMap<String, proto::Value>,
     vectors: &Option<proto::Vectors>,
-) -> (String, Option<Payload>, Option<Vec<f32>>) {
+) -> (
+    String,
+    Option<Payload>,
+    Option<Vec<f32>>,
+    Option<VectorData>,
+) {
     let id = id.as_ref().map(point_id_to_string).unwrap_or_default();
 
     let payload = if payload.is_empty() {
@@ -337,14 +380,26 @@ fn extract_point_core(
         Some(map)
     };
 
-    let vector = vectors.as_ref().and_then(|v| {
-        v.vectors_options.as_ref().and_then(|opts| match opts {
-            proto::vectors::VectorsOptions::Vector(vec) => Some(vec.data.clone()),
-            _ => None,
-        })
-    });
+    let mut vector = None;
+    let mut data = None;
+    if let Some(vectors) = vectors {
+        match vectors.vectors_options.as_ref() {
+            Some(proto::vectors::VectorsOptions::Vector(vec)) => vector = Some(vec.data.clone()),
+            Some(proto::vectors::VectorsOptions::Vectors(named)) => {
+                if let Some(sparse) = named.vectors.get(SPARSE_VECTOR_NAME) {
+                    if let Some(indices) = &sparse.indices {
+                        data = Some(VectorData::sparse(
+                            indices.data.clone(),
+                            sparse.data.clone(),
+                        ));
+                    }
+                }
+            }
+            None => {}
+        }
+    }
 
-    (id, payload, vector)
+    (id, payload, vector, data)
 }
 
 /// Convert a scored point into a [`SearchResult`].
@@ -356,20 +411,23 @@ pub fn scored_point_from_proto(
     point: proto::ScoredPoint,
     metric: Option<DistanceMetric>,
 ) -> SearchResult {
-    let (id, payload, vector) = extract_point_core(&point.id, &point.payload, &point.vectors);
+    let (id, payload, vector, data) = extract_point_core(&point.id, &point.payload, &point.vectors);
     SearchResult {
         id: id.into(),
         score: inbound_result_score(metric, point.score),
         payload,
         vector,
+        data,
     }
 }
 
 pub fn retrieved_point_from_proto(point: proto::RetrievedPoint) -> VectorPoint {
-    let (id, payload, vector) = extract_point_core(&point.id, &point.payload, &point.vectors);
+    let (id, payload, vector, data) = extract_point_core(&point.id, &point.payload, &point.vectors);
     VectorPoint {
         id: id.into(),
         vector: vector.unwrap_or_default(),
+        data,
+        named: std::collections::BTreeMap::new(),
         payload,
     }
 }
@@ -413,9 +471,20 @@ pub fn search_query_to_proto(
         indexed_only: None,
     };
 
+    let (query_vector, sparse_indices, vector_name) = match &query.data {
+        Some(VectorData::Sparse { indices, values }) => (
+            values.clone(),
+            Some(proto::SparseIndices {
+                data: indices.clone(),
+            }),
+            Some(SPARSE_VECTOR_NAME.to_string()),
+        ),
+        _ => (query.vector.clone(), None, None),
+    };
+
     Ok(proto::SearchPoints {
         collection_name: collection.to_string(),
-        vector: query.vector.clone(),
+        vector: query_vector,
         filter,
         limit: extracted.limit as u64,
         with_payload: Some(proto::WithPayloadSelector {
@@ -426,7 +495,6 @@ pub fn search_query_to_proto(
         params: Some(params),
         score_threshold,
         offset: query.offset.map(|v| v as u64),
-        vector_name: None,
         with_vectors: Some(proto::WithVectorsSelector {
             selector_options: Some(proto::with_vectors_selector::SelectorOptions::Enable(
                 query.with_vector.unwrap_or(false),
@@ -435,7 +503,8 @@ pub fn search_query_to_proto(
         read_consistency: None,
         timeout: None,
         shard_key_selector: None,
-        sparse_indices: None,
+        sparse_indices,
+        vector_name,
     })
 }
 

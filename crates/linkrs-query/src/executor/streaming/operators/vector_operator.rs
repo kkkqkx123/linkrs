@@ -33,6 +33,8 @@ pub enum VectorOperatorKind {
         space_id: u64,
         index_name: String,
         query_vector: Vec<f32>,
+        /// Non-dense query payload.
+        query_data: Option<super::spec::SpecVectorData>,
         /// Raw text for TEXT queries; resolved to a vector at execution time.
         query_text: Option<String>,
         top_k: u32,
@@ -52,6 +54,8 @@ pub enum VectorOperatorKind {
         space_id: u64,
         index_name: String,
         query_vector: Vec<f32>,
+        /// Non-dense query payload.
+        query_data: Option<super::spec::SpecVectorData>,
         /// Raw text for TEXT queries; resolved to a vector at execution time.
         query_text: Option<String>,
         top_k: u32,
@@ -68,6 +72,8 @@ pub enum VectorOperatorKind {
         pattern: String,
         field: String,
         query_vector: Vec<f32>,
+        /// Non-dense query payload.
+        query_data: Option<super::spec::SpecVectorData>,
         /// Raw text for TEXT queries; resolved to a vector at execution time.
         query_text: Option<String>,
         threshold: Option<f32>,
@@ -118,6 +124,7 @@ impl VectorOperator {
                 space_id,
                 index_name,
                 query_vector,
+                query_data,
                 query_text,
                 top_k,
                 tag_name,
@@ -132,6 +139,7 @@ impl VectorOperator {
                 space_id: *space_id,
                 index_name: index_name.clone(),
                 query_vector: query_vector.clone(),
+                query_data: query_data.clone(),
                 query_text: query_text.clone(),
                 top_k: *top_k,
                 tag_name: tag_name.clone(),
@@ -149,6 +157,7 @@ impl VectorOperator {
                 space_id,
                 index_name,
                 query_vector,
+                query_data,
                 query_text,
                 top_k,
                 tag_name,
@@ -160,6 +169,7 @@ impl VectorOperator {
                 space_id: *space_id,
                 index_name: index_name.clone(),
                 query_vector: query_vector.clone(),
+                query_data: query_data.clone(),
                 query_text: query_text.clone(),
                 top_k: *top_k,
                 tag_name: tag_name.clone(),
@@ -174,6 +184,7 @@ impl VectorOperator {
                 pattern,
                 field,
                 query_vector,
+                query_data,
                 query_text,
                 threshold,
                 tag_name,
@@ -186,6 +197,7 @@ impl VectorOperator {
                 pattern: pattern.clone(),
                 field: field.clone(),
                 query_vector: query_vector.clone(),
+                query_data: query_data.clone(),
                 query_text: query_text.clone(),
                 threshold: *threshold,
                 tag_name: tag_name.clone(),
