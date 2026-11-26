@@ -271,6 +271,7 @@ mod tests {
             storage: None,
             bound_snapshot: None,
             memory_budget: MemoryBudget::default_budget(),
+            spill_config: crate::executor::streaming::spill::SpillConfig::default(),
             max_workers: 1,
             chunk_size: 2048,
             max_buffered_chunks: 4,

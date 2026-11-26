@@ -7,32 +7,20 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use parking_lot::RwLock;
-
 use crate::engine::cache_manager::CacheManager;
 use crate::engine::data_store::GraphDataStore;
 use crate::engine::resource_budget::{MemoryAccounting, MemoryCategory, MemoryReservation};
 use linkrs_core::StorageResult;
 
-/// Metadata for an active spill file.
-#[derive(Debug)]
-pub struct SpillFile {
-    pub path: PathBuf,
-    pub category: MemoryCategory,
-    pub spilled_bytes: u64,
-}
-
-/// Spill manager for query scratch data.
+/// Cache-pressure relief handler for the storage engine.
 ///
-/// When memory pressure exceeds the hard limit during `try_reserve`, the spiller
-/// force-evicts cached data if needed, enabling graceful degradation instead
-/// of failing with `CapacityExceeded`.
+/// When memory pressure exceeds the hard limit during `try_reserve`, this
+/// component shrinks caches so the reservation can be retried.
 pub struct Spiller {
     spill_dir: PathBuf,
     accounting: Arc<MemoryAccounting>,
     data_store: Arc<GraphDataStore>,
     cache_manager: Arc<CacheManager>,
-    active_spills: Arc<RwLock<Vec<SpillFile>>>,
 }
 
 impl Spiller {
@@ -47,7 +35,6 @@ impl Spiller {
             accounting,
             data_store,
             cache_manager,
-            active_spills: Arc::new(RwLock::new(Vec::new())),
         }
     }
 
@@ -97,11 +84,6 @@ impl Spiller {
             let freed = cache_bytes
                 .saturating_sub(after.categories[MemoryCategory::Cache as usize].current_bytes);
             if freed > 0 {
-                self.active_spills.write().push(SpillFile {
-                    path: self.spill_dir.join("cache_eviction.spill"),
-                    category: MemoryCategory::Cache,
-                    spilled_bytes: freed,
-                });
                 self.accounting.record_spill_relief(freed);
                 total_freed += freed;
             }
@@ -134,9 +116,6 @@ impl Spiller {
         &self.spill_dir
     }
 
-    pub fn active_spills(&self) -> &RwLock<Vec<SpillFile>> {
-        self.active_spills.as_ref()
-    }
 }
 
 impl Clone for Spiller {
@@ -146,32 +125,6 @@ impl Clone for Spiller {
             accounting: Arc::clone(&self.accounting),
             data_store: Arc::clone(&self.data_store),
             cache_manager: Arc::clone(&self.cache_manager),
-            active_spills: Arc::clone(&self.active_spills),
-        }
-    }
-}
-
-impl Drop for Spiller {
-    fn drop(&mut self) {
-        let spills = self.active_spills.read();
-        for spill in spills.iter() {
-            let _cat = spill.category;
-            let _bytes = spill.spilled_bytes;
-            log::debug!(
-                "Cleaning up spill {} ({:?}, {} bytes)",
-                spill.path.display(),
-                _cat,
-                _bytes,
-            );
-            if let Err(e) = std::fs::remove_file(&spill.path) {
-                if e.kind() != std::io::ErrorKind::NotFound {
-                    log::warn!(
-                        "Failed to remove spill file {}: {}",
-                        spill.path.display(),
-                        e
-                    );
-                }
-            }
         }
     }
 }
@@ -180,7 +133,6 @@ impl std::fmt::Debug for Spiller {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Spiller")
             .field("spill_dir", &self.spill_dir)
-            .field("active_spills", &self.active_spills.read().len())
             .finish()
     }
 }

@@ -1,5 +1,5 @@
 use super::QueryPipelineManager;
-use crate::executor::base::{ExecutionContext, ExecutionResult};
+use crate::executor::base::{ExecutionContext, ExecutionResult, MemoryBudget};
 use crate::executor::streaming::instance::{QueryBindings, QueryExecutionInstance, ResultSink};
 use crate::executor::streaming::plan::PhysicalPlan;
 use crate::executor::streaming::transaction_scope::TransactionScope;
@@ -414,10 +414,10 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
     pub(crate) fn build_execution_context(&self, query_context: &QueryContext) -> ExecutionContext {
         use std::collections::HashMap;
 
-        let params: HashMap<String, linkrs_core::Value> =
-            query_context.request_context().parameters.clone();
+        let request = query_context.request_context();
+        let params: HashMap<String, linkrs_core::Value> = request.parameters.clone();
         let session_variables: HashMap<String, linkrs_core::Value> =
-            query_context.request_context().session_variables.clone();
+            request.session_variables.clone();
 
         let mut context = ExecutionContext {
             max_workers: self
@@ -438,6 +438,12 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             session_variables: Arc::new(session_variables),
             ..ExecutionContext::default()
         };
+        context.memory_budget = if request.memory_budget_bytes > 0 {
+            MemoryBudget::new(request.memory_budget_bytes as usize)
+        } else {
+            MemoryBudget::default_budget()
+        };
+        context.spill_config = request.spill_config.clone().unwrap_or_default();
         context.shared_scheduler = self.shared_scheduler.clone();
         context.macro_manager = Some(self.macro_manager.clone());
         context.type_alias_manager = Some(self.type_alias_manager.clone());

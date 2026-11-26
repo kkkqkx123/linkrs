@@ -3,21 +3,24 @@ use std::path::PathBuf;
 /// Configuration for disk spill behavior.
 #[derive(Debug, Clone)]
 pub struct SpillConfig {
-    /// Directory for spill files. `None` → system temp dir.
+    /// Directory for spill files. `None` uses the system temp directory.
     pub temp_dir: Option<PathBuf>,
-    /// Maximum number of spill files per operator instance.
+    /// Maximum number of spill run files for one query execution.
     pub max_spill_files: usize,
     /// Terminal collector spill threshold in logical rows.
-    /// `None` → default threshold; `Some(0)` → collector never spills.
+    /// `None` uses the default threshold; `Some(0)` disables collector spill.
     pub collect_spill_rows: Option<u64>,
+    /// Maximum bytes of spill runs for one query. Zero means unlimited.
+    pub disk_quota_bytes: u64,
 }
 
 impl Default for SpillConfig {
     fn default() -> Self {
         Self {
             temp_dir: None,
-            max_spill_files: 64,
+            max_spill_files: 256,
             collect_spill_rows: None,
+            disk_quota_bytes: 2 * 1024 * 1024 * 1024,
         }
     }
 }

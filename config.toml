@@ -125,8 +125,16 @@ auto_compact_min_interval_secs = 3600
 edge_max_mutable_csr_bytes = 104857600
 
 [query_resource]
-# Maximum memory per query in bytes, 0 means unlimited (default 0)
+# Maximum memory per query in bytes; 0 uses the 512 MiB engine default (default 0)
 max_memory_per_query = 0
+# Directory for query spill runs; empty uses the system temp directory (default empty)
+spill_dir = ""
+# Maximum number of spill run files for one query (default 256)
+spill_max_files = 256
+# Maximum spill bytes for one query; 0 means unlimited (default 2147483648 = 2 GiB)
+spill_disk_bytes = 2147483648
+# Terminal collector spill threshold in rows; 0 disables collector spill (default 200000)
+spill_collector_rows = 200000
 # Maximum concurrent queries (default 100)
 max_concurrent_queries = 100
 # Query timeout in seconds, 0 means no timeout (default 0)

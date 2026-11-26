@@ -893,6 +893,7 @@ impl RecursiveFragmentOperator {
             storage: runtime.storage.clone(),
             bound_snapshot: None,
             memory_budget: runtime.memory_budget.clone(),
+            spill_config: crate::executor::streaming::spill::SpillConfig::default(),
             max_workers: 1,
             chunk_size: crate::executor::base::ExecutionContext::DEFAULT_CHUNK_SIZE,
             max_buffered_chunks:

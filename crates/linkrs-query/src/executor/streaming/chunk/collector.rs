@@ -743,9 +743,8 @@ mod tests {
     fn spill_quota_error_surfaces() {
         let quota = DiskQuota::new(1);
         let config = SpillConfig {
-            temp_dir: None,
-            max_spill_files: 64,
             collect_spill_rows: Some(1),
+            ..SpillConfig::default()
         };
         let manager = Arc::new(SpillManager::new_with_quota(config, 4208, quota).unwrap());
         let mut collector = LocalChunkCollector::new(vec!["a".to_string()]);

@@ -2,6 +2,7 @@
 //!
 //! This module provides the minimum amount of contextual information required to execute the query, thereby avoiding the need for the query layer to rely on the API layer.
 
+use crate::executor::streaming::spill::SpillConfig;
 use crate::storage::QueryStorage;
 use crate::storage::StorageOperationContext;
 use linkrs_core::Value;
@@ -75,6 +76,10 @@ pub struct QueryRequestContext {
     /// Consistency requirement for secondary-index reads (vector/fulltext).
     /// `None` = eventual; `Some(cfg)` = read-your-writes with timeout and optional LSN.
     pub ryw_config: Option<linkrs_core::types::ReadYourWritesConfig>,
+    /// Configured memory budget for this query. Zero selects the engine default.
+    pub memory_budget_bytes: u64,
+    /// Configured disk spill settings for this query.
+    pub spill_config: Option<SpillConfig>,
 }
 
 impl QueryRequestContext {
@@ -96,6 +101,8 @@ impl QueryRequestContext {
             operation_storage: None,
             parsed_statement: None,
             ryw_config: None,
+            memory_budget_bytes: 0,
+            spill_config: None,
         }
     }
 

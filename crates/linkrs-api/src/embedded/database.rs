@@ -373,6 +373,7 @@ impl GraphDatabase<GraphStorage> {
                 None,
             )
         };
+        let query_api = query_api.with_query_resources(&config.query_resources);
         let query_api = if config.parallel.workers > 1 {
             query_api.with_shared_scheduler(Arc::new(SharedScheduler::new(config.parallel.workers)))
         } else {

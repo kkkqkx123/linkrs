@@ -252,6 +252,7 @@ impl<
                 schema_manager.clone(),
             );
             api = api
+                .with_query_resources(&config.query_resource)
                 .with_statistics_settings(
                     config.common.optimizer.statistics_sample_limit,
                     config.common.optimizer.statistics_min_epoch_delta,
@@ -287,6 +288,7 @@ impl<
                 schema_manager.as_ref(),
                 optimizer_engine.clone(),
                 &config.common.optimizer,
+                &config.query_resource,
                 cost_profile,
                 &runtime,
                 config.server.security.password_policy.history_size,
@@ -304,6 +306,7 @@ impl<
                 schema_manager.as_ref(),
                 optimizer_engine.clone(),
                 &config.common.optimizer,
+                &config.query_resource,
                 cost_profile,
                 &runtime,
                 config.server.security.password_policy.history_size,
@@ -371,6 +374,7 @@ impl<
         schema_manager: Option<&Arc<SchemaManager>>,
         optimizer_engine: Arc<crate::query::OptimizerEngine>,
         optimizer_config: &crate::config::OptimizerConfig,
+        query_resources: &crate::config::QueryResourceConfig,
         cost_profile: crate::config::StorageCostProfile,
         runtime: &crate::config::RuntimeConfig,
         password_history_depth: usize,
@@ -382,6 +386,7 @@ impl<
             optimizer_engine,
             schema_manager.cloned(),
         )
+        .with_query_resources(query_resources)
         .with_statistics_settings(
             optimizer_config.statistics_sample_limit,
             optimizer_config.statistics_min_epoch_delta,

@@ -320,7 +320,7 @@ fn run_sort(
     ));
     if spill_budget_bytes.is_some() {
         // The tiny tracker budget spills nearly every row; allow enough run
-        // files for the workload (the default 64-file cap would reject it).
+        // files for the workload beyond the default query-wide cap.
         let config = SpillConfig {
             max_spill_files: 1024,
             ..SpillConfig::default()

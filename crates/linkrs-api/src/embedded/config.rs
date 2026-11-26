@@ -5,7 +5,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-pub use linkrs_config::{ParallelConfig, SyncMode, VectorEngineKind};
+pub use linkrs_config::{ParallelConfig, QueryResourceConfig, SyncMode, VectorEngineKind};
 
 /// Database configuration
 ///
@@ -58,6 +58,8 @@ pub struct DatabaseConfig {
     pub parallel: ParallelConfig,
     /// Upper bound of the ordered-existence scan candidate batch (default 16).
     pub ordered_existence_batch_limit: usize,
+    /// Query memory and spill limits applied to every statement.
+    pub query_resources: QueryResourceConfig,
 }
 
 /// Vector subsystem configuration for the embedded database.
@@ -163,6 +165,7 @@ impl DatabaseConfig {
             vector: VectorConfig::default(),
             parallel: ParallelConfig::default(),
             ordered_existence_batch_limit: 16,
+            query_resources: QueryResourceConfig::default(),
         }
     }
 
@@ -182,6 +185,7 @@ impl DatabaseConfig {
             vector: VectorConfig::default(),
             parallel: ParallelConfig::default(),
             ordered_existence_batch_limit: 16,
+            query_resources: QueryResourceConfig::default(),
         }
     }
 
@@ -253,6 +257,12 @@ impl DatabaseConfig {
     /// Set the ordered-existence scan candidate batch upper bound.
     pub fn with_ordered_existence_batch_limit(mut self, limit: usize) -> Self {
         self.ordered_existence_batch_limit = limit.max(1);
+        self
+    }
+
+    /// Apply query memory and spill limits.
+    pub fn with_query_resources(mut self, resources: QueryResourceConfig) -> Self {
+        self.query_resources = resources;
         self
     }
 

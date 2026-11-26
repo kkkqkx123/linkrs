@@ -82,9 +82,8 @@ impl GraphStorageContext {
             .persistent
             .data_store
             .with_vertex_tables(|tables| tables.values().map(|table| table.num_shards()).sum());
-        // Keep spiller/cache/GC observability exercised without虚设 thresholds.
+        // Keep spiller/cache/GC observability exercised without idle thresholds.
         let _spill_dir = self.spiller().spill_dir();
-        let _active_spills = self.spiller().active_spills().read().len();
         // Exercise try_reserve_with_spill with a zero-byte probe to keep
         // the full reservation-with-spill path compiled and tested.
         let _probe = self.try_reserve_with_spill(MemoryCategory::Data, 0);

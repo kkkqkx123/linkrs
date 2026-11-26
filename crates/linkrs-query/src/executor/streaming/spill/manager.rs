@@ -29,7 +29,8 @@ pub struct SpillManager {
 
 impl SpillManager {
     pub fn new(config: SpillConfig, query_id: u64) -> Result<Self, QueryError> {
-        Self::new_with_quota(config, query_id, DiskQuota::default_quota())
+        let disk_quota = DiskQuota::new(config.disk_quota_bytes);
+        Self::new_with_quota(config, query_id, disk_quota)
     }
 
     /// Create with explicit disk quota.

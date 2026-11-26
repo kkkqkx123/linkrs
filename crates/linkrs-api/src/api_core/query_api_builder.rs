@@ -9,10 +9,11 @@ use crate::api_core::cost_profile::cost_config_for_profile;
 use crate::api_core::cost_profile::resolve_space_cost_configs;
 use crate::api_core::error::{CoreError, CoreResult};
 use crate::api_core::QueryApi;
-use linkrs_config::{RuntimeConfig, StorageCostProfile};
+use linkrs_config::{QueryResourceConfig, RuntimeConfig, StorageCostProfile};
 use linkrs_core::metadata::SchemaManager;
 use linkrs_metrics::StatsManager;
 use linkrs_query::executor::streaming::pool::SharedScheduler;
+use linkrs_query::executor::streaming::spill::SpillConfig;
 use linkrs_query::executor::streaming::query_registry::QueryRegistry;
 use linkrs_query::optimizer::CostModelConfig;
 use linkrs_query::query_manager::QueryManager;
@@ -24,7 +25,27 @@ use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+fn spill_config_from(resources: &QueryResourceConfig) -> SpillConfig {
+    let temp_dir = resources
+        .spill_dir
+        .clone()
+        .filter(|path| !path.as_os_str().is_empty());
+    SpillConfig {
+        temp_dir,
+        max_spill_files: resources.spill_max_files,
+        collect_spill_rows: resources.spill_collector_rows,
+        disk_quota_bytes: resources.spill_disk_bytes,
+    }
+}
+
 impl<S: StorageClient + Clone + 'static> QueryApi<S> {
+    /// Apply resource limits shared by every statement executed by this API.
+    pub fn with_query_resources(mut self, resources: &QueryResourceConfig) -> Self {
+        self.max_memory_per_query = resources.max_memory_per_query;
+        self.spill_config = spill_config_from(resources);
+        self
+    }
+
     /// Attach a schema manager to the pipeline.
     pub fn with_schema_manager(mut self, schema_manager: Arc<SchemaManager>) -> Self {
         self.pipeline_manager = self.pipeline_manager.with_schema_manager(schema_manager);
@@ -53,6 +74,8 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
         };
         Self {
             pipeline_manager: pipeline,
+            max_memory_per_query: 0,
+            spill_config: SpillConfig::default(),
         }
     }
 
@@ -238,6 +261,10 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
             pipeline_manager = pipeline_manager.with_vector_coordinator(vector_coordinator);
         }
 
-        Self { pipeline_manager }
+        Self {
+            pipeline_manager,
+            max_memory_per_query: 0,
+            spill_config: SpillConfig::default(),
+        }
     }
 }

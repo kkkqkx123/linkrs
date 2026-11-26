@@ -21,6 +21,7 @@ use super::plan::types::{PhysicalOperatorId, PhysicalPlan};
 use super::plan::validator::PhysicalPlanValidator;
 use super::result_utils::convert_chunks_to_dataset_with_spill;
 use super::runtime::ExecutionRuntime;
+use super::spill::SpillConfig;
 use super::stream_result::StreamingQueryResult;
 use crate::executor::base::{ExecutionResult, MemoryBudget};
 use crate::optimizer::stats::feedback::history::QueryFeedbackHistory;
@@ -68,6 +69,8 @@ pub struct QueryBindings {
     pub bound_snapshot: Option<crate::storage::SnapshotHandle>,
     /// Per-query memory budget.
     pub memory_budget: MemoryBudget,
+    /// Per-query disk spill settings.
+    pub spill_config: SpillConfig,
     /// Maximum intra-query worker threads (1 = serial only).
     pub max_workers: usize,
     /// Rows per output chunk.
@@ -142,6 +145,7 @@ impl QueryBindings {
             storage: context.storage.clone(),
             bound_snapshot: context.bound_snapshot,
             memory_budget: context.memory_budget.clone(),
+            spill_config: context.spill_config.clone(),
             max_workers: context.max_workers,
             chunk_size: context.chunk_size,
             max_buffered_chunks: context.max_buffered_chunks,
@@ -364,6 +368,7 @@ impl QueryExecutionInstance {
         // Set up the engine.
         let engine_timer = stage_timing_enabled().then(|| StageTimer::new("instantiate.engine"));
         let mut engine = StreamingExecutionEngine::new();
+        engine.set_spill_config(bindings.spill_config.clone());
         engine.set_max_workers(bindings.max_workers);
         engine.set_max_buffered_chunks(bindings.max_buffered_chunks);
         engine.set_runtime(runtime.clone());

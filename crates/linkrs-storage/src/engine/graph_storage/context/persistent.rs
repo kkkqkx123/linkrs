@@ -225,8 +225,9 @@ impl GraphStoragePersistent {
             resources.memory_soft_ratio,
             resources.memory_hard_ratio,
         );
-        // Keep the process-wide query watermark track aligned with the
-        // instance ratios so both pressure systems degrade in one order.
+        // Keep the process-wide query watermark aligned with the storage
+        // instance so query accelerations degrade before admission rejects.
+        crate::memory_watermark::set_process_budget(resources.max_memory_bytes);
         if let Err(reason) = crate::memory_watermark::configure_from_instance_ratios(
             resources.memory_soft_ratio,
             resources.memory_hard_ratio,

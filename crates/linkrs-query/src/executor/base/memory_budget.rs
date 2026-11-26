@@ -90,10 +90,21 @@ impl MemoryBudget {
         }
     }
 
-    /// Release `bytes` from the budget (called when data is freed).
+    /// Release `bytes` from the budget, clamped to the current reservation.
     pub fn release(&self, bytes: usize) {
-        self.allocated
-            .fetch_sub(bytes, std::sync::atomic::Ordering::Relaxed);
+        let mut prev = self.allocated.load(std::sync::atomic::Ordering::Relaxed);
+        loop {
+            let next = prev.saturating_sub(bytes);
+            match self.allocated.compare_exchange_weak(
+                prev,
+                next,
+                std::sync::atomic::Ordering::Relaxed,
+                std::sync::atomic::Ordering::Relaxed,
+            ) {
+                Ok(_) => return,
+                Err(current) => prev = current,
+            }
+        }
     }
 
     /// Current allocated bytes.
@@ -304,6 +315,16 @@ pub trait Spillable {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn release_saturates_at_zero() {
+        let budget = MemoryBudget::new(64);
+        assert!(budget.try_reserve(32).expect("reserve memory"));
+        budget.release(64);
+        assert_eq!(budget.current(), 0);
+        budget.release(16);
+        assert_eq!(budget.current(), 0);
+    }
 
     #[test]
     fn tracked_reservation_releases_budget_and_tracker() {

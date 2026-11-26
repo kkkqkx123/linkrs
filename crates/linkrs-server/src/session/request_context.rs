@@ -320,5 +320,7 @@ pub fn build_query_request_context(
         operation_context: None,
         operation_storage: None,
         ryw_config: None,
+        memory_budget_bytes: 0,
+        spill_config: None,
     }
 }

@@ -1,6 +1,7 @@
 //! Storage configuration
 
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 use crate::runtime::SyncMode;
 
@@ -570,9 +571,25 @@ impl StorageConfig {
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct QueryResourceConfig {
-    /// Maximum memory per query (bytes, 0 = unlimited)
+    /// Maximum memory per query in bytes. Zero selects the engine default.
     #[serde(default)]
     pub max_memory_per_query: u64,
+
+    /// Directory for query spill runs. Empty selects the system temp directory.
+    #[serde(default)]
+    pub spill_dir: Option<PathBuf>,
+
+    /// Maximum number of spill run files for one query.
+    #[serde(default = "default_spill_max_files")]
+    pub spill_max_files: usize,
+
+    /// Maximum spill bytes for one query. Zero means unlimited.
+    #[serde(default = "default_spill_disk_bytes")]
+    pub spill_disk_bytes: u64,
+
+    /// Terminal collector spill threshold in rows. Zero disables collector spill.
+    #[serde(default)]
+    pub spill_collector_rows: Option<u64>,
 
     /// Maximum concurrent queries (0 = unlimited)
     #[serde(default = "default_max_concurrent_queries")]
@@ -599,6 +616,14 @@ fn default_max_concurrent_queries() -> usize {
     100
 }
 
+fn default_spill_max_files() -> usize {
+    256
+}
+
+fn default_spill_disk_bytes() -> u64 {
+    2 * 1024 * 1024 * 1024
+}
+
 fn default_max_vertex_scan() -> usize {
     1_000_000
 }
@@ -610,7 +635,11 @@ fn default_max_edge_scan() -> usize {
 impl Default for QueryResourceConfig {
     fn default() -> Self {
         Self {
-            max_memory_per_query: 0, // Unlimited
+            max_memory_per_query: 0,
+            spill_dir: None,
+            spill_max_files: default_spill_max_files(),
+            spill_disk_bytes: default_spill_disk_bytes(),
+            spill_collector_rows: None,
             max_concurrent_queries: default_max_concurrent_queries(),
             query_timeout_secs: 0, // No timeout
             max_result_size: 0,    // Unlimited
@@ -625,6 +654,9 @@ impl QueryResourceConfig {
     pub fn validate(&self) -> Result<(), String> {
         if self.max_concurrent_queries == 0 {
             return Err("Max concurrent queries must be greater than 0".to_string());
+        }
+        if self.spill_max_files == 0 {
+            return Err("Max spill files must be greater than 0".to_string());
         }
 
         Ok(())

@@ -12,6 +12,7 @@ use crate::api_core::error::{CoreError, CoreResult};
 use crate::api_core::types::{ExecutionMetadata, QueryRequest, QueryResult};
 use linkrs_metrics::StatsManager;
 use linkrs_query::executor::base::ExecutionResult;
+use linkrs_query::executor::streaming::spill::SpillConfig;
 use linkrs_query::executor::streaming::StreamingQueryResult;
 use linkrs_query::{OptimizerEngine, QueryPipelineManager};
 use linkrs_storage::{
@@ -25,6 +26,8 @@ use std::time::Instant;
 /// Universal Query API – Core Layer
 pub struct QueryApi<S: StorageClient + 'static> {
     pub(crate) pipeline_manager: QueryPipelineManager<S>,
+    pub(crate) max_memory_per_query: u64,
+    pub(crate) spill_config: SpillConfig,
 }
 
 impl<S: StorageClient + Clone + 'static> QueryApi<S> {
@@ -43,6 +46,8 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
         let optimizer_engine = Arc::new(OptimizerEngine::default());
         Self {
             pipeline_manager: Self::pipeline_with_engine(storage, stats_manager, optimizer_engine),
+            max_memory_per_query: 0,
+            spill_config: SpillConfig::default(),
         }
     }
 
@@ -152,6 +157,8 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
             .is_some_and(|context| context.read_only);
         request_context.isolation_level = ctx.isolation_level;
         request_context.ryw_config = ctx.consistency.read_your_writes().copied();
+        request_context.memory_budget_bytes = self.max_memory_per_query;
+        request_context.spill_config = Some(self.spill_config.clone());
         request_context.operation_context = operation_context;
         request_context.operation_storage = operation_storage
             .map(|storage| Arc::new(RwLock::new(storage)) as Arc<RwLock<dyn QueryStorage>>);
@@ -279,6 +286,8 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
             .is_some_and(|context| context.read_only);
         request_context.isolation_level = ctx.isolation_level;
         request_context.ryw_config = ctx.consistency.read_your_writes().copied();
+        request_context.memory_budget_bytes = self.max_memory_per_query;
+        request_context.spill_config = Some(self.spill_config.clone());
         request_context.operation_context = operation_context;
         request_context.operation_storage = operation_storage
             .map(|storage| Arc::new(RwLock::new(storage)) as Arc<RwLock<dyn QueryStorage>>);

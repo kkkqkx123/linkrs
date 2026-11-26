@@ -436,7 +436,11 @@ Linkrs 使用 TOML 格式的配置文件，默认配置文件为 `config.toml`�
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| max_memory_per_query | u64 | 0 | 单查询内存上限（字节，0 不限制） |
+| max_memory_per_query | u64 | 0 | 单查询阻塞算子内存上限（字节，0 使用引擎默认 512 MiB） |
+| spill_dir | string | 空 | 查询 spill 目录；空表示系统临时目录 |
+| spill_max_files | usize | 256 | 单查询 spill run 文件数上限（必须 >0） |
+| spill_disk_bytes | u64 | 2147483648 | 单查询 spill 字节上限（字节，0 不限制） |
+| spill_collector_rows | Option\<u64\> | null | 终端 collector 落盘行数阈值；0 表示禁用 |
 | max_concurrent_queries | usize | 100 | 最大并发查询数（0 不允许，必须 >0） |
 | query_timeout_secs | u64 | 0 | 查询超时（秒，0 不限制） |
 | max_result_size | u64 | 0 | 最大结果集大小（字节，0 不限制） |

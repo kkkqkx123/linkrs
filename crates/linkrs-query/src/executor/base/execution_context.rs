@@ -8,6 +8,7 @@ use super::MemoryBudget;
 use crate::executor::expression::functions::global_registry_ref;
 use crate::executor::expression::functions::OwnedFunctionRef;
 use crate::executor::streaming::pool::SharedScheduler;
+use crate::executor::streaming::spill::SpillConfig;
 use crate::optimizer::stats::feedback::history::QueryFeedbackHistory;
 use crate::storage::QueryStorage;
 use linkrs_core::metadata::SequenceManager;
@@ -60,6 +61,8 @@ pub struct ExecutionContext {
     pub session_variables: Arc<HashMap<String, linkrs_core::Value>>,
     /// Per-query memory budget for blocking operators.
     pub memory_budget: MemoryBudget,
+    /// Per-query disk spill settings for blocking operators.
+    pub spill_config: SpillConfig,
     /// Maximum intra-query workers. 1 = serial only.
     pub max_workers: usize,
     /// Server-assigned query ID for KILL QUERY / cancellation support.
@@ -114,6 +117,7 @@ fn new_base(expression_context: Arc<ExpressionAnalysisContext>) -> ExecutionCont
         parameters: Arc::new(HashMap::new()),
         session_variables: Arc::new(HashMap::new()),
         memory_budget: MemoryBudget::default_budget(),
+        spill_config: SpillConfig::default(),
         max_workers: 1,
         query_id: 0,
         cancel_token: None,

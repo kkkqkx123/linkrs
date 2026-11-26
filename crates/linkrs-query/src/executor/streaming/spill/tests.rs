@@ -276,9 +276,8 @@ fn test_finalize_run_tracks_bytes() {
 #[test]
 fn test_create_run_writer_enforces_max_spill_files() {
     let config = SpillConfig {
-        temp_dir: None,
         max_spill_files: 2,
-        collect_spill_rows: None,
+        ..SpillConfig::default()
     };
     let manager = SpillManager::new(config, 210).unwrap();
     let _first = manager.create_run_writer(0).unwrap();
@@ -296,9 +295,8 @@ fn test_collect_spill_threshold_defaults_and_disables() {
     );
     let disabled = SpillManager::new(
         SpillConfig {
-            temp_dir: None,
-            max_spill_files: 64,
             collect_spill_rows: Some(0),
+            ..SpillConfig::default()
         },
         212,
     )
