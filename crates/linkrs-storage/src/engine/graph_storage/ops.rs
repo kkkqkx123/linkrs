@@ -363,6 +363,7 @@ pub(crate) fn repair_dangling_edges(
 ) -> StorageResult<usize> {
     let dangling_edges = find_dangling_edges(ctx, space)?;
     let mut repaired_count = 0;
+    let mut failures = 0;
 
     for edge in &dangling_edges {
         if writer::delete_edge(
@@ -376,9 +377,16 @@ pub(crate) fn repair_dangling_edges(
         .is_ok()
         {
             repaired_count += 1;
+        } else {
+            failures += 1;
         }
     }
 
+    // Only a fully successful pass re-establishes the proof: any failed
+    // deletion may leave a dangling edge behind.
+    if failures == 0 {
+        ctx.mark_space_dangling_free(space);
+    }
     Ok(repaired_count)
 }
 

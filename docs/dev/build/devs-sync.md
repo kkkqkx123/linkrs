@@ -91,6 +91,17 @@ ssh devs 'nohup bash /tmp/devs-check-trimming.sh > /data/kkkqkx/linkrs/check-tri
 最小闭包 `cargo tree` 检查、各 feature 组合 `cargo check`、server 编译。
 单次快速验证可直接在远端执行其中一条，无需走脚本。
 
+编译 `grpc` feature 需要 `protoc`。devs 上安装的是 `/opt/protoc-25.3`，
+通过 `/usr/local/bin/protoc` 软链提供（在 `PATH` 中优先于 `/usr/bin`）。
+Ubuntu 18.04 apt 自带的 3.0.0 不支持 `proto3` 的 `optional` 字段，
+无法编译本仓库的 `proto/linkrs.proto`，不要回退到该版本。
+远端校验代码生成环境：
+
+```bash
+ssh devs 'protoc --version; cd /data/kkkqkx/linkrs/repo && \
+  protoc --proto_path=proto --descriptor_set_out=/tmp/linkrs-proto.desc proto/linkrs.proto'
+```
+
 ## 反向取回
 
 日志和结果体积小，直接取回：

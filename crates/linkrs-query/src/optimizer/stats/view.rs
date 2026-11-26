@@ -57,6 +57,15 @@ impl<'a> StatsView<'a> {
         }
     }
 
+    /// Stride-sampled degree sketch for the anchor tag, if collected.
+    /// Sorted by vertex id; consumed by skew-aware partition splitting.
+    pub fn degree_sketch(&self, tag_name: &str) -> Option<Vec<super::DegreeSketchSample>> {
+        match self.space {
+            Some(space) => self.manager.get_degree_sketch(space, tag_name),
+            None => None,
+        }
+    }
+
     /// Property statistics for `property` under `tag_name` (or global), if any.
     pub fn property_stats(
         &self,

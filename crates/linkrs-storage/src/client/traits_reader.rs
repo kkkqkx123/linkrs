@@ -662,6 +662,27 @@ pub trait StorageReader: Send + Sync + std::fmt::Debug {
         ))
     }
 
+    /// Whether `(space, edge_type)` is proven to have no dangling endpoints.
+    ///
+    /// Inserts validate endpoints, so proof only needs the absence of
+    /// un-repaired plain vertex deletes. The default reports unproven so
+    /// adapters keep their existing visibility checks; the native engine
+    /// overrides it with its delete/repair-maintained token.
+    fn edge_type_dangling_free(&self, space: &str, edge_type: &str) -> bool {
+        let _ = (space, edge_type);
+        false
+    }
+
+    /// Whether the calling context is a single auto-commit statement (or
+    /// absent). Skipping existence re-reads is only sound there: the token
+    /// is revoked at delete-statement time, which always precedes the
+    /// delete's commit, so a same-process check cannot miss a visible
+    /// delete. Explicit multi-statement transactions keep the full
+    /// recording path.
+    fn allows_dangling_skip(&self) -> bool {
+        false
+    }
+
     /// Whether one ordered index key can back an ascending early-stop scan.
     ///
     /// Only engines that can prove global key order across generations and

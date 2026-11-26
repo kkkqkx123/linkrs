@@ -21,7 +21,7 @@ use std::process::Command as Process;
 use std::time::Instant;
 
 use linkrs::api::embedded::{DatabaseConfig, GraphDatabase, QueryResult};
-use linkrs::storage::{GraphStorage, StorageReader, StorageSchemaOps};
+use linkrs::storage::{GraphStorage, StorageAdmin, StorageReader, StorageSchemaOps};
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -38,7 +38,7 @@ fn main() {
                  [--count-frontier on|off] [--ordered-parallel-expand on|off]
                  [--require-parallel-explain name,name] [--explain-dir <dir>]
                  [--profile-runs N] [--no-checkpoint] [--no-snapshots]
-                 [--skip-file <path>]"
+                 [--prove-dangling-free <space>] [--skip-file <path>]"
             );
             std::process::exit(2);
         }
@@ -71,6 +71,7 @@ struct ResourceSample {
     buffer_pool_bytes: u64,
     cpu_binding: String,
     numa_policy: String,
+    dangling_repaired: u64,
 }
 
 /// Per-run compile-stage samples used to separate cold compilation from cache
@@ -135,6 +136,7 @@ struct QueryDiagnostics {
     expand_events: u64,
     expand_unique_destinations: u64,
     expand_missing_destinations: u64,
+    dangling_exist_skips: u64,
     expand_output_rows: u64,
     ordered_existence_candidates: u64,
     ordered_existence_matches: u64,
@@ -941,8 +943,26 @@ fn cmd_run(args: &[String]) {
         }
         db_config = db_config.with_parallel_config(parallel_config);
     }
-    let database = GraphDatabase::<GraphStorage>::open_with_config(db_config)
+    let mut database = GraphDatabase::<GraphStorage>::open_with_config(db_config)
         .unwrap_or_else(|e| die(format!("open db {}: {e}", db.display())));
+    // One-time read-only proof for dangling-free fast paths: on a clean
+    // import the repair finds nothing (no writes) and marks the space
+    // proven in this process. A non-zero repair means the database was
+    // dirty, so the numbers are not comparable: fail loudly instead.
+    let mut dangling_repaired = 0u64;
+    if let Some(space) = opt_value(args, "--prove-dangling-free") {
+        let repaired = database
+            .storage_mut()
+            .repair_dangling_edges(&space)
+            .unwrap_or_else(|e| die(format!("prove dangling-free {space}: {e}")));
+        println!("[run] dangling_proof: space={space} repaired={repaired}");
+        if repaired > 0 {
+            die(format!(
+                "prove dangling-free {space}: repaired {repaired} edge(s), database was dirty"
+            ));
+        }
+        dangling_repaired = repaired as u64;
+    }
     let session = database
         .session()
         .unwrap_or_else(|e| die(format!("open session: {e}")));
@@ -962,6 +982,7 @@ fn cmd_run(args: &[String]) {
         buffer_pool_bytes,
         cpu_binding,
         numa_policy,
+        dangling_repaired,
     };
     println!(
         "[run] resources: db_size_bytes={} rss_peak_kb={} buffer_pool_bytes={} cpu_binding={} numa_policy={}",
@@ -1167,6 +1188,8 @@ fn cmd_run(args: &[String]) {
                 expand_read_us: explain_metric(&explain_text, "expand_read_us").unwrap_or(0),
                 expand_topology_read_us: explain_metric(&explain_text, "expand_topology_read_us")
                     .unwrap_or(0),
+                dangling_exist_skips: explain_metric(&explain_text, "dangling_exist_skips")
+                    .unwrap_or(0),
                 expand_destination_read_us: explain_metric(
                     &explain_text,
                     "expand_destination_read_us",
@@ -1342,6 +1365,11 @@ fn patch_resource_result(
         &mut text,
         "expand_missing_destinations",
         diagnostics.expand_missing_destinations,
+    );
+    set_json_u64(
+        &mut text,
+        "dangling_exist_skips",
+        diagnostics.dangling_exist_skips,
     );
     set_json_u64(
         &mut text,
@@ -1568,6 +1596,7 @@ fn write_run_result(
         json_escape(&resources.numa_policy)
     );
     json.push_str("  \"reclaim_failures\": 0,\n");
+    let _ = writeln!(json, "  \"dangling_repaired\": {},", resources.dangling_repaired);
     json.push_str("  \"typed_group_hits\": 0,\n");
     json.push_str("  \"typed_group_fallbacks\": 0,\n");
     json.push_str("  \"partition_skew_ratio\": 0.0,\n");
@@ -1592,6 +1621,7 @@ fn write_run_result(
     json.push_str("  \"expand_events\": 0,\n");
     json.push_str("  \"expand_unique_destinations\": 0,\n");
     json.push_str("  \"expand_missing_destinations\": 0,\n");
+    json.push_str("  \"dangling_exist_skips\": 0,\n");
     json.push_str("  \"expand_output_rows\": 0,\n");
     json.push_str("  \"ordered_existence_candidates\": 0,\n");
     json.push_str("  \"ordered_existence_matches\": 0,\n");

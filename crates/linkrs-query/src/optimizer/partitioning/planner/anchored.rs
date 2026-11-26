@@ -10,6 +10,7 @@ use super::core::{fallback, PartitioningPlanner};
 use super::count::is_parallel_count_frontier;
 use super::helpers::{hop_fanout, split_range};
 use super::ordered::is_ordered_parallel_expand;
+use crate::optimizer::stats::split_weighted_ranges;
 
 /// Choose a partition layout for an anchored bounded traversal (E4):
 /// a linear chain of `ExpandAll` hops above the anchor vertex
@@ -79,12 +80,6 @@ pub(crate) fn decide_anchored_traversal(
             "missing statistics for anchor tag '{tag}'; cannot estimate row count"
         )));
     }
-    let threshold = planner.config().min_rows_per_partition.saturating_mul(2);
-    if rows < threshold {
-        return Some(fallback(format!(
-            "estimated anchor rows ({rows}) are below the partition threshold"
-        )));
-    }
     let filtered = planner.estimate_filtered_rows(&chain, rows, tag, statistics, snapshot);
     // Each partition expands its own anchor slice, so the gate input is
     // the expanded work, not the anchor count: a small anchor with a
@@ -99,17 +94,55 @@ pub(crate) fn decide_anchored_traversal(
             accumulated.saturating_mul(hop).max(1)
         });
     let work = filtered.saturating_mul(fanout);
-    if work < threshold {
-        return Some(fallback(format!(
-            "estimated expanded rows ({work}) are below the partition threshold"
-        )));
+    // Scalar-count frontiers exchange one row per partition, so the
+    // row-volume gate would reject every small anchor. They gate on seed
+    // count instead: enough anchors per worker to amortize the fragment
+    // startup. Other shapes keep the volume gates.
+    if count_frontier_gate {
+        let seeds_per_worker = 32u64;
+        let min_seeds = (planner.config().max_workers.max(2) as u64)
+            .saturating_mul(seeds_per_worker);
+        if filtered < min_seeds {
+            return Some(fallback(format!(
+                "estimated anchor seeds ({filtered}) are below the count-frontier seed threshold ({min_seeds})"
+            )));
+        }
+    } else {
+        let threshold = planner.config().min_rows_per_partition.saturating_mul(2);
+        if rows < threshold {
+            return Some(fallback(format!(
+                "estimated anchor rows ({rows}) are below the partition threshold"
+            )));
+        }
+        if work < threshold {
+            return Some(fallback(format!(
+                "estimated expanded rows ({work}) are below the partition threshold"
+            )));
+        }
     }
 
     let desired = planner.desired_partition_count(work);
     if let Some(reason) = planner.cost_gate_reason(work, work, desired) {
         return Some(fallback(reason));
     }
-    let ranges = split_range(range, desired);
+    // Skew-aware boundaries: cut at equal cumulative degree weight from
+    // the collection-time sketch instead of equal id width. The sketch is
+    // a performance-only proxy (total degrees, stride-sampled), so any
+    // degenerate input falls back to the uniform split with identical
+    // row-ownership semantics.
+    let first_hop_out = chain.iter().find_map(|node| match node {
+        PlanNodeEnum::ExpandAll(expand) => Some(!matches!(expand.direction(), "in")),
+        _ => None,
+    });
+    let (ranges, weighting) = match (first_hop_out, statistics.degree_sketch(tag)) {
+        (Some(use_out), Some(sketch)) => {
+            match split_weighted_ranges(range, desired, &sketch, use_out) {
+                Some(weighted) => (weighted, "degree-weighted"),
+                None => (split_range(range, desired), "uniform"),
+            }
+        }
+        _ => (split_range(range, desired), "uniform"),
+    };
     let source = PartitionSource::VertexId {
         tag: tag.to_string(),
     };
@@ -119,7 +152,7 @@ pub(crate) fn decide_anchored_traversal(
             Ok(spec) => Some(PartitioningDecision {
                 partition_spec: Some(spec),
                 reason: format!(
-                    "partitioned anchored traversal by '{tag}' vertex-id ranges into {desired} partitions"
+                    "partitioned anchored traversal by '{tag}' vertex-id ranges into {desired} {weighting} partitions"
                 ),
             }),
             Err(error) => Some(fallback(format!(

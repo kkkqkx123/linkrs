@@ -61,7 +61,7 @@ impl Default for PartitioningConfig {
             allow_pure_count_chain: false,
             allow_global_aggregate: false,
             allow_ordered_parallel_expand: true,
-            allow_parallel_count_frontier: false,
+            allow_parallel_count_frontier: true,
             fixed_overhead_rows: 0,
             per_partition_rows: 0,
             exchange_row_per_mille: 0,

@@ -35,6 +35,10 @@ pub struct StatisticsManager {
     /// `"{space}.{tag_name}"` → (tag_id, available indexes). Registered
     /// per query from the planning metadata context.
     index_catalog: Arc<DashMap<String, (i32, Vec<Index>)>>,
+    /// Stride-sampled degree sketches keyed by `"{space}.{tag_name}"`.
+    /// Sorted by vertex id; consumed by skew-aware partition splitting.
+    /// Performance-only data: staleness is fenced by the space stamp.
+    degree_sketches: Arc<DashMap<String, Vec<super::DegreeSketchSample>>>,
 }
 
 impl StatisticsManager {
@@ -48,6 +52,7 @@ impl StatisticsManager {
             property_combo_stats: Arc::new(DashMap::new()),
             space_versions: Arc::new(DashMap::new()),
             index_catalog: Arc::new(DashMap::new()),
+            degree_sketches: Arc::new(DashMap::new()),
         }
     }
 
@@ -78,6 +83,29 @@ impl StatisticsManager {
     /// statistics have been collected for it.
     pub fn space_stamp(&self, space: &str) -> Option<(u64, u64)> {
         self.space_versions.get(space).map(|v| *v)
+    }
+
+    /// Store the stride-sampled degree sketch for one tag. Sorted by
+    /// vertex id by the collector; an empty sketch disables weighting.
+    pub fn update_degree_sketch(
+        &self,
+        space: &str,
+        tag_name: &str,
+        sketch: Vec<super::DegreeSketchSample>,
+    ) {
+        self.degree_sketches
+            .insert(Self::composite_key(space, tag_name), sketch);
+    }
+
+    /// Stride-sampled degree sketch for one tag, if collected.
+    pub fn get_degree_sketch(
+        &self,
+        space: &str,
+        tag_name: &str,
+    ) -> Option<Vec<super::DegreeSketchSample>> {
+        self.degree_sketches
+            .get(&Self::composite_key(space, tag_name))
+            .map(|v| v.clone())
     }
 
     /// The schema version recorded for `space` at its last collection, if any.
@@ -308,6 +336,7 @@ impl Clone for StatisticsManager {
             property_combo_stats: Arc::clone(&self.property_combo_stats),
             space_versions: Arc::clone(&self.space_versions),
             index_catalog: Arc::clone(&self.index_catalog),
+            degree_sketches: Arc::clone(&self.degree_sketches),
         }
     }
 }

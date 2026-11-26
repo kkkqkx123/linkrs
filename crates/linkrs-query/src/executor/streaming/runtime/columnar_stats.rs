@@ -167,6 +167,10 @@ pub struct ColumnarStats {
     pub expand_unique_destinations: AtomicU64,
     /// Number of distinct destinations missing at the read timestamp.
     pub expand_missing_destinations: AtomicU64,
+    /// Batches whose destination existence re-read was skipped under the
+    /// dangling-free proof. The existence cost then drops to zero while
+    /// the emitted rows stay identical.
+    pub dangling_exist_skips: AtomicU64,
     /// Number of rows emitted by columnar expand.
     pub expand_output_rows: AtomicU64,
     /// Candidate primary keys checked by an ordered existence scan.
@@ -228,6 +232,7 @@ impl Default for ColumnarStats {
             expand_events: AtomicU64::new(0),
             expand_unique_destinations: AtomicU64::new(0),
             expand_missing_destinations: AtomicU64::new(0),
+            dangling_exist_skips: AtomicU64::new(0),
             expand_output_rows: AtomicU64::new(0),
             ordered_existence_candidates: AtomicU64::new(0),
             ordered_existence_matches: AtomicU64::new(0),
@@ -345,6 +350,12 @@ impl ColumnarStats {
             .fetch_add(unique, Ordering::Relaxed);
         self.expand_missing_destinations
             .fetch_add(missing, Ordering::Relaxed);
+    }
+
+    /// Record one batch whose destination existence re-read was skipped
+    /// under the dangling-free proof.
+    pub fn record_dangling_exist_skip(&self) {
+        self.dangling_exist_skips.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Record the number of rows emitted by one columnar expand batch.
@@ -503,6 +514,7 @@ pub struct ColumnarStatsSnapshot {
     pub expand_events: u64,
     pub expand_unique_destinations: u64,
     pub expand_missing_destinations: u64,
+    pub dangling_exist_skips: u64,
     pub expand_output_rows: u64,
     pub ordered_existence_candidates: u64,
     pub ordered_existence_matches: u64,
@@ -552,6 +564,7 @@ impl ColumnarStatsSnapshot {
             expand_events: stats.expand_events.load(Ordering::Relaxed),
             expand_unique_destinations: stats.expand_unique_destinations.load(Ordering::Relaxed),
             expand_missing_destinations: stats.expand_missing_destinations.load(Ordering::Relaxed),
+            dangling_exist_skips: stats.dangling_exist_skips.load(Ordering::Relaxed),
             expand_output_rows: stats.expand_output_rows.load(Ordering::Relaxed),
             ordered_existence_candidates: stats
                 .ordered_existence_candidates
@@ -609,7 +622,7 @@ impl ColumnarStatsSnapshot {
     /// Human-readable one-line summary for PROFILE output.
     pub fn summary(&self) -> String {
         format!(
-            "columnar_hits={}, misses={}, hit_rate={:.3}, typed_hit_rate={:.3}, b_path_hits={}, wasted_builds={}, typed_group_hits={}, typed_group_fallbacks={}, scan_read_us={}, scan_enumerate_us={}, scan_visibility_us={}, scan_decode_us={}, scan_assemble_us={}, scan_predicate_us={}, expand_read_us={}, expand_topology_read_us={}, expand_destination_read_us={}, expand_tag_resolve_us={}, expand_view_us={}, expand_output_us={}, expand_parent_batches={}, expand_parents={}, expand_events={}, expand_unique_destinations={}, expand_missing_destinations={}, expand_output_rows={}, ordered_existence_candidates={}, ordered_existence_matches={}, ordered_existence_output_rows={}, ordered_existence_drift={}, ordered_existence_cursor_us={}, ordered_existence_gate_us={}, ordered_existence_open_us={}, ordered_existence_opens={}, ordered_existence_contract_violations={}, ordered_existence_contract_discarded={}, selection_attached={}, selection_materialized={}, selection_pushed={}, column_block_hits={}, multiplicity_expanded={}, spill_rows={}, spill_bytes={}, spill_runs={}, batch_outlets={}",
+            "columnar_hits={}, misses={}, hit_rate={:.3}, typed_hit_rate={:.3}, b_path_hits={}, wasted_builds={}, typed_group_hits={}, typed_group_fallbacks={}, scan_read_us={}, scan_enumerate_us={}, scan_visibility_us={}, scan_decode_us={}, scan_assemble_us={}, scan_predicate_us={}, expand_read_us={}, expand_topology_read_us={}, expand_destination_read_us={}, expand_tag_resolve_us={}, expand_view_us={}, expand_output_us={}, expand_parent_batches={}, expand_parents={}, expand_events={}, expand_unique_destinations={}, expand_missing_destinations={}, dangling_exist_skips={}, expand_output_rows={}, ordered_existence_candidates={}, ordered_existence_matches={}, ordered_existence_output_rows={}, ordered_existence_drift={}, ordered_existence_cursor_us={}, ordered_existence_gate_us={}, ordered_existence_open_us={}, ordered_existence_opens={}, ordered_existence_contract_violations={}, ordered_existence_contract_discarded={}, selection_attached={}, selection_materialized={}, selection_pushed={}, column_block_hits={}, multiplicity_expanded={}, spill_rows={}, spill_bytes={}, spill_runs={}, batch_outlets={}",
             self.columnar_hits,
             self.columnar_misses,
             self.hit_rate(),
@@ -635,6 +648,7 @@ impl ColumnarStatsSnapshot {
             self.expand_events,
             self.expand_unique_destinations,
             self.expand_missing_destinations,
+            self.dangling_exist_skips,
             self.expand_output_rows,
             self.ordered_existence_candidates,
             self.ordered_existence_matches,

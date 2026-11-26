@@ -197,6 +197,10 @@ impl StatisticsCollector {
                 ),
             )?;
 
+            let sketch =
+                Self::sample_degree_sketch(storage, space, &tag_info.tag_name, vertex_count);
+            manager.update_degree_sketch(space, &tag_info.tag_name, sketch);
+
             let mut stats = TagStatistics::new(tag_info.tag_name.clone());
             stats.vertex_count = vertex_count;
             stats.avg_out_degree = avg_out_degree;
@@ -302,6 +306,58 @@ impl StatisticsCollector {
     fn vertex_tag_offset(total: usize, sample_limit: usize, data_epoch: u64, tag: &str) -> usize {
         let seed = Self::rotation_seed(data_epoch, tag);
         Self::rotating_offset(total, sample_limit, seed)
+    }
+
+    /// Stride-sampled degree sketch for skew-aware partition splitting.
+    ///
+    /// Eight fixed stride windows spread up to 512 vertices across
+    /// the tag's storage order; each sampled vertex contributes its total
+    /// out/in degrees. The stride is fixed (no rotation seed) so boundaries
+    /// derived from the sketch stay stable across collection passes. Only
+    /// integer vertex ids enter the sketch; other domains keep the uniform
+    /// split. Collection is amortized per data epoch; staleness is fenced
+    /// by the space stamp that already guards every cached plan.
+    fn sample_degree_sketch(
+        storage: &dyn QueryStorage,
+        space: &str,
+        tag_name: &str,
+        vertex_count: u64,
+    ) -> Vec<super::DegreeSketchSample> {
+        const WINDOWS: usize = 8;
+        const PER_WINDOW: usize = 64;
+        if vertex_count == 0 {
+            return Vec::new();
+        }
+        let mut sketch = Vec::new();
+        for window in 0..WINDOWS {
+            let offset = (window as u64 * vertex_count / WINDOWS as u64) as usize;
+            let vertices =
+                Self::sample_vertices_by_tag(storage, space, tag_name, PER_WINDOW, offset);
+            if vertices.is_empty() {
+                break;
+            }
+            for vertex in &vertices {
+                let Some(id) = vertex.vid.as_int64() else {
+                    continue;
+                };
+                let out_degree = storage
+                    .get_node_edges(space, &vertex.vid, EdgeDirection::Out, &[])
+                    .map(|edges| edges.len() as u64)
+                    .unwrap_or(0);
+                let in_degree = storage
+                    .get_node_edges(space, &vertex.vid, EdgeDirection::In, &[])
+                    .map(|edges| edges.len() as u64)
+                    .unwrap_or(0);
+                sketch.push(super::DegreeSketchSample {
+                    id,
+                    out_degree,
+                    in_degree,
+                });
+            }
+        }
+        sketch.sort_by_key(|sample| sample.id);
+        sketch.dedup_by_key(|sample| sample.id);
+        sketch
     }
 
     /// Compute the rotation offset for an edge type.  `total` is the edge

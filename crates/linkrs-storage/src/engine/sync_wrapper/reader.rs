@@ -14,6 +14,8 @@ impl<S: StorageClient + 'static> StorageReader for SyncWrapper<S> {
         fn incoming_edge_exists_batch(&self, space: &str, dst_ids: &[VertexId], src_tag: &str, dst_tag: &str, edge_type: &str) -> Result<Vec<bool>, StorageError>;
         fn layout_version(&self) -> u64;
         fn vertex_id_domain(&self, space: &str) -> Option<std::ops::Range<i64>>;
+        fn edge_type_dangling_free(&self, space: &str, edge_type: &str) -> bool;
+        fn allows_dangling_skip(&self) -> bool;
         fn get_vertex_projected(&self, space: &str, tag: &str, id: &VertexId, projection: &[std::sync::Arc<str>]) -> Result<Option<Vertex>, StorageError>;
         fn scan_vertices(&self, space: &str) -> Result<Vec<Vertex>, StorageError>;
         fn scan_vertices_by_tag(&self, space: &str, tag: &str) -> Result<Vec<Vertex>, StorageError>;

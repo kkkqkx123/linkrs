@@ -473,6 +473,8 @@ impl<S: StorageClient> StorageReader for MetricsStorage<S> {
         fn incoming_edge_exists_batch(&self, space: &str, dst_ids: &[VertexId], src_tag: &str, dst_tag: &str, edge_type: &str) -> Result<Vec<bool>, StorageError>;
         fn layout_version(&self) -> u64;
         fn vertex_id_domain(&self, space: &str) -> Option<std::ops::Range<i64>>;
+        fn edge_type_dangling_free(&self, space: &str, edge_type: &str) -> bool;
+        fn allows_dangling_skip(&self) -> bool;
         fn enable_edge_property_index(&self, space: &str, edge_type: &str, pool_capacity: u64) -> Result<bool, StorageError>;
         fn has_edge_property_index(&self, space: &str, edge_type: &str) -> Result<bool, StorageError>;
         fn disable_edge_property_index(&self, space: &str, edge_type: &str) -> Result<(), StorageError>;

@@ -82,6 +82,15 @@ pub(crate) struct GraphStoragePersistent {
     /// Recently committed auto-commit write sets for commit-time conflict
     /// certification (auto-commit bypasses the transaction manager).
     pub(crate) committed_write_sets: Arc<super::conflict::CommittedWriteSetWindow>,
+    /// Edge types whose dangling-free status is unproven. Absence means
+    /// proven dangling-free: inserts validate endpoints, so only plain
+    /// vertex deletes (which keep incident edges) can introduce dangling
+    /// endpoints, plus TTL purges which route through the same delete path.
+    /// New spaces start proven; restarts re-seed lazily on first check.
+    pub(crate) dangling_unproven: Arc<dashmap::DashSet<(String, String)>>,
+    /// Spaces whose edge types were already seeded into `dangling_unproven`
+    /// after a restart. Guards the one-time lazy seeding in the token check.
+    pub(crate) dangling_seed_done: Arc<dashmap::DashSet<String>>,
 }
 
 impl GraphStoragePersistent {
@@ -210,6 +219,8 @@ impl GraphStoragePersistent {
                 crate::migration_history::MigrationHistoryManager::new(),
             )),
             committed_write_sets: Arc::new(super::conflict::CommittedWriteSetWindow::new()),
+            dangling_unproven: Arc::new(dashmap::DashSet::new()),
+            dangling_seed_done: Arc::new(dashmap::DashSet::new()),
         }
     }
 
@@ -319,6 +330,8 @@ impl GraphStoragePersistent {
                 crate::migration_history::MigrationHistoryManager::new(),
             )),
             committed_write_sets: Arc::new(super::conflict::CommittedWriteSetWindow::new()),
+            dangling_unproven: Arc::new(dashmap::DashSet::new()),
+            dangling_seed_done: Arc::new(dashmap::DashSet::new()),
         })
     }
 }

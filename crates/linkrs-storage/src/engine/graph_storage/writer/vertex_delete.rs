@@ -15,18 +15,20 @@ use crate::index::types::EdgeIdentity;
 /// Plain vertex deletion keeps incident edges by design, so the orphaned
 /// rows stay visible until repaired. Each matching edge type is probed with
 /// a limit of one, which costs a single row visit on connected vertices and
-/// nothing when the space has no edge types at all.
+/// nothing when the space has no edge types at all. Returns the incident
+/// edge type names so the caller can revoke their dangling-free proof.
 fn warn_if_leaves_dangling_edges(
     ctx: &GraphStorageContext,
     space: &str,
     tag_name: &str,
     label_id: LabelId,
     vid: &VertexId,
-) {
+) -> Vec<String> {
     let edge_types = match ctx.schema_manager().list_edge_types(space) {
         Ok(types) if !types.is_empty() => types,
-        _ => return,
+        _ => return Vec::new(),
     };
+    let mut incident = Vec::new();
     let ts = ctx.get_read_timestamp();
     for edge_info in &edge_types {
         let (Some(src_label), Some(dst_label)) = (
@@ -62,9 +64,10 @@ fn warn_if_leaves_dangling_edges(
                 vid,
                 edge_info.edge_type_name,
             );
-            return;
+            incident.push(edge_info.edge_type_name.clone());
         }
     }
+    incident
 }
 
 pub(crate) fn delete_vertex(
@@ -81,7 +84,8 @@ pub(crate) fn delete_vertex(
     let label_id = tag_label_id(ctx, space, tag_name)?
         .ok_or_else(|| StorageError::not_found(format!("Tag {} not found", tag_name)))?;
     let vid = VertexId::normalize_for_vid_type(&space_info.vid_type, *id)?;
-    warn_if_leaves_dangling_edges(ctx, space, tag_name, label_id, &vid);
+    let incident = warn_if_leaves_dangling_edges(ctx, space, tag_name, label_id, &vid);
+    ctx.mark_edge_types_dangling(space, &incident);
     let routed = route_vertex_id(&vid)?;
     let ts = ctx.get_write_timestamp()?;
     delete_vertex_with_timestamp(

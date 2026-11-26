@@ -316,6 +316,14 @@ impl StorageReader for GraphStorage {
         reader::frontier_degree_batch(&self.ctx, space, src_ids, direction, edge_types)
     }
 
+    fn edge_type_dangling_free(&self, space: &str, edge_type: &str) -> bool {
+        self.ctx.is_edge_type_dangling_free(space, edge_type)
+    }
+
+    fn allows_dangling_skip(&self) -> bool {
+        self.ctx.allows_dangling_skip()
+    }
+
     fn scan_edges_by_type(&self, space: &str, edge_type: &str) -> Result<Vec<Edge>, StorageError> {
         reader::scan_edges_by_type(&self.ctx, space, edge_type)
     }

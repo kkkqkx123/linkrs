@@ -1,6 +1,7 @@
 mod auth_admin_tests;
 mod batch_window_tests;
 mod context_cursor_tests;
+mod dangling_token_tests;
 mod edge_tests;
 mod freeze_compaction_tests;
 mod group_window_tests;

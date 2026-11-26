@@ -444,9 +444,7 @@ pub(crate) fn get_node_edges_projected_batch(
         return Ok(vec![Vec::new(); normalized.len()]);
     }
     let ts = ctx.get_read_timestamp();
-    for id in &normalized {
-        record_vertex_read(ctx, *id);
-    }
+    record_vertex_reads(ctx, &normalized);
     let mut out: Vec<Vec<Edge>> = vec![Vec::new(); normalized.len()];
 
     for edge_info in &edge_types_all {
@@ -669,9 +667,7 @@ pub(crate) fn packed_node_edge_headers_batch(
         return Ok(empty);
     }
     let ts = ctx.get_read_timestamp();
-    for id in &normalized {
-        record_vertex_read(ctx, *id);
-    }
+    record_vertex_reads(ctx, &normalized);
 
     let mut packed = PackedEdgeTopology {
         parents: normalized.clone(),
@@ -934,9 +930,7 @@ pub(crate) fn neighbor_dst_ids_batch(
         resolved.push((edge_info.edge_type_id, src_label_id, dst_label_id));
     }
 
-    for src_id in src_ids {
-        record_vertex_read(ctx, *src_id);
-    }
+    record_vertex_reads(ctx, src_ids);
     let mut staged: Vec<Vec<(LabelId, u32)>> = vec![Vec::new(); src_ids.len()];
     let mut seen: Vec<HashSet<(u32, u32, i64)>> =
         (0..src_ids.len()).map(|_| HashSet::new()).collect();
@@ -993,9 +987,7 @@ pub(crate) fn out_degree_batch(
         resolved.push((edge_info.edge_type_id, src_label_id, dst_label_id));
     }
 
-    for src_id in src_ids {
-        record_vertex_read(ctx, *src_id);
-    }
+    record_vertex_reads(ctx, src_ids);
     // Single-partition single-direction batches visit each edge exactly
     // once, so per-seed dedup sets only add allocation overhead. Count the
     // gated adjacency callbacks directly; multi-partition or both-direction
@@ -1075,15 +1067,19 @@ pub(crate) fn frontier_degree_batch(
         let Some(dst_label_id) = endpoint_label_id(ctx, space, &edge_info.dst_tag_name)? else {
             continue;
         };
-        resolved.push((edge_info.edge_type_id, src_label_id, dst_label_id));
+        resolved.push((
+            edge_info.edge_type_id,
+            src_label_id,
+            dst_label_id,
+            edge_info.edge_type_name.clone(),
+        ));
     }
-    for src_id in src_ids {
-        record_vertex_read(ctx, *src_id);
-    }
+    record_vertex_reads(ctx, src_ids);
     if resolved.len() != 1 || matches!(direction, EdgeDirection::Both) {
         return portable_frontier_degrees(ctx, space, src_ids, direction, edge_types);
     }
-    let (edge_label, src_label, dst_label) = resolved[0];
+    let (edge_label, src_label, dst_label) = (resolved[0].0, resolved[0].1, resolved[0].2);
+    let edge_type_name = &resolved[0].3;
     let neighbor_label = if direction == EdgeDirection::Out {
         dst_label
     } else {
@@ -1127,33 +1123,57 @@ pub(crate) fn frontier_degree_batch(
     }
     let direct: Vec<usize> = offsets.windows(2).map(|pair| pair[1] - pair[0]).collect();
 
-    // Keep the portable path's dangling-neighbor visibility with one batched
-    // resolution, then record the same read keys when a recorder is active.
-    let external = ctx.external_ids_by_internal_batch(neighbor_label, &raw_endpoints, ts);
-    let recording = ctx.mutation_recorder().is_some();
+    // Proven dangling-free endpoints skip the external-identity resolution
+    // and the visibility filter entirely: inserts validate endpoints, the
+    // token rules out deletes since, and the read-only/TTL gates below keep
+    // write transactions and expiring tags on the checked path.
+    let skip_visibility = !ctx.space_has_vertex_ttl(space)
+        && !ctx.space_has_edge_ttl(space)
+        && ctx.allows_dangling_skip()
+        && ctx.is_edge_type_dangling_free(space, edge_type_name);
     let mut visible_offsets = Vec::with_capacity(src_ids.len() + 1);
     let mut endpoints = Vec::with_capacity(raw_endpoints.len());
-    for pair in offsets.windows(2) {
-        visible_offsets.push(endpoints.len());
-        for position in pair[0]..pair[1] {
-            if let Some(ext) = external[position] {
-                if recording {
-                    record_vertex_read(ctx, ext);
+    if skip_visibility {
+        endpoints.extend_from_slice(&raw_endpoints);
+        visible_offsets.extend_from_slice(&offsets);
+    } else {
+        // Keep the portable path's dangling-neighbor visibility with one
+        // batched resolution, then record the same read keys when a
+        // recorder is active.
+        let external = ctx.external_ids_by_internal_batch(neighbor_label, &raw_endpoints, ts);
+        let recording = ctx.mutation_recorder().is_some();
+        for pair in offsets.windows(2) {
+            visible_offsets.push(endpoints.len());
+            for position in pair[0]..pair[1] {
+                if let Some(ext) = external[position] {
+                    if recording {
+                        record_vertex_read(ctx, ext);
+                    }
+                    endpoints.push(raw_endpoints[position]);
                 }
-                endpoints.push(raw_endpoints[position]);
             }
         }
+        visible_offsets.push(endpoints.len());
     }
-    visible_offsets.push(endpoints.len());
-    let offsets = visible_offsets;
-    let degrees = if direction == EdgeDirection::Out {
-        ctx.count_out_nbrs_by_internal(edge_label, neighbor_label, &endpoints, ts)
+    // Read tail degrees in internal-endpoint order so scattered CSR head
+    // reads become sequential runs. The per-seed sums are order-independent,
+    // so the sorted reads scatter back into the seed-indexed totals.
+    let mut order: Vec<(u32, usize)> = Vec::with_capacity(endpoints.len());
+    for (seed_index, pair) in visible_offsets.windows(2).enumerate() {
+        for position in pair[0]..pair[1] {
+            order.push((endpoints[position], seed_index));
+        }
+    }
+    order.sort_unstable_by_key(|&(endpoint, _)| endpoint);
+    let sorted: Vec<u32> = order.iter().map(|&(endpoint, _)| endpoint).collect();
+    let sorted_degrees = if direction == EdgeDirection::Out {
+        ctx.count_out_nbrs_by_internal(edge_label, neighbor_label, &sorted, ts)
     } else {
-        ctx.count_in_nbrs_by_internal(edge_label, neighbor_label, &endpoints, ts)
+        ctx.count_in_nbrs_by_internal(edge_label, neighbor_label, &sorted, ts)
     };
-    let mut two_hop = Vec::with_capacity(src_ids.len());
-    for pair in offsets.windows(2) {
-        two_hop.push(degrees[pair[0]..pair[1]].iter().sum());
+    let mut two_hop = vec![0usize; src_ids.len()];
+    for ((_, seed_index), degree) in order.iter().zip(sorted_degrees.iter()) {
+        two_hop[*seed_index] += *degree;
     }
     Ok(FrontierDegrees { direct, two_hop })
 }

@@ -40,6 +40,107 @@ impl GraphStorageContext {
         self.operation_context.clone()
     }
 
+    /// Whether this context is a single auto-commit statement (or is
+    /// unbound). Dangling-free fast paths consult this instead of recorder
+    /// presence: auto-commit contexts carry a recorder unconditionally, but
+    /// a lone statement cannot certify against it the way an explicit
+    /// multi-statement transaction might.
+    pub(crate) fn allows_dangling_skip(&self) -> bool {
+        self.operation_context
+            .as_ref()
+            .map(|context| context.auto_commit)
+            .unwrap_or(true)
+    }
+
+    /// Mark edge types as dangling-unproven after an operation that can
+    /// leave incident edges behind (plain vertex delete). Cascade deletes
+    /// remove the incident edges first and never call this.
+    pub(crate) fn mark_edge_types_dangling(&self, space: &str, edge_types: &[String]) {
+        for edge_type in edge_types {
+            self.persistent
+                .dangling_unproven
+                .insert((space.to_string(), edge_type.clone()));
+        }
+    }
+
+    /// Mark a whole space dangling-free after a successful repair pass.
+    /// Also records the seed guard: the proof was established in this
+    /// process, so the lazy restart seeding must not re-dirty it later.
+    pub(crate) fn mark_space_dangling_free(&self, space: &str) {
+        let stale: Vec<(String, String)> = self
+            .persistent
+            .dangling_unproven
+            .iter()
+            .filter(|entry| entry.0 == space)
+            .map(|entry| entry.key().clone())
+            .collect();
+        for key in stale {
+            self.persistent.dangling_unproven.remove(&key);
+        }
+        self.persistent.dangling_seed_done.insert(space.to_string());
+    }
+
+    /// Whether any vertex tag in the space configures TTL expiry. Coarse
+    /// space-level gate for dangling-free fast paths: expired vertices are
+    /// filtered by timestamp-valid lookups, so those paths stay closed
+    /// while any tag can expire.
+    pub(crate) fn space_has_vertex_ttl(&self, space: &str) -> bool {
+        self.schema_manager()
+            .list_tags(space)
+            .map(|tags| tags.iter().any(|tag| tag.ttl_duration.is_some()))
+            .unwrap_or(true)
+    }
+
+    /// Whether any edge type in the space configures TTL expiry. Coarse
+    /// space-level gate, same contract as [`Self::space_has_vertex_ttl`].
+    /// Query entry points already refuse TTL shapes before reaching the
+    /// batched readers; this keeps the readers themselves sound.
+    pub(crate) fn space_has_edge_ttl(&self, space: &str) -> bool {
+        self.schema_manager()
+            .list_edge_types(space)
+            .map(|types| types.iter().any(|info| info.ttl_duration.is_some()))
+            .unwrap_or(true)
+    }
+
+    /// Record a space creation in this process so the lazy restart seeding
+    /// never mistakes it for pre-existing data with unknown history.
+    pub(crate) fn note_space_created(&self, space: &str) {
+        self.persistent.dangling_seed_done.insert(space.to_string());
+    }
+
+    /// Drop dangling-proof bookkeeping for a removed space.
+    pub(crate) fn forget_space_dangling(&self, space: &str) {
+        self.mark_space_dangling_free(space);
+        self.persistent.dangling_seed_done.remove(space);
+    }
+
+    /// Whether `(space, edge_type)` is proven to have no dangling endpoints.
+    ///
+    /// Inserts validate endpoints, so proof only needs the absence of
+    /// un-repaired plain vertex deletes. State is process-local: after a
+    /// restart every pre-existing edge type is seeded as unproven on first
+    /// check, and only a repair pass re-proves it.
+    pub(crate) fn is_edge_type_dangling_free(&self, space: &str, edge_type: &str) -> bool {
+        if self.persistent.dangling_seed_done.insert(space.to_string()) {
+            match self.schema_manager().list_edge_types(space) {
+                Ok(types) => {
+                    for info in &types {
+                        self.persistent
+                            .dangling_unproven
+                            .insert((space.to_string(), info.edge_type_name.clone()));
+                    }
+                }
+                // Unknown history must stay unproven; a schema read
+                // failure never grants the fast path.
+                Err(_) => return false,
+            }
+        }
+        !self
+            .persistent
+            .dangling_unproven
+            .contains(&(space.to_string(), edge_type.to_string()))
+    }
+
     pub fn mutation_recorder(
         &self,
     ) -> Option<Arc<dyn linkrs_transaction::TransactionMutationRecorder>> {

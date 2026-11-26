@@ -376,17 +376,89 @@ fn expand_packed_identity(
     if let Some(stats) = stats {
         stats.record_expand_topology_counts(seed_count as u64, far_ids.len() as u64);
     }
+    // Proven dangling-free destinations skip the existence re-read: inserts
+    // validate endpoints, the token rules out deletes since, and the gates
+    // below keep write transactions and expiring tags on the checked path.
+    let mut proven_present = reader.allows_dangling_skip()
+        && packed
+            .edge_type_ids
+            .iter()
+            .all(|&id| Some(id) == packed.edge_type_ids.first().copied());
+    if proven_present {
+        if let Some(edge_type_name) = packed
+            .edge_type_ids
+            .first()
+            .and_then(|&id| packed.edge_type_names.get(id as usize))
+            .map(|name| &**name)
+        {
+            let vertex_ttl = reader
+                .get_tag(space_name, dst_tag)
+                .map(|tag| tag.is_some_and(|info| info.ttl_duration.is_some()))
+                .unwrap_or(true);
+            let edge_ttl = reader
+                .list_edge_types(space_name)
+                .map(|types| {
+                    types.iter().any(|info| {
+                        info.edge_type_name.as_str() == edge_type_name
+                            && info.ttl_duration.is_some()
+                    })
+                })
+                .unwrap_or(true);
+            proven_present = !vertex_ttl
+                && !edge_ttl
+                && reader.edge_type_dangling_free(space_name, edge_type_name);
+        } else {
+            proven_present = false;
+        }
+    }
+    if std::env::var_os("LINKRS_DANGLING_DEBUG").is_some() {
+        eprintln!(
+            "dangling-skip gates: single_stmt={} single_type={} vertex_ttl_checked={} edge_ttl_checked={} token={} unique={}",
+            reader.allows_dangling_skip(),
+            packed
+                .edge_type_ids
+                .iter()
+                .all(|&id| Some(id) == packed.edge_type_ids.first().copied()),
+            reader
+                .get_tag(space_name, dst_tag)
+                .map(|tag| tag.is_some_and(|info| info.ttl_duration.is_some()))
+                .unwrap_or(true),
+            packed
+                .edge_type_ids
+                .first()
+                .and_then(|&id| packed.edge_type_names.get(id as usize))
+                .map(|name| reader.list_edge_types(space_name).map(|types| types.iter().any(
+                    |info| info.edge_type_name.as_str() == &**name && info.ttl_duration.is_some()
+                )).unwrap_or(true))
+                .unwrap_or(true),
+            packed
+                .edge_type_ids
+                .first()
+                .and_then(|&id| packed.edge_type_names.get(id as usize))
+                .map(|name| reader.edge_type_dangling_free(space_name, &**name))
+                .unwrap_or(false),
+            unique.len(),
+        );
+    }
     let read_started = std::time::Instant::now();
-    let presence = reader.get_vertex_property_columns_with_handles_batch(
-        space_name,
-        dst_tag,
-        &unique,
-        &[],
-        &handles,
-    )?;
-    let read_us = read_started.elapsed().as_micros() as u64;
-    let present: Vec<bool> = presence.iter().map(Option::is_some).collect();
-    let missing = present.iter().filter(|found| !**found).count();
+    let (present, missing, read_us) = if proven_present {
+        if let Some(stats) = stats {
+            stats.record_dangling_exist_skip();
+        }
+        (vec![true; unique.len()], 0, 0)
+    } else {
+        let presence = reader.get_vertex_property_columns_with_handles_batch(
+            space_name,
+            dst_tag,
+            &unique,
+            &[],
+            &handles,
+        )?;
+        let read_us = read_started.elapsed().as_micros() as u64;
+        let present: Vec<bool> = presence.iter().map(Option::is_some).collect();
+        let missing = present.iter().filter(|found| !**found).count();
+        (present, missing, read_us)
+    };
 
     let view_started = std::time::Instant::now();
     let mut out_keys = Vec::with_capacity(unique.len());

@@ -78,7 +78,7 @@ impl Default for ParallelConfig {
             allow_pure_count_chain: false,
             allow_global_aggregate: false,
             allow_ordered_parallel_expand: true,
-            allow_parallel_count_frontier: false,
+            allow_parallel_count_frontier: true,
         }
     }
 }
@@ -133,7 +133,7 @@ mod tests {
         assert!(config.allow_ordered_parallel_expand);
         assert!(!config.allow_pure_count_chain);
         assert!(!config.allow_global_aggregate);
-        assert!(!config.allow_parallel_count_frontier);
+        assert!(config.allow_parallel_count_frontier);
     }
 
     #[test]

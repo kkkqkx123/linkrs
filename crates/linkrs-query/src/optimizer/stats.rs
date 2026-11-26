@@ -12,6 +12,7 @@
 //! “Feedback” – A module for collecting runtime statistics and feedback.
 
 pub mod collector;
+pub mod degree_sketch;
 pub mod edge;
 pub mod feedback;
 pub mod histogram;
@@ -22,6 +23,7 @@ pub mod view;
 
 // Re-export the main types from the feedback module.
 pub use collector::{CollectedSummary, StatisticsCollector};
+pub use degree_sketch::{split_weighted_ranges, DegreeSketchSample};
 pub use edge::{EdgeTypeStatistics, HotVertexInfo, SkewnessLevel};
 pub use feedback::{
     generate_query_fingerprint, normalize_query, CardinalityFeedbackManager, DecisionFeedbackStore,

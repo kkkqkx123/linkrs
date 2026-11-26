@@ -137,7 +137,12 @@ pub(crate) fn create_space(
         },
     )?;
 
-    ctx.schema_manager().create_space(space)
+    ctx.schema_manager().create_space(space)?;
+    // A freshly created space holds no edges, so it is vacuously
+    // dangling-free. Pre-mark the seed so the lazy restart seeding never
+    // mistakes it for pre-existing data with unknown history.
+    ctx.note_space_created(&space.space_name);
+    Ok(true)
 }
 
 pub(crate) fn drop_space(ctx: &GraphStorageContext, space: &str) -> StorageResult<bool> {
@@ -168,6 +173,7 @@ pub(crate) fn drop_space(ctx: &GraphStorageContext, space: &str) -> StorageResul
     super::index_manager::drop_space_indexes_cascade(ctx, space)?;
     ctx.schema_manager().drop_space(space)?;
     ctx.serial_allocator().clear_space(space_id);
+    ctx.forget_space_dangling(space);
     Ok(true)
 }
 
