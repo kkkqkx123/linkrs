@@ -319,6 +319,16 @@ fn identity_key_value(vid: VertexId, data_type: &linkrs_core::DataType) -> Optio
     }
 }
 
+/// Project a natively resolved integer key onto the declared primary-key type.
+fn identity_i64_value(id: i64, data_type: &linkrs_core::DataType) -> Option<Value> {
+    match data_type {
+        linkrs_core::DataType::BigInt => Some(Value::BigInt(id)),
+        linkrs_core::DataType::Int => i32::try_from(id).ok().map(Value::Int),
+        linkrs_core::DataType::SmallInt => i16::try_from(id).ok().map(Value::SmallInt),
+        _ => None,
+    }
+}
+
 /// Whether destination existence may be skipped for a proven identity hop.
 ///
 /// The proof covers one edge type, no vertex or edge TTL, and a storage
@@ -401,14 +411,6 @@ fn expand_handle_counts_identity(
     let resolve_started = std::time::Instant::now();
     let handle_options: Vec<Option<(u32, LabelId)>> =
         unique_handles.iter().copied().map(Some).collect();
-    let Some(resolved) =
-        reader.vertex_ids_by_handles_batch(space_name, dst_tag, &handle_options)?
-    else {
-        return Ok(None);
-    };
-    if resolved.len() != unique_handles.len() || resolved.iter().any(Option::is_none) {
-        return Ok(None);
-    }
     // Collapse by public identity as well, so a duplicated external key
     // keeps the same multiplicity as the external-id dedup path. A handle
     // set with mixed labels cannot prove that equivalence.
@@ -418,38 +420,105 @@ fn expand_handle_counts_identity(
     {
         return Ok(None);
     }
-    let mut unique: Vec<VertexId> = Vec::with_capacity(resolved.len());
-    let mut merged_weights: Vec<u64> = Vec::with_capacity(resolved.len());
-    let mut id_slots: std::collections::HashMap<VertexId, usize> = std::collections::HashMap::new();
-    for (external, weight) in resolved.into_iter().zip(weights) {
-        let Some(external) = external else {
+    let native_ints = if matches!(
+        identity_type,
+        linkrs_core::DataType::BigInt
+            | linkrs_core::DataType::Int
+            | linkrs_core::DataType::SmallInt
+    ) {
+        reader.external_i64_ids_by_handles_batch(space_name, dst_tag, &handle_options)?
+    } else {
+        None
+    };
+    let mut unique: Vec<VertexId> = Vec::new();
+    let keys: Vec<Value>;
+    let mut merged_weights: Vec<u64> = Vec::with_capacity(weights.len());
+    if let Some(resolved_ints) = native_ints {
+        if resolved_ints.len() != unique_handles.len()
+            || resolved_ints.iter().any(Option::is_none)
+        {
+            return Ok(None);
+        }
+        let mut unique_ints: Vec<i64> = Vec::with_capacity(resolved_ints.len());
+        let mut id_slots: std::collections::HashMap<i64, usize> =
+            std::collections::HashMap::with_capacity(resolved_ints.len());
+        for (external, weight) in resolved_ints.into_iter().zip(weights) {
+            let Some(external) = external else {
+                return Ok(None);
+            };
+            let slot = match id_slots.entry(external) {
+                std::collections::hash_map::Entry::Occupied(entry) => *entry.get(),
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    let slot = unique_ints.len();
+                    entry.insert(slot);
+                    unique_ints.push(external);
+                    merged_weights.push(0);
+                    slot
+                }
+            };
+            merged_weights[slot] += weight;
+        }
+        let Some(int_keys) = unique_ints
+            .iter()
+            .map(|id| identity_i64_value(*id, identity_type))
+            .collect::<Option<Vec<Value>>>()
+        else {
             return Ok(None);
         };
-        let slot = match id_slots.get(&external) {
-            Some(&slot) => slot,
-            None => {
-                let slot = unique.len();
-                id_slots.insert(external, slot);
-                unique.push(external);
-                merged_weights.push(0);
-                slot
-            }
+        keys = int_keys;
+        if !presence_proven {
+            let Some(ids) = unique_ints
+                .iter()
+                .map(|id| VertexId::try_from_int64(*id).ok())
+                .collect::<Option<Vec<VertexId>>>()
+            else {
+                return Ok(None);
+            };
+            unique = ids;
+        }
+    } else {
+        let Some(resolved) =
+            reader.vertex_ids_by_handles_batch(space_name, dst_tag, &handle_options)?
+        else {
+            return Ok(None);
         };
-        merged_weights[slot] += weight;
+        if resolved.len() != unique_handles.len() || resolved.iter().any(Option::is_none) {
+            return Ok(None);
+        }
+        let mut id_slots: std::collections::HashMap<VertexId, usize> =
+            std::collections::HashMap::with_capacity(resolved.len());
+        for (external, weight) in resolved.into_iter().zip(weights) {
+            let Some(external) = external else {
+                return Ok(None);
+            };
+            let slot = match id_slots.entry(external) {
+                std::collections::hash_map::Entry::Occupied(entry) => *entry.get(),
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    let slot = unique.len();
+                    entry.insert(slot);
+                    unique.push(external);
+                    merged_weights.push(0);
+                    slot
+                }
+            };
+            merged_weights[slot] += weight;
+        }
+        let Some(key_values) = unique
+            .iter()
+            .map(|id| identity_key_value(*id, identity_type))
+            .collect::<Option<Vec<Value>>>()
+        else {
+            return Ok(None);
+        };
+        keys = key_values;
     }
-    let Some(keys) = unique
-        .iter()
-        .map(|id| identity_key_value(*id, identity_type))
-        .collect::<Option<Vec<Value>>>()
-    else {
-        return Ok(None);
-    };
 
+    let unique_count = merged_weights.len();
     let (present, missing, presence_us) = if presence_proven {
         if let Some(stats) = stats {
             stats.record_dangling_exist_skip();
         }
-        (vec![true; unique.len()], 0, 0)
+        (vec![true; unique_count], 0, 0)
     } else {
         let presence_started = std::time::Instant::now();
         let presence = reader.get_vertex_property_columns_with_handles_batch(
@@ -470,7 +539,7 @@ fn expand_handle_counts_identity(
     let key_resolve_us = resolve_started.elapsed().as_micros() as u64;
 
     let weight_started = std::time::Instant::now();
-    let mut out_keys = Vec::with_capacity(unique.len());
+    let mut out_keys = Vec::with_capacity(unique_count);
     let mut non_uniform_weight = false;
     for (index, found) in present.iter().enumerate() {
         if *found {
@@ -493,7 +562,7 @@ fn expand_handle_counts_identity(
         stats.record_handle_phases(traverse_us, key_resolve_us + presence_us, weight_us);
         stats.record_expand_read_us(key_resolve_us + presence_us);
         stats.record_expand_phases(0, presence_us, 0, weight_us, 0);
-        stats.record_expand_destination_counts(unique.len() as u64, missing as u64);
+        stats.record_expand_destination_counts(unique_count as u64, missing as u64);
         stats.record_expand_output_rows(out_keys.len() as u64);
     }
     if out_keys.is_empty() {
@@ -757,6 +826,7 @@ pub(super) fn expand_single_step_columnar(
                 if let Some(stats) = &stats {
                     stats.record_expand_guard_us(guard_started.elapsed().as_micros() as u64);
                 }
+                let binding = ctx.handle_count_binding(reader, topology_schema.as_ref());
                 let read_started = std::time::Instant::now();
                 let counts = reader.get_packed_handle_counts_batch(
                     space_name,
@@ -765,6 +835,7 @@ pub(super) fn expand_single_step_columnar(
                     direction,
                     edge_types,
                     topology_schema.as_ref(),
+                    binding.as_deref(),
                 );
                 let read_us = read_started.elapsed().as_micros() as u64;
                 if let Some(stats) = &stats {

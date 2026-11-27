@@ -5,15 +5,19 @@ use std::sync::Arc;
 use crate::client::traits_reader::TopologyTypeSchema;
 use crate::edge::CsrBase;
 use crate::edge::EdgeRecord;
+use crate::edge::EdgeStore;
 use crate::engine::graph_storage::context::GraphStorageContext;
 use crate::engine::graph_storage::ops::{
     edge_record_to_edge, edge_record_to_edge_projected, endpoint_label_id, serialize_properties,
 };
 use crate::engine::params::EdgeOperationParams;
 use crate::EdgeTopology;
-use crate::{FrontierDegrees, PackedEdgeTopology, PackedHandleCounts, TopologySchema};
+use crate::{
+    FrontierDegrees, HandleCountBinding, PackedEdgeTopology, PackedHandleCounts, TopologySchema,
+};
 use linkrs_core::types::{EdgeTypeInfo, LabelId, Timestamp, VertexId};
 use linkrs_core::{Edge, EdgeDirection, StorageError, StorageResult, Value};
+use parking_lot::RwLock;
 
 use crate::engine::graph_storage::reader::ttl_filter::edge_is_expired;
 use crate::engine::graph_storage::reader::utils::*;
@@ -677,25 +681,30 @@ pub(crate) fn vertex_ids_by_handles_batch(
     Ok(Some(out))
 }
 
-/// Handle-level adjacency counts for the packed group-count path.
-///
-/// Only one edge type, one direction and one far label are served. The
-/// count is per visible CSR edge, aggregated by internal far endpoint, so
-/// no external endpoint id, rank or edge-type id is constructed.
-pub(crate) fn packed_handle_counts_batch(
+enum HandleCountArcs<'a> {
+    Borrowed(&'a [Arc<RwLock<EdgeStore>>]),
+    Owned(Vec<Arc<RwLock<EdgeStore>>>),
+}
+
+impl AsRef<[Arc<RwLock<EdgeStore>>]> for HandleCountArcs<'_> {
+    fn as_ref(&self) -> &[Arc<RwLock<EdgeStore>>] {
+        match self {
+            Self::Borrowed(arcs) => arcs,
+            Self::Owned(arcs) => arcs.as_slice(),
+        }
+    }
+}
+
+fn resolve_handle_count_shape(
     ctx: &GraphStorageContext,
     space: &str,
-    parents: &[VertexId],
-    handles: Option<&[Option<(u32, LabelId)>]>,
     direction: EdgeDirection,
     edge_types: &[String],
     schema: &TopologySchema,
-) -> StorageResult<Option<PackedHandleCounts>> {
-    if matches!(direction, EdgeDirection::Both) || handles.is_some_and(|h| h.len() != parents.len())
-    {
+) -> StorageResult<Option<(TopologyTypeSchema, LabelId, LabelId, bool, Timestamp)>> {
+    if matches!(direction, EdgeDirection::Both) {
         return Ok(None);
     }
-    let setup_started = std::time::Instant::now();
     let owned_schema = if schema.matches(space, ctx.layout_version()) {
         None
     } else {
@@ -714,11 +723,87 @@ pub(crate) fn packed_handle_counts_batch(
     if far_label == 0 {
         return Ok(None);
     }
+    Ok(Some((
+        entry.clone(),
+        near_label,
+        far_label,
+        outward,
+        ctx.get_read_timestamp(),
+    )))
+}
 
+/// Prepare the fixed-snapshot table handles for one partition's reads.
+pub(crate) fn prepare_handle_count_binding(
+    ctx: &GraphStorageContext,
+    space: &str,
+    direction: EdgeDirection,
+    edge_types: &[String],
+    schema: &TopologySchema,
+) -> StorageResult<Option<HandleCountBinding>> {
+    let Some((entry, near_label, far_label, outward, ts)) =
+        resolve_handle_count_shape(ctx, space, direction, edge_types, schema)?
+    else {
+        return Ok(None);
+    };
     record_schema_read(ctx, space);
-    let ts = ctx.get_read_timestamp();
-    let recorded_external = ctx.mutation_recorder().is_some().then(|| {
-        handles
+    Ok(Some(HandleCountBinding {
+        space: space.to_string(),
+        ts,
+        edge_label: entry.edge_label,
+        near_label,
+        far_label,
+        outward,
+        arcs: ctx.handle_count_arcs(entry.edge_label, near_label, outward),
+    }))
+}
+
+/// Handle-level adjacency counts for the packed group-count path.
+///
+/// Only one edge type, one direction and one far label are served. The
+/// count is per visible CSR edge, aggregated by internal far endpoint, so
+/// no external endpoint id, rank or edge-type id is constructed.
+pub(crate) fn packed_handle_counts_batch(
+    ctx: &GraphStorageContext,
+    space: &str,
+    parents: &[VertexId],
+    handles: Option<&[Option<(u32, LabelId)>]>,
+    direction: EdgeDirection,
+    edge_types: &[String],
+    schema: &TopologySchema,
+    binding: Option<&HandleCountBinding>,
+) -> StorageResult<Option<PackedHandleCounts>> {
+    if matches!(direction, EdgeDirection::Both) || handles.is_some_and(|h| h.len() != parents.len())
+    {
+        return Ok(None);
+    }
+    let setup_started = std::time::Instant::now();
+    let (near_label, far_label, outward, ts, arcs) = if let Some(binding) = binding {
+        if binding.space != space || binding.outward != (direction == EdgeDirection::Out) {
+            return Ok(None);
+        }
+        (
+            binding.near_label,
+            binding.far_label,
+            binding.outward,
+            binding.ts,
+            HandleCountArcs::Borrowed(&binding.arcs),
+        )
+    } else {
+        let Some((entry, near_label, far_label, outward, ts)) =
+            resolve_handle_count_shape(ctx, space, direction, edge_types, schema)?
+        else {
+            return Ok(None);
+        };
+        record_schema_read(ctx, space);
+        let arcs = ctx.handle_count_arcs(entry.edge_label, near_label, outward);
+        (near_label, far_label, outward, ts, HandleCountArcs::Owned(arcs))
+    };
+
+    if ctx
+        .mutation_recorder()
+        .is_some_and(|recorder| recorder.records_reads())
+    {
+        let recorded_external = handles
             .filter(|h| h.len() == parents.len() && h.iter().all(Option::is_some))
             .map(|h| {
                 h.iter()
@@ -728,29 +813,29 @@ pub(crate) fn packed_handle_counts_batch(
                     })
                     .collect::<Vec<_>>()
             })
-            .filter(|ids| ids.len() == parents.len())
-    });
-    match recorded_external {
-        Some(Some(ids)) => {
-            let external = ctx.external_ids_by_internal_batch(near_label, &ids, ts);
-            record_vertex_reads(ctx, &external.into_iter().flatten().collect::<Vec<_>>());
+            .filter(|ids| ids.len() == parents.len());
+        match recorded_external {
+            Some(ids) => {
+                let external = ctx.external_ids_by_internal_batch(near_label, &ids, ts);
+                record_vertex_reads(ctx, &external.into_iter().flatten().collect::<Vec<_>>());
+            }
+            None => record_vertex_reads(ctx, parents),
         }
-        _ => record_vertex_reads(ctx, parents),
     }
-    let mut staged: Vec<u64> = Vec::with_capacity(parents.len().saturating_mul(16));
+    let mut staged: Vec<u32> = Vec::with_capacity(parents.len().saturating_mul(16));
     let mut foreign_label = false;
-    let mut aggregate = |_index: usize, label: LabelId, hot: crate::edge::HotNbr| {
+    let mut aggregate = |label: LabelId, hot: crate::edge::HotNbr| {
         if label != far_label {
             foreign_label = true;
             return;
         }
-        staged.push(((label as u64) << 32) | hot.endpoint as u64);
+        staged.push(hot.endpoint);
     };
     let visit_started = std::time::Instant::now();
     let setup_us = visit_started.duration_since(setup_started).as_micros() as u64;
     if outward {
         ctx.visit_out_nbrs_by_internal(
-            entry.edge_label,
+            arcs.as_ref(),
             near_label,
             parents,
             handles,
@@ -759,7 +844,7 @@ pub(crate) fn packed_handle_counts_batch(
         );
     } else {
         ctx.visit_in_nbrs_by_internal(
-            entry.edge_label,
+            arcs.as_ref(),
             near_label,
             parents,
             handles,
@@ -778,8 +863,8 @@ pub(crate) fn packed_handle_counts_batch(
         parents: parents.to_vec(),
         ..PackedHandleCounts::default()
     };
-    // Sorting the packed handle keys makes equal handles adjacent, so the
-    // count array is built by one run-length pass without a hash table.
+    // The far label is fixed by the shape proof, so sorting internal
+    // endpoints is equivalent to sorting full handle keys.
     staged.sort_unstable();
     let mut previous = None;
     for key in staged {
@@ -788,7 +873,7 @@ pub(crate) fn packed_handle_counts_batch(
             result.counts[last] += 1;
             continue;
         }
-        result.handles.push((key as u32, (key >> 32) as u32));
+        result.handles.push((key, far_label));
         result.counts.push(1);
         previous = Some(key);
     }

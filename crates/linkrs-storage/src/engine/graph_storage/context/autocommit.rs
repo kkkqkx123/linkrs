@@ -185,6 +185,10 @@ impl std::fmt::Debug for AutoCommitMutationRecorder {
 }
 
 impl linkrs_transaction::TransactionMutationRecorder for AutoCommitMutationRecorder {
+    fn records_reads(&self) -> bool {
+        false
+    }
+
     fn record_mutation(&self, mutation: MutationResult) -> Result<(), TransactionError> {
         for entity_key in mutation.entity_keys {
             match entity_key {

@@ -702,6 +702,7 @@ fn packed_handle_counts_match_topology_multiplicity() {
             EdgeDirection::Out,
             &edge_types,
             &schema,
+            None,
         )
         .expect("handle counts")
         .expect("native handle counts");
@@ -727,6 +728,43 @@ fn packed_handle_counts_match_topology_multiplicity() {
         .collect();
     actual.sort_unstable();
     assert_eq!(actual, vec![(2, 2), (3, 1)]);
+
+    let handles = counts
+        .handles
+        .iter()
+        .copied()
+        .map(Some)
+        .collect::<Vec<_>>();
+    let int_ids = storage
+        .external_i64_ids_by_handles_batch("test_space", "Person", &handles)
+        .expect("integer handle resolution")
+        .expect("native integer handle resolution");
+    let mut actual_ints = int_ids
+        .into_iter()
+        .zip(&counts.counts)
+        .filter_map(|(id, count)| id.map(|id| (id, *count)))
+        .collect::<Vec<_>>();
+    actual_ints.sort_unstable();
+    assert_eq!(actual_ints, vec![(2, 2), (3, 1)]);
+
+    let binding = storage
+        .prepare_handle_count_binding("test_space", EdgeDirection::Out, &edge_types, &schema)
+        .expect("binding")
+        .expect("native binding");
+    let bound_counts = storage
+        .get_packed_handle_counts_batch(
+            "test_space",
+            &parents,
+            None,
+            EdgeDirection::Out,
+            &edge_types,
+            &schema,
+            Some(&binding),
+        )
+        .expect("bound handle counts")
+        .expect("native bound handle counts");
+    assert_eq!(bound_counts.handles, counts.handles);
+    assert_eq!(bound_counts.counts, counts.counts);
 
     let packed = storage
         .get_packed_node_edge_headers_batch(
@@ -754,6 +792,7 @@ fn packed_handle_counts_match_topology_multiplicity() {
             EdgeDirection::Out,
             &edge_types,
             &schema,
+            None,
         )
         .expect("empty handle counts")
         .expect("native handle counts");
@@ -778,6 +817,7 @@ fn packed_handle_counts_match_topology_multiplicity() {
             EdgeDirection::Out,
             &[],
             &multi_schema,
+            None,
         )
         .expect("multi-type handle counts")
         .is_none());

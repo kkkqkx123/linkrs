@@ -4,7 +4,7 @@ use linkrs_core::types::{EdgeTypeInfo, Index, LabelId, SpaceInfo, TagInfo, Verte
 use linkrs_core::{Edge, EdgeDirection, StorageError, Value, Vertex};
 
 use crate::cursor::{EdgeCursor, IndexCursor, IndexRow, IndexScanPlan, ScanOptions, VertexCursor};
-use crate::StorageReader;
+use crate::{HandleCountBinding, StorageReader};
 
 use super::GraphStorage;
 use super::{cursor_impl, index_manager, reader};
@@ -234,6 +234,16 @@ impl StorageReader for GraphStorage {
         )
     }
 
+    fn prepare_handle_count_binding(
+        &self,
+        space: &str,
+        direction: EdgeDirection,
+        edge_types: &[String],
+        schema: &crate::TopologySchema,
+    ) -> Result<Option<HandleCountBinding>, StorageError> {
+        reader::prepare_handle_count_binding(&self.ctx, space, direction, edge_types, schema)
+    }
+
     fn get_packed_handle_counts_batch(
         &self,
         space: &str,
@@ -242,9 +252,17 @@ impl StorageReader for GraphStorage {
         direction: linkrs_core::EdgeDirection,
         edge_types: &[String],
         schema: &crate::TopologySchema,
+        binding: Option<&HandleCountBinding>,
     ) -> Result<Option<crate::PackedHandleCounts>, StorageError> {
         reader::packed_handle_counts_batch(
-            &self.ctx, space, parents, handles, direction, edge_types, schema,
+            &self.ctx,
+            space,
+            parents,
+            handles,
+            direction,
+            edge_types,
+            schema,
+            binding,
         )
     }
 
@@ -255,6 +273,18 @@ impl StorageReader for GraphStorage {
         handles: &[Option<(u32, LabelId)>],
     ) -> Result<Option<Vec<Option<VertexId>>>, StorageError> {
         reader::vertex_ids_by_handles_batch(&self.ctx, handles, self.ctx.get_read_timestamp())
+    }
+
+    fn external_i64_ids_by_handles_batch(
+        &self,
+        _space: &str,
+        _tag: &str,
+        handles: &[Option<(u32, LabelId)>],
+    ) -> Result<Option<Vec<Option<i64>>>, StorageError> {
+        Ok(self.ctx.external_i64_ids_by_internal_handles(
+            handles,
+            self.ctx.get_read_timestamp(),
+        ))
     }
 
     fn get_vertices_batch(

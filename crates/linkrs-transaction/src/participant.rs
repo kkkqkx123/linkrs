@@ -83,6 +83,12 @@ pub trait TransactionMutationRecorder: Send + Sync + std::fmt::Debug {
 
     fn record_index_write(&self, _resource: &str) {}
 
+    /// Whether reads must be added to the recorder's read set. No-op
+    /// recorders return false so hot readers can skip identity decoding.
+    fn records_reads(&self) -> bool {
+        true
+    }
+
     fn record_vertex_read(&self, _vertex_id: VertexId) {}
 
     /// Batch form of [`Self::record_vertex_read`]: one call for a whole

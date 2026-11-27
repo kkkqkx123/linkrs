@@ -5,7 +5,9 @@ use linkrs_core::{StorageError, StorageResult};
 
 pub(crate) fn record_vertex_read(ctx: &GraphStorageContext, vid: VertexId) {
     if let Some(recorder) = ctx.mutation_recorder() {
-        recorder.record_vertex_read(vid);
+        if recorder.records_reads() {
+            recorder.record_vertex_read(vid);
+        }
     }
 }
 
@@ -16,7 +18,9 @@ pub(crate) fn record_vertex_read(ctx: &GraphStorageContext, vid: VertexId) {
 /// reuse one read-set guard for all insertions.
 pub(crate) fn record_vertex_reads(ctx: &GraphStorageContext, vids: &[VertexId]) {
     if let Some(recorder) = ctx.mutation_recorder() {
-        recorder.record_vertex_reads(vids);
+        if recorder.records_reads() {
+            recorder.record_vertex_reads(vids);
+        }
     }
 }
 
@@ -25,13 +29,17 @@ pub(crate) fn record_edge_read(
     edge: linkrs_core::types::EdgeIdentifier,
 ) {
     if let Some(recorder) = ctx.mutation_recorder() {
-        recorder.record_edge_read(edge);
+        if recorder.records_reads() {
+            recorder.record_edge_read(edge);
+        }
     }
 }
 
 pub(crate) fn record_schema_read(ctx: &GraphStorageContext, space: &str) {
     if let Some(recorder) = ctx.mutation_recorder() {
-        recorder.record_schema_read(space);
+        if recorder.records_reads() {
+            recorder.record_schema_read(space);
+        }
     }
 }
 

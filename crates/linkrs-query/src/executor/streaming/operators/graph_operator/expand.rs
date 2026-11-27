@@ -61,6 +61,7 @@ pub(super) fn handle(
         packed_key_name: None,
         packed_identity_type: None,
         topology_schema: None,
+        handle_count_binding: None,
         runtime: count_runtime.clone(),
     };
     while let Some(chunk) = input.advance()? {
@@ -190,6 +191,30 @@ pub(super) fn handle_all(
     // One storage read guard serves the whole fragment (same rationale as
     // `handle` above): per-chunk acquisition only adds lock-word contention.
     let reader_guard = storage.as_ref().map(|storage_lock| storage_lock.read());
+    let mut ctx = ExpandCtx {
+        space_name,
+        dst_tag,
+        edge_types,
+        direction,
+        filter_expr,
+        col_names_template: col_names.clone(),
+        cancel_token: cancel_token.clone(),
+        path_semantic: path_semantic.clone(),
+        edge_required_props: edge_required_props.clone(),
+        dst_required_props: dst_required_props.clone(),
+        closed_loop,
+        skip_rows,
+        emit_raw_ids,
+        lightweight_source,
+        include_empty_paths,
+        ttl_active: None,
+        dst_tag_cache: None,
+        packed_key_name: packed_key_name.clone(),
+        packed_identity_type: packed_identity_type.clone(),
+        topology_schema: None,
+        handle_count_binding: None,
+        runtime: count_runtime.clone(),
+    };
     while let Some(chunk) = input.advance()? {
         if let Some(reader) = reader_guard.as_deref() {
             // The degree-batch count path ignores per-path repeat rules,
@@ -215,29 +240,7 @@ pub(super) fn handle_all(
                     reader,
                     src_vids.clone(),
                     step_limits.as_deref(),
-                    &mut ExpandCtx {
-                        space_name,
-                        dst_tag,
-                        edge_types,
-                        direction,
-                        filter_expr,
-                        col_names_template: col_names.clone(),
-                        cancel_token: cancel_token.clone(),
-                        path_semantic: path_semantic.clone(),
-                        edge_required_props: edge_required_props.clone(),
-                        dst_required_props: dst_required_props.clone(),
-                        closed_loop,
-                        skip_rows,
-                        emit_raw_ids,
-                        lightweight_source,
-                        include_empty_paths,
-                        ttl_active: None,
-                        dst_tag_cache: None,
-                        packed_key_name: packed_key_name.clone(),
-                        packed_identity_type: packed_identity_type.clone(),
-                        topology_schema: None,
-                        runtime: count_runtime.clone(),
-                    },
+                    &mut ctx,
                 )?;
                 if count > 0 {
                     let out_row = vec![Value::BigInt(count)];
@@ -249,29 +252,6 @@ pub(super) fn handle_all(
                 continue;
             }
 
-            let mut ctx = ExpandCtx {
-                space_name,
-                dst_tag,
-                edge_types,
-                direction,
-                filter_expr,
-                col_names_template: col_names.clone(),
-                cancel_token: cancel_token.clone(),
-                path_semantic: path_semantic.clone(),
-                edge_required_props: edge_required_props.clone(),
-                dst_required_props: dst_required_props.clone(),
-                closed_loop,
-                skip_rows,
-                emit_raw_ids,
-                lightweight_source,
-                include_empty_paths,
-                ttl_active: None,
-                dst_tag_cache: None,
-                packed_key_name: packed_key_name.clone(),
-                packed_identity_type: packed_identity_type.clone(),
-                topology_schema: None,
-                runtime: count_runtime.clone(),
-            };
             let step_started = std::time::Instant::now();
             let expand_result = if let Some(limits) = step_limits.clone() {
                 let var_eligible = !limits.is_empty()

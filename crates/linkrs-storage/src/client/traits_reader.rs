@@ -3,9 +3,13 @@
 use crate::cursor::{
     EdgeCursor, IndexCursor, IndexRow, IndexScanPlan, OrderedIndexProof, ScanOptions, VertexCursor,
 };
+use crate::edge::EdgeStore;
 use crate::schema::{LabelVersionHistory, PropertyChange};
-use linkrs_core::types::{DataType, EdgeTypeInfo, Index, LabelId, SpaceInfo, TagInfo, VertexId};
+use linkrs_core::types::{
+    DataType, EdgeTypeInfo, Index, LabelId, SpaceInfo, TagInfo, Timestamp, VertexId,
+};
 use linkrs_core::{Edge, EdgeDirection, StorageError, Value, Vertex};
+use parking_lot::RwLock;
 use std::sync::Arc;
 
 /// Topology-only edge identity returned by the batched adjacency reader.
@@ -160,6 +164,22 @@ impl PackedEdgeTopology {
         }
         batches
     }
+}
+
+/// Fixed-snapshot read state for one partition's handle-count topology reads.
+///
+/// The edge-table handles are pinned for the operator instance, while each
+/// read still takes its own table lock and applies the read timestamp and
+/// pending gate.
+#[derive(Clone)]
+pub struct HandleCountBinding {
+    pub(crate) space: String,
+    pub(crate) ts: Timestamp,
+    pub(crate) edge_label: LabelId,
+    pub(crate) near_label: LabelId,
+    pub(crate) far_label: LabelId,
+    pub(crate) outward: bool,
+    pub(crate) arcs: Vec<Arc<RwLock<EdgeStore>>>,
 }
 
 /// Handle-level edge counts for one seed batch.
@@ -489,6 +509,19 @@ pub trait StorageReader: Send + Sync + std::fmt::Debug {
         Ok(packed)
     }
 
+    /// Prepare the fixed-snapshot table handles for one partition's
+    /// handle-count reads. `None` means the shape is not served natively.
+    fn prepare_handle_count_binding(
+        &self,
+        space: &str,
+        direction: EdgeDirection,
+        edge_types: &[String],
+        _schema: &TopologySchema,
+    ) -> Result<Option<HandleCountBinding>, StorageError> {
+        let _ = (space, direction, edge_types);
+        Ok(None)
+    }
+
     /// Handle-level adjacency counts for a count-only packed expand.
     ///
     /// The native engine groups visible CSR neighbors by internal far
@@ -503,6 +536,7 @@ pub trait StorageReader: Send + Sync + std::fmt::Debug {
         direction: EdgeDirection,
         edge_types: &[String],
         _schema: &TopologySchema,
+        _binding: Option<&HandleCountBinding>,
     ) -> Result<Option<PackedHandleCounts>, StorageError> {
         let _ = (space, parents, handles, direction, edge_types);
         Ok(None)
@@ -520,6 +554,19 @@ pub trait StorageReader: Send + Sync + std::fmt::Debug {
         handles: &[Option<(u32, LabelId)>],
     ) -> Result<Option<Vec<Option<VertexId>>>, StorageError> {
         let _ = (space, tag, handles);
+        Ok(None)
+    }
+
+    /// Resolve integer external ids from topology-carried internal handles.
+    /// Declines on mixed labels, non-integer keys or readers without a
+    /// native handle index.
+    fn external_i64_ids_by_handles_batch(
+        &self,
+        space: &str,
+        _tag: &str,
+        handles: &[Option<(u32, LabelId)>],
+    ) -> Result<Option<Vec<Option<i64>>>, StorageError> {
+        let _ = (space, handles);
         Ok(None)
     }
 

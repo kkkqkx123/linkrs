@@ -326,6 +326,7 @@ fn main() {
                         EdgeDirection::Out,
                         &edge_types,
                         &schema_filtered,
+                        None,
                     )
                     .expect("handle-count read")
                     .expect("native handle counts")
@@ -338,6 +339,7 @@ fn main() {
                     EdgeDirection::Out,
                     &edge_types,
                     &schema_filtered,
+                    None,
                 )
                 .expect("handle-count read")
                 .expect("native handle counts");
@@ -361,6 +363,7 @@ fn main() {
                         EdgeDirection::Out,
                         &edge_types,
                         &schema_filtered,
+                        None,
                     )
                     .expect("handle-count read")
                     .expect("native handle counts");

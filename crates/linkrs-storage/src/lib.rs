@@ -34,7 +34,7 @@ mod threshold_registry;
 pub use batch_ops::AutoCommitBatchOps;
 pub use batch_ops::AutoCommitGroupOps;
 pub use client::{
-    CatalogStore, EdgeTopology, FrontierDegrees, GraphStore, PackedEdgeTopology,
+    CatalogStore, EdgeTopology, FrontierDegrees, GraphStore, HandleCountBinding, PackedEdgeTopology,
     PackedHandleCounts, PurgeTarget, QueryStorage, StorageAdmin, StorageAuthOps, StorageClient,
     StorageCommitOps, StorageGcOps, StorageMaintenance, StorageOperationContext,
     StorageOperationContextOps, StoragePersistenceOps, StorageReader, StorageRecoveryOps,

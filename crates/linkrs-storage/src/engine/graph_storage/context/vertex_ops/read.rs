@@ -152,6 +152,58 @@ impl GraphStorageContext {
             })
     }
 
+    /// Resolve integer external ids from internal handles under one
+    /// vertex-table lock. Mixed labels and non-integer keys decline the
+    /// lookup so callers keep the authoritative external-id path.
+    pub fn external_i64_ids_by_internal_handles(
+        &self,
+        handles: &[Option<(u32, LabelId)>],
+        ts: Timestamp,
+    ) -> Option<Vec<Option<i64>>> {
+        let mut label = None;
+        for handle in handles {
+            let Some((_, handle_label)) = *handle else {
+                return None;
+            };
+            match label {
+                None => label = Some(handle_label),
+                Some(existing) if existing != handle_label => return None,
+                Some(_) => {}
+            }
+        }
+        let label = label?;
+        if !self.persistent.is_open.load(Ordering::Acquire) {
+            return Some(vec![None; handles.len()]);
+        }
+        let ids: Vec<u32> = handles
+            .iter()
+            .map(|handle| {
+                handle
+                    .map(|(internal, _)| internal)
+                    .expect("handles were validated above")
+            })
+            .collect();
+        self.persistent.data_store.with_vertex_tables(|vertex_tables| {
+            let Some(table) = vertex_tables.get(&label) else {
+                return Some(vec![None; handles.len()]);
+            };
+            let mut keys: Vec<Option<crate::vertex::IdKey>> = Vec::new();
+            table.get_external_ids_raw(&ids, &mut keys);
+            Some(
+                keys.into_iter()
+                    .zip(ids.iter())
+                    .map(|(key, id)| {
+                        key.or_else(|| table.get_external_id(*id, ts))
+                            .and_then(|key| match key {
+                                crate::vertex::IdKey::Int(value) if value >= 0 => Some(value),
+                                _ => None,
+                            })
+                    })
+                    .collect(),
+            )
+        })
+    }
+
     /// Resolve many internal row ids under one vertex-table lock.
     ///
     /// Raw ids win over timestamp-valid ids so dangling edge endpoints still

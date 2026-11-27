@@ -58,6 +58,9 @@ pub(super) struct ExpandCtx<'a> {
     /// Edge-type schema used by packed topology reads, resolved once for the
     /// whole execution under the query's fixed snapshot.
     pub(super) topology_schema: Option<Arc<crate::storage::TopologySchema>>,
+    /// Fixed-snapshot edge-table handles for handle-count reads, resolved at
+    /// most once per operator instance.
+    pub(super) handle_count_binding: Option<Option<Arc<crate::storage::HandleCountBinding>>>,
     /// Runtime used to report count-frontier fallbacks in EXPLAIN ANALYZE.
     pub(super) runtime: Option<Arc<ExecutionRuntime>>,
 }

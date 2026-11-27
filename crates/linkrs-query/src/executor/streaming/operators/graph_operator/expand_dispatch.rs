@@ -66,6 +66,25 @@ impl ExpandCtx<'_> {
         self.topology_schema = Some(std::sync::Arc::clone(&schema));
         Ok(schema)
     }
+
+    /// Resolve the fixed-snapshot handle-count tables once per operator
+    /// instance. A failed prepare keeps the ordinary packed topology path.
+    pub(super) fn handle_count_binding(
+        &mut self,
+        reader: &dyn QueryStorage,
+        schema: &crate::storage::TopologySchema,
+    ) -> Option<std::sync::Arc<crate::storage::HandleCountBinding>> {
+        if let Some(binding) = &self.handle_count_binding {
+            return binding.clone();
+        }
+        let binding = reader
+            .prepare_handle_count_binding(self.space_name, self.direction, self.edge_types, schema)
+            .ok()
+            .flatten()
+            .map(std::sync::Arc::new);
+        self.handle_count_binding = Some(binding.clone());
+        binding
+    }
 }
 
 /// The single agreed neighbor label for a closed loop, or `None` when the

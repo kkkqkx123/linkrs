@@ -2,7 +2,9 @@ use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-use crate::edge::{BatchInsertEntry, EdgeRecord, HotNbr};
+use parking_lot::RwLock;
+
+use crate::edge::{BatchInsertEntry, EdgeRecord, EdgeStore, HotNbr};
 use crate::engine::data_store::EdgeTableKey;
 use crate::engine::{
     DeleteEdgesBatchParams, EdgeOperationParams, InsertEdgeParams, InsertEdgesBatchParams,
@@ -864,114 +866,138 @@ impl GraphStorageContext {
         }
     }
 
+    /// Collect edge tables whose near label matches a count-only read.
+    ///
+    /// The returned handles are pinned for one fixed-snapshot operator
+    /// instance; every read still takes its own table lock.
+    pub(crate) fn handle_count_arcs(
+        &self,
+        edge_label: LabelId,
+        near_label: LabelId,
+        outward: bool,
+    ) -> Vec<Arc<RwLock<EdgeStore>>> {
+        if !self.persistent.is_open.load(Ordering::Acquire) {
+            return Vec::new();
+        }
+        let arcs = self
+            .persistent
+            .data_store
+            .matching_edge_partition_arcs(edge_label);
+        arcs.into_iter()
+            .filter(|arc| {
+                let table = self.persistent.data_store.read_edge_table(arc);
+                if outward {
+                    table.label() == edge_label && table.src_label() == near_label
+                } else {
+                    table.label() == edge_label && table.dst_label() == near_label
+                }
+            })
+            .collect()
+    }
+
     /// Visit visible out-neighbors of resolved internal parent handles.
     ///
     /// Count-only reads use this instead of staging a full
     /// [`PackedTopologyBatch`]: the callback receives only the far label and
     /// neighbor slot, so no rank, edge id or external id is materialized.
-    pub fn visit_out_nbrs_by_internal<F>(
+    /// Already validated handles are borrowed instead of copied.
+    pub(crate) fn visit_out_nbrs_by_internal<F>(
         &self,
-        edge_label: LabelId,
-        src_label: LabelId,
+        arcs: &[Arc<RwLock<EdgeStore>>],
+        near_label: LabelId,
         parents: &[VertexId],
         handles: Option<&[Option<(u32, LabelId)>]>,
         ts: Timestamp,
         mut f: F,
     ) where
-        F: FnMut(usize, LabelId, HotNbr),
+        F: FnMut(LabelId, HotNbr),
     {
         if !self.persistent.is_open.load(Ordering::Acquire) {
             return;
         }
-        let resolved: Vec<Option<(u32, LabelId)>> = match handles {
-            Some(handles) if handles.len() == parents.len() => handles
-                .iter()
-                .zip(parents.iter())
-                .map(|(&handle, &id)| match handle {
-                    Some((internal, label)) if label == src_label => Some((internal, label)),
-                    _ => self.resolve_node_endpoint(src_label, id, ts),
-                })
-                .collect(),
-            _ => self.resolve_node_endpoints(src_label, parents, ts),
-        };
-        let arcs = self
-            .persistent
-            .data_store
-            .matching_edge_partition_arcs(edge_label);
-        let gate = self.pending_gate();
-        let mut tables = Vec::new();
-        for arc in &arcs {
-            let table = self.persistent.data_store.read_edge_table(arc);
-            if table.label() != edge_label {
-                continue;
-            }
-            tables.push((table.dst_label(), table));
-        }
-        for (index, seed) in resolved.iter().enumerate() {
-            let Some((src_internal, actual_src)) = seed else {
-                continue;
+        let borrowed = handles.filter(|handles| {
+            handles.len() == parents.len()
+                && handles
+                    .iter()
+                    .all(|handle| matches!(handle, Some((_, label)) if *label == near_label))
+        });
+        let owned: Vec<Option<(u32, LabelId)>>;
+        let handles: &[Option<(u32, LabelId)>] = if let Some(borrowed) = borrowed {
+            borrowed
+        } else {
+            owned = match handles {
+                Some(handles) if handles.len() == parents.len() => handles
+                    .iter()
+                    .zip(parents.iter())
+                    .map(|(&handle, &id)| match handle {
+                        Some((internal, label)) if label == near_label => Some((internal, label)),
+                        _ => self.resolve_node_endpoint(near_label, id, ts),
+                    })
+                    .collect(),
+                _ => self.resolve_node_endpoints(near_label, parents, ts),
             };
-            for (far_label, table) in &tables {
-                if table.src_label() != *actual_src {
+            &owned
+        };
+        let gate = self.pending_gate();
+        for arc in arcs {
+            let table = self.persistent.data_store.read_edge_table(arc);
+            let far_label = table.dst_label();
+            for handle in handles {
+                let Some((src_internal, _)) = *handle else {
                     continue;
-                }
-                table.visit_out_with_gate(*src_internal, ts, &gate, |nbr| {
-                    f(index, *far_label, nbr)
-                });
+                };
+                table.visit_out_with_gate(src_internal, ts, &gate, |nbr| f(far_label, nbr));
             }
         }
     }
 
     /// In-direction counterpart of [`Self::visit_out_nbrs_by_internal`].
-    pub fn visit_in_nbrs_by_internal<F>(
+    pub(crate) fn visit_in_nbrs_by_internal<F>(
         &self,
-        edge_label: LabelId,
-        dst_label: LabelId,
+        arcs: &[Arc<RwLock<EdgeStore>>],
+        near_label: LabelId,
         parents: &[VertexId],
         handles: Option<&[Option<(u32, LabelId)>]>,
         ts: Timestamp,
         mut f: F,
     ) where
-        F: FnMut(usize, LabelId, HotNbr),
+        F: FnMut(LabelId, HotNbr),
     {
         if !self.persistent.is_open.load(Ordering::Acquire) {
             return;
         }
-        let resolved: Vec<Option<(u32, LabelId)>> = match handles {
-            Some(handles) if handles.len() == parents.len() => handles
-                .iter()
-                .zip(parents.iter())
-                .map(|(&handle, &id)| match handle {
-                    Some((internal, label)) if label == dst_label => Some((internal, label)),
-                    _ => self.resolve_node_endpoint(dst_label, id, ts),
-                })
-                .collect(),
-            _ => self.resolve_node_endpoints(dst_label, parents, ts),
-        };
-        let arcs = self
-            .persistent
-            .data_store
-            .matching_edge_partition_arcs(edge_label);
-        let gate = self.pending_gate();
-        let mut tables = Vec::new();
-        for arc in &arcs {
-            let table = self.persistent.data_store.read_edge_table(arc);
-            if table.label() != edge_label {
-                continue;
-            }
-            tables.push((table.src_label(), table));
-        }
-        for (index, seed) in resolved.iter().enumerate() {
-            let Some((dst_internal, actual_dst)) = seed else {
-                continue;
+        let borrowed = handles.filter(|handles| {
+            handles.len() == parents.len()
+                && handles
+                    .iter()
+                    .all(|handle| matches!(handle, Some((_, label)) if *label == near_label))
+        });
+        let owned: Vec<Option<(u32, LabelId)>>;
+        let handles: &[Option<(u32, LabelId)>] = if let Some(borrowed) = borrowed {
+            borrowed
+        } else {
+            owned = match handles {
+                Some(handles) if handles.len() == parents.len() => handles
+                    .iter()
+                    .zip(parents.iter())
+                    .map(|(&handle, &id)| match handle {
+                        Some((internal, label)) if label == near_label => Some((internal, label)),
+                        _ => self.resolve_node_endpoint(near_label, id, ts),
+                    })
+                    .collect(),
+                _ => self.resolve_node_endpoints(near_label, parents, ts),
             };
-            for (far_label, table) in &tables {
-                if table.dst_label() != *actual_dst {
+            &owned
+        };
+        let gate = self.pending_gate();
+        for arc in arcs {
+            let table = self.persistent.data_store.read_edge_table(arc);
+            let far_label = table.src_label();
+            for handle in handles {
+                let Some((dst_internal, _)) = *handle else {
                     continue;
-                }
-                table.visit_in_with_gate(*dst_internal, ts, &gate, |nbr| {
-                    f(index, *far_label, nbr)
-                });
+                };
+                table.visit_in_with_gate(dst_internal, ts, &gate, |nbr| f(far_label, nbr));
             }
         }
     }

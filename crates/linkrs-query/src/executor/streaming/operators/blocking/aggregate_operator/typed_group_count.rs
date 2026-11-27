@@ -5,7 +5,7 @@
 //! transfers these counts into the generic accumulator map before the row loop
 //! runs, keeping one authoritative state per group.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use linkrs_core::columnar::RowKey;
 use linkrs_core::types::expr::Expression;
@@ -221,16 +221,9 @@ pub(crate) fn try_accumulate(
         }
     };
 
-    let mut new_keys = HashSet::new();
     for idx in 0..len {
-        let Some(key) = key_at(key_column, kind, idx) else {
+        if key_at(key_column, kind, idx).is_none() {
             return false;
-        };
-        if state
-            .as_ref()
-            .is_none_or(|fast| !fast.counts.contains_key(&key))
-        {
-            new_keys.insert(key);
         }
     }
 
@@ -238,14 +231,8 @@ pub(crate) fn try_accumulate(
         .as_ref()
         .map(|fast| fast.bytes_per_group)
         .unwrap_or_else(|| group_bytes(kind, group_overhead));
-    if !new_keys.is_empty()
-        && memory_tracker
-            .try_reserve(bytes_per_group * new_keys.len())
-            .is_err()
-    {
-        return false;
-    }
-    if state.is_none() {
+    let initialize = state.is_none();
+    if initialize {
         *state = Some(TypedGroupCount {
             counts: HashMap::new(),
             key_kind: kind,
@@ -253,28 +240,59 @@ pub(crate) fn try_accumulate(
             bytes_per_group,
         });
     }
-    let fast = state.as_mut().expect("typed group count initialized above");
-    let (validity_bitmap, expand_counts) = validity;
-    for idx in 0..len {
-        let key = key_at(key_column, kind, idx).expect("key was validated in the preflight pass");
-        let contribution = match mode {
-            TypedAggregateMode::Count => {
-                if validity_bitmap.is_some_and(|bitmap| !bitmap_is_valid(bitmap, idx)) {
-                    0
-                } else {
-                    multiplicity
+    let mut inserted: Vec<TypedGroupKey> = Vec::new();
+    let mut modified_existing: Vec<(TypedGroupKey, u64)> = Vec::new();
+    let mut reservation_failed = false;
+    {
+        let fast = state.as_mut().expect("typed group count initialized above");
+        let (validity_bitmap, expand_counts) = validity;
+        for idx in 0..len {
+            let key =
+                key_at(key_column, kind, idx).expect("key was validated in the preflight pass");
+            let contribution = match mode {
+                TypedAggregateMode::Count => {
+                    if validity_bitmap.is_some_and(|bitmap| !bitmap_is_valid(bitmap, idx)) {
+                        0
+                    } else {
+                        multiplicity
+                    }
+                }
+                TypedAggregateMode::SumExpandCount => {
+                    let value = expand_counts.as_ref().expect("sum values were validated")[idx];
+                    if value < 0 {
+                        return false;
+                    }
+                    (value as u64).saturating_mul(multiplicity)
+                }
+            };
+            match fast.counts.entry(key) {
+                std::collections::hash_map::Entry::Occupied(entry) => {
+                    modified_existing.push((key, *entry.get()));
+                    *entry.into_mut() += contribution;
+                }
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    if memory_tracker.try_reserve(bytes_per_group).is_err() {
+                        for (existing_key, old_count) in modified_existing {
+                            fast.counts.insert(existing_key, old_count);
+                        }
+                        for inserted_key in &inserted {
+                            fast.counts.remove(inserted_key);
+                        }
+                        memory_tracker.release(bytes_per_group * inserted.len());
+                        reservation_failed = true;
+                        break;
+                    }
+                    entry.insert(contribution);
+                    inserted.push(key);
                 }
             }
-            TypedAggregateMode::SumExpandCount => {
-                let value = expand_counts.as_ref().expect("sum values were validated")[idx];
-                if value < 0 {
-                    return false;
-                }
-                (value as u64).saturating_mul(multiplicity)
-            }
-        };
-        let count = fast.counts.entry(key).or_insert(0);
-        *count += contribution;
+        }
+    }
+    if reservation_failed {
+        if initialize {
+            *state = None;
+        }
+        return false;
     }
     true
 }
@@ -326,27 +344,12 @@ pub(crate) fn accumulate_packed_keys(
     {
         return false;
     }
-    let mut new_keys = HashSet::new();
-    for key in &typed_keys {
-        if state
-            .as_ref()
-            .is_none_or(|fast| !fast.counts.contains_key(key))
-        {
-            new_keys.insert(*key);
-        }
-    }
     let bytes_per_group = state
         .as_ref()
         .map(|fast| fast.bytes_per_group)
         .unwrap_or_else(|| group_bytes(kind, group_overhead));
-    if !new_keys.is_empty()
-        && memory_tracker
-            .try_reserve(bytes_per_group * new_keys.len())
-            .is_err()
-    {
-        return false;
-    }
-    if state.is_none() {
+    let initialize = state.is_none();
+    if initialize {
         *state = Some(TypedGroupCount {
             counts: HashMap::new(),
             key_kind: kind,
@@ -354,10 +357,42 @@ pub(crate) fn accumulate_packed_keys(
             bytes_per_group,
         });
     }
-    let fast = state.as_mut().expect("typed group count initialized above");
-    for (index, key) in typed_keys.into_iter().enumerate() {
-        let weight = weights.get(index).copied().unwrap_or(1);
-        *fast.counts.entry(key).or_insert(0) += weight.saturating_mul(multiplicity);
+    let mut inserted: Vec<TypedGroupKey> = Vec::new();
+    let mut modified_existing: Vec<(TypedGroupKey, u64)> = Vec::new();
+    let mut reservation_failed = false;
+    {
+        let fast = state.as_mut().expect("typed group count initialized above");
+        for (index, key) in typed_keys.into_iter().enumerate() {
+            let weight = weights.get(index).copied().unwrap_or(1);
+            let contribution = weight.saturating_mul(multiplicity);
+            match fast.counts.entry(key) {
+                std::collections::hash_map::Entry::Occupied(entry) => {
+                    modified_existing.push((key, *entry.get()));
+                    *entry.into_mut() += contribution;
+                }
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    if memory_tracker.try_reserve(bytes_per_group).is_err() {
+                        for (existing_key, old_count) in modified_existing {
+                            fast.counts.insert(existing_key, old_count);
+                        }
+                        for inserted_key in &inserted {
+                            fast.counts.remove(inserted_key);
+                        }
+                        memory_tracker.release(bytes_per_group * inserted.len());
+                        reservation_failed = true;
+                        break;
+                    }
+                    entry.insert(contribution);
+                    inserted.push(key);
+                }
+            }
+        }
+    }
+    if reservation_failed {
+        if initialize {
+            *state = None;
+        }
+        return false;
     }
     true
 }
@@ -645,6 +680,32 @@ mod tests {
         let fast = typed.expect("typed state");
         assert_eq!(fast.counts.get(&TypedGroupKey::I64(1)), Some(&3));
         assert_eq!(fast.counts.get(&TypedGroupKey::I64(2)), Some(&3));
+    }
+
+    #[test]
+    fn packed_keys_roll_back_on_budget_exhaustion() {
+        let keys = vec![
+            Value::BigInt(1),
+            Value::BigInt(2),
+            Value::BigInt(3),
+        ];
+        let group_map = HashMap::new();
+        let budget = MemoryBudget::new(1024 * 1024);
+        let per_group = group_bytes(TypedGroupKeyKind::I64, ACCUMULATOR_OVERHEAD_BYTES);
+        let mut tracker = MemoryTracker::with_local_limit(budget, per_group);
+        let mut typed = None;
+
+        assert!(!accumulate_packed_keys(
+            &mut typed,
+            &group_map,
+            &mut tracker,
+            ACCUMULATOR_OVERHEAD_BYTES,
+            &keys,
+            &[],
+            1,
+        ));
+        assert!(typed.is_none());
+        assert_eq!(tracker.current(), 0);
     }
 
     #[test]
