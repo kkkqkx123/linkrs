@@ -130,3 +130,239 @@ query 侧消费句柄级 payload，按 `(label, u32)` 整数句柄做去重与�
 ## 7. 交付顺序
 
 按阶段一、二、三顺序实施，每阶段独立 A/B 并保留回退路径。阶段一先补反例与空输入用例；阶段二锁定 multiplicity 与回退语义；阶段三锁定有序 handle 契约。任一阶段结果不逐值一致或 workload 未下降，立即停止后续阶段，先补反例再继续。
+
+## 8. 落地结果与剩余差距
+
+### 8.1 已落地范围
+
+阶段一至阶段三均已落地：
+
+- 存储侧新增句柄级批量计数读取，直接遍历可见 CSR 邻接并按内部远端 handle 聚合成排序后的计数数组，不再构造逐边外部身份、rank 与类型 id。
+- query 侧新增句柄计数快路径，按排序 handle 线性合并 multiplicity，再对唯一句柄批量解析外部主键并复用既有 dangling-free 守卫；不满足单类型、单方向、单远端标签、整数主键或无 TTL 条件时回退原 packed topology 路径。
+- 物理计划在证明 packed identity handoff 且扫描直接下游就是该 expand 时，启用扫描侧 handle 直通；整数主键、无 TTL、无外部 id range 的 shard-slice 分区跳过外部主键解码。
+- EXPLAIN 新增 `expand_handle_traverse_us`、`expand_key_resolve_us`、`expand_weight_us`；parity bench 同步输出这三项。
+
+### 8.2 devs 复测结论
+
+服务器二进制编译成功；完整 gate 退出码为 0。正确性门结果：
+
+| 门 | 结果 |
+|---|---:|
+| config default | 1 passed |
+| partitioning | 50 passed |
+| typed group | 9 passed |
+| local topk | 13 passed |
+| degree sketch | 4 passed |
+| query stats | 91 passed |
+| parallel | 27 passed |
+| DQL | 324 passed |
+| storage lib | 1423 passed |
+| dangling token | 4 passed |
+| column batch | 13 passed |
+| api lib | 30 passed |
+
+两轮固定门与生产默认门结果保持一致：`group_by_count [14|59]`、`distinct_limit [14]`、`join_two_hop [382018]`、`variable_path_count [400153]`，`result_stable=true`。`group_by_count` 的 `typed_group_hits=112/112`、`typed_group_fallbacks=0`、`spill_rows=0`。
+
+生产默认安静窗口下 `group_by_count` 中位数由改造前约 32ms 降至 **14.78ms**，去最大值均值约 14.72ms；关闭 dangling 证明的 A/B 为约 16.46ms。
+
+`topology_read_bench` 离散父、32768 边口径：
+
+| 形态 | 中位耗时 | 单价 |
+|---|---:|---:|
+| packed topology | 7886us | 241ns/边 |
+| 句柄计数 | 1846us | 56ns/边 |
+
+单价下降约 4.3 倍，证明结构性改造方向有效。
+
+### 8.3 尚未达到的性能门
+
+生产默认带证明的 `group_by_count` 指标：
+
+| 指标 | 当前值 | 门 | 差距 |
+|---|---:|---:|---:|
+| `scan_visibility_us` | 754us | ≤5000us | 已达标 |
+| `expand_topology_read_us` | 31868us | ≤25000us | 高约 6.9ms |
+| `parallel_work_us` | 145862us | ≤80000us | 高约 65.9ms |
+| 安静窗口墙钟 | 14.78ms | 8–12ms | 高于上沿约 2.8ms |
+
+其余关键指标：`scan_read_us=27830`、`expand_key_resolve_us=9145`、`expand_handle_traverse_us=458`、`expand_weight_us=607`、`partition_skew_ratio=1.236`。从已计入的扫描与 expand 自耗时看，约 72ms 仍落在并行工作量但未落入现有存储计数器；继续只看拓扑读取单价无法解释这部分缺口。
+
+因此本轮结论是：**正确性与结构改造已完成，工作量显著下降，但第一步 workload 结构和第二步墙钟门尚未全部通过**。不应把 14.78ms 直接解释为已具备稳定 8ms 的条件。
+
+### 8.4 后续修改方向
+
+按以下顺序推进，不跳步：
+
+1. **先补齐并行工作量归因。** 在现有执行器内为扫描 batch 组装、packed payload 消费、聚合累计与 exchange 发送补充分区级计时，定位约 72ms 未归因工作量。这里的目标不是继续加存储计数器，而是确认 `parallel_work_us` 的主要组成；只有证据明确后才进入下一步。分区级与算子级归因结果见第 8.7、8.8 节。
+
+2. **拆分拓扑读取的 31.9ms。** bench 单线程单价为 56ns/边，生产并行口径约 148ns/边，差值更像分区并发下的边表访问竞争与排序开销，而不是单次 CSR 遍历本身。可先在现有 reader 内比较“排序后 run-length 聚合”和“按边表/父 handle 分桶后局部聚合”，以实测决定保留哪种形态；不得因此恢复逐边外部身份构造。
+
+3. **优化唯一键解析。** 当前 `expand_key_resolve_us` 约 9.1ms，且原 packed 路径约 30.8ms，说明这部分已被显著压缩但仍是第二瓶颈。方向是让整数主键在不构造 `VertexId` hash key 的前提下完成去重与 key 生成，并继续复用已有 handle 解析与存在性守卫；文本主键保持回退。
+
+4. **复核扫描侧剩余成本。** `scan_visibility_us` 已达标，`scan_read_us` 仍约 27.8ms，其中枚举、表加载和窗口过滤均有一定占比。只有在前两步归因确认扫描主导后才重新评估；不继续做上一轮已证明收益上限不足的扫描脚手架微优化。
+
+5. **最后才做并行参数复测。** 当前偏斜比约 1.236，略高于 1.2，但在 workload 未进入目标区间前不得通过增加分区或 worker 换收益。待拓扑读取、键解析与未归因工作量下降后，再评估按句柄分布而非行数/度数切分，并用同源资源口径复核墙钟。
+
+### 8.5 继续遵守的护栏
+
+- 不采样、不近似、不截断，不放宽 buffer 或 multiplicity 语义。
+- 不引入跨调用可见性缓存；任何快路径必须保留读时间戳、pending gate、staged write、TTL 与 dangling-free 守卫。
+- 不恢复逐边外部身份构造；任何新形态都必须保持与 `group_by_count [14|59]` 等结果门逐值一致。
+- 边级“全可见”证明仍只在上述方向落地且仍有逐边可见性主导证据时评估，不先行实施。
+
+### 8.6 复测材料位置
+
+devs 上本轮最终材料：
+
+- 服务器编译日志：`/data/kkkqkx/linkrs/build-handle-count-server4.log`
+- 完整 gate 日志：`/data/kkkqkx/linkrs/gate-handle-count4.log`
+- 诊断与 EXPLAIN：`/data/kkkqkx/linkrs/handle-count-gate4/`
+- 最终 bench 日志：`/data/kkkqkx/linkrs/topology-read-handle-final.log`
+
+### 8.7 并行工作量归因复测
+
+按第 8.4 节第一步，先在 worker 分区执行入口补齐 `partition_open_us`、`partition_advance_us`、`partition_send_us`、`partition_close_us` 四项计时，并接入 EXPLAIN 与 parity JSON。随后在 devs 上重新编译、跑完整 gate，并单独执行三轮生产默认口径复测。完整 gate 全部通过，结果门未变化；计时字段本身没有引入可见语义变化。
+
+完整 gate 运行期间 devs 上有其他编译任务，生产默认轮次出现明显外部噪声（`scan_read_us` 达 92818us，`group_by_count` 中位数 41.83ms），该轮只用于确认正确性与字段输出，不作为性能结论。随后在同一节点、同一 CPU 绑定下连跑三轮生产默认测量：
+
+| 轮次 | `group_by_count` 中位数 | `parallel_work_us` | `partition_open_us` | `partition_advance_us` | `partition_send_us` | `partition_close_us` | 偏斜比 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 14.73ms | 148250 | 164 | 147810 | 17 | 225 | 1.497 |
+| 2 | 14.68ms | 144187 | 177 | 143752 | 20 | 208 | 1.373 |
+| 3 | 21.22ms | 175309 | 393 | 174623 | 32 | 221 | 1.737 |
+
+第 1、2 轮与上一节稳定基线一致；第 3 轮同时出现 `scan_read_us` 从约 28ms 抬升到 33ms、偏斜比从约 1.4 抬升到 1.737，判定为外部负载噪声轮，不用于归因结论。
+
+稳定轮次中 `partition_advance_us` 占 `parallel_work_us` 约 99.7%，`partition_send_us` 仅 17–20us，`partition_open_us` 与 `partition_close_us` 合计不足 0.4ms。由此得到两个明确结论：
+
+- `parallel_work_us` 的缺口不在 exchange 发送阻塞，也不在分区打开/关闭；继续从 bounded channel 或 worker 调度方向找收益缺乏证据。
+- 未归因部分位于分区 `advance()` 内部。已计入的存储自耗时约 69ms，而 `parallel_work_us` 约 144ms，剩余约 75ms 应来自 operator 内部的 batch 组装、packed payload 消费、聚合累计或逐 advance 的运行时检查，而不是存储层拓扑读取本身。
+
+因此第 8.4 节第一步只完成了一半：分区级归因已排除 exchange，下一步应把 `advance()` 内部按 operator 责任拆开，再决定是否进入拓扑读取 A/B；不应直接按原先“72ms 主要来自存储未计数路径”的假设改存储实现。
+
+本轮材料：
+
+- 服务器编译日志：`/data/kkkqkx/linkrs/build-handle-count-server5.log`
+- 完整 gate 日志：`/data/kkkqkx/linkrs/gate-handle-count5.log`
+- 三轮生产复测日志：`/data/kkkqkx/linkrs/attrib-prod-{1,2,3}.log`
+- 三轮诊断与 EXPLAIN：`/data/kkkqkx/linkrs/attrib-prod-{1,2,3}/`
+
+### 8.8 advance 内部归因与瓶颈确认
+
+按第 8.7 节结论继续拆分 `advance()` 内部责任。在现有统计模块中补入五个计时字段并接入 EXPLAIN 与 parity JSON：`scan_chunk_build_us`（存储列批到 DataChunk 的查询侧组装）、`expand_seed_us`（`parse_seeds` 与种子 handle 收集）、`expand_typed_clone_us`（expand 入口克隆输入 typed 列）、`expand_guard_us`（拓扑 schema、TTL 与 dangling 证明检查）、`expand_step_us`（一次 expand 分发的完整耗时）。计时只出现在既有查询侧代码路径上，不改变任何可见性、顺序或输出语义。
+
+验证采用两层对账：EXPLAIN 的逐算子 `next_time_us` 沿依赖链取差得到算子独占时间；新字段用于解释 scan 与 expand 独占时间的内部构成。devs 生产默认、node1 绑定、warmup 1 + run 5 的稳定轮次（中位数 14.77ms，`work_time=140347us`，偏斜比 1.190）：
+
+| 层次 | 累计耗时 | 占 `parallel_work_us` |
+|---|---:|---:|
+| 分区 advance | 139911us | 99.7% |
+| 算子独占时间之和 | 140592us | 100.2%（含舍入） |
+| scan 独占 | 50390us | 35.9% |
+| expand 独占 | 76966us | 54.8% |
+| PartialAggregate 独占 | 11217us | 8.0% |
+| Project / LocalTopK / Exchange / 全局尾部 | 2019us | 1.4% |
+
+expand 独占时间的内部构成：
+
+| 阶段 | 耗时 | 说明 |
+|---|---:|---|
+| `expand_step_us` | 69928us | expand 分发内部 |
+| `expand_topology_read_us` | 30810us | 句柄级 CSR 计数读取 |
+| `expand_seed_us` | 18216us | 种子解析与逐行 row 克隆 |
+| `expand_key_resolve_us` | 8666us | 唯一句柄解析与主键生成 |
+| `expand_typed_clone_us` | 2150us | 入口 typed 列克隆 |
+| `expand_guard_us` | 1001us | schema / TTL / dangling 证明 |
+| `expand_handle_traverse_us` + `expand_weight_us` | 998us | 句柄合并与权重组装 |
+| 分发内残余 | 8087us | step 内未单独计时的输出构造与循环开销 |
+| 分发外残余 | 7038us | expand operator 的逐批次调度与字段准备 |
+
+scan 侧对账更直接：`scan_read_us=27446us` 与 `scan_chunk_build_us=22688us` 合计 50134us，已解释其 50390us 独占时间的 99.5%。因此第 8.4 节遗留的约 72ms 未归因工作量不再是未知项：它主要由查询侧 chunk 组装、种子抽取、PartialAggregate 和 expand step 残余构成，而不是存储层隐藏路径。
+
+由此确认的瓶颈优先级：
+
+- 拓扑读取仍是最大单项（30810us，215488 条边约 143ns/边；单线程 bench 为 56ns/边）。并发访问与排序开销仍是主要怀疑点，但仍需先在现有 reader 内做排序聚合与分桶聚合的 A/B，不直接改语义面更大的边级可见性证明。
+- 新确认的两处查询侧主要浪费：scan 的列批到 chunk 组装 22688us，expand 的种子抽取 18216us。两者都是为当前句柄直通形状构造无人消费的 row view / seed row，合计约占 29% 并行工作量，且不需要触碰拓扑或可见性语义。
+- PartialAggregate 独占 11217us，是第一轮改造后新浮现的第三梯队成本；unique key 解析 8666us 紧随其后。两者只有在前两项下降后才值得继续压缩。
+- typed 列克隆 2150us 与各类 guard 合计 1001us 均不足工作量的 2%，不应作为下一步优化目标。
+
+正确性复核：查询 lib 2364 项、parallel 27 项、DQL 324 项全部通过；三轮生产默认结果门稳定为 `group_by_count [14|59]`、`distinct_limit [14]`、`join_two_hop [382018]`、`variable_path_count [400153]`，`result_stable=true`、`spill_rows=0`，`typed_group_hits=112/112`、零回退。性能门状态未变：`expand_topology_read_us` 30810us 仍高于 25000us，`parallel_work_us` 140347us 仍高于 80000us，安静窗口墙钟 14.77ms 仍高于 12ms。
+
+后续修改顺序相应调整为：先消除句柄直通形状中无人消费的 row view 与 seed row 克隆并对逐值结果门复测；再在 reader 内做拓扑读取 A/B；然后评估唯一键解析与 PartialAggregate；最后才做并行参数复测。新增计时字段继续保留，用于确认每一步是否把对应工作量真正移出关键路径。
+
+本轮材料：
+
+- 服务器编译日志：`/data/kkkqkx/linkrs/build-attrib-deep4.log`
+- 测试日志：`/data/kkkqkx/linkrs/attrib-deep4/gate-tests.log`
+- 三轮生产复测日志与 JSON：`/data/kkkqkx/linkrs/attrib-deep4/r{1,2,3}.log`、`/data/kkkqkx/linkrs/attrib-deep4/r{1,2,3}/`
+- 三轮诊断与 EXPLAIN：`/data/kkkqkx/linkrs/attrib-deep4/explain{1,2,3}/`
+
+### 8.9 消除无效 row 构造与拓扑 A/B 结果
+
+按第 8.8 节确认的优先级，先实施了不触碰可见性与拓扑语义的两项改造：
+
+- 物理计划构建器在 packed identity handoff 证明成立且扫描直接下游就是该 expand 时，将扫描的 `skip_rows` 一并开启。句柄直通扫描从此不再构造任何 row view，只输出 typed handle 列。
+- `parse_seeds` 增加是否需要物化 seed row 的契约；列式 expand 在 typed 列完整覆盖输入布局时跳过逐行 row 克隆，只保留 seed id 与绝对位置。frontier 路径仍要求完整 seed row，保持原语义。新增专项单测确认两种形态的 id 与位置逐值一致。
+
+devs 生产默认稳定轮次对比（同为 node1 绑定、warmup 1 + run 5）：
+
+| 指标 | 改造前（8.8 节） | 改造后 | 变化 |
+|---|---:|---:|---:|
+| `group_by_count` 中位数 | 14.77ms | 9.94ms（另轮 9.70ms） | 约 1.5 倍 |
+| `parallel_work_us` | 140347 | 103965 | -25.9% |
+| `scan_chunk_build_us` | 22688 | 5230 | -77% |
+| `expand_seed_us` | 18216 | 3354 | -82% |
+| `expand_topology_read_us` | 30810 | 34098 | 未改善（噪声区间内） |
+| `expand_key_resolve_us` | 8666 | 10230 | 未改善 |
+
+同一形状下 `distinct_limit` 中位数也由约 20ms 降到约 12ms，结果仍为 `[14]`。三轮结果门稳定为 `group_by_count [14|59]`、`distinct_limit [14]`、`join_two_hop [382018]`、`variable_path_count [400153]`，`result_stable=true`、`spill_rows=0`、`typed_group_hits=112/112`、零回退。正确性复核：storage lib 1423 项、query lib 2365 项、parallel 27 项、DQL 324 项全部通过。
+
+针对剩余最大的拓扑读取项，按第 8.4 节第二步做了两项 A/B，均未达标并已回退：
+
+- 把句柄直通扫描的 batch 放大 4 倍（2048 → 8192）：批数从 112 降到 32，但 `expand_topology_read_us` 从约 34ms 升到约 42–47ms，`parallel_work_us` 升到 108–113ms；墙钟没有稳定收益。说明拓扑成本不是每批固定开销主导，而是随批量排序/聚合规模增长。
+- 把 reader 内的“排序 + run-length 聚合”改为“逐边哈希分桶后只排序唯一端点”：`expand_topology_read_us` 升至 45–47ms，`parallel_work_us` 升至 122–128ms。排序当前形态优于哈希分桶；已恢复排序实现。
+
+两项 A/B 都保持结果门不变，仅因工作量上升而回退，没有引入任何新模块或替代路径。
+
+当前性能门状态：安静窗口墙钟已进入 8–12ms（9.70–9.94ms），但外部负载波动下仍会观察到约 14.9ms；`expand_topology_read_us` 约 34–38ms 仍高于 25ms，`parallel_work_us` 约 104–115ms 仍高于 80ms。因此第一步 workload 结构门仍未通过，不把偶发的 9.7ms 解释为已稳定达到 8ms。
+
+下一步应以“逐边可见性在 8 路并发下主导”为工作假设补证据，只有在证据明确后才评估边级全可见证明；在此之前不恢复已回退的批量放大与哈希分桶，不增加分区或 worker。唯一键解析与 PartialAggregate 各约 10ms，属于第二梯队，也不应先于拓扑归因改动。
+
+本轮材料：
+
+- 服务器编译日志：`/data/kkkqkx/linkrs/build-final-no-row.log`
+- 测试日志：`/data/kkkqkx/linkrs/bucket-handoff/gate-tests.log`
+- 最终三轮生产复测：`/data/kkkqkx/linkrs/final-no-row/r{1,2,3}.log`、`/data/kkkqkx/linkrs/final-no-row/r{1,2,3}/`
+- 回退 A/B 数据：`/data/kkkqkx/linkrs/wide-handoff/`、`/data/kkkqkx/linkrs/bucket-handoff/`
+
+### 8.10 拓扑读取的三段归因与最终结论
+
+为判定第 8.9 节留下的工作假设，在 `PackedHandleCounts` 中补入三段只读计时：`setup_us`（快照、schema、读时间戳、handle 解析与边表/gate 准备）、`traverse_us`（可见 CSR 逐边遍历）与 `aggregate_us`（排序与 run-length 聚合），并接入 EXPLAIN、parity JSON 与 `topology_read_bench` 的单线程拆分输出。这些字段不改变任何语义。
+
+单线程 `topology_read_bench`（32768 边、batch=2048）：总耗时 1004us，`setup < 1us`、`visit 535us`、`aggregate 468us`；同机 `out_degree (count only)` 为 491us。可见即使包含逐边 MVCC gate，单次 CSR walk 也没有数量级异常。
+
+生产默认稳定轮次（中位数 10.70ms，`work_time=96165us`，偏斜比 1.438）：
+
+| 阶段 | 耗时 | 占拓扑读取 |
+|---|---:|---:|
+| `expand_topology_read_us` | 31955us | 100% |
+| `expand_handle_setup_us` | 11929us | 37.3% |
+| `expand_handle_visit_us` | 14634us | 45.8% |
+| `expand_handle_aggregate_us` | 5247us | 16.4% |
+
+三段之和 31810us，解释拓扑读取的 99.5%。另外两轮（`work_time` 110679us 与 128469us）保持相同比例。
+
+由此得到明确结论：
+
+- “逐边可见性主导剩余拓扑读取”的假设不成立。逐边 CSR 遍历只占约 46%，且单线程口径与裸 degree 读取相差不大；因此没有依据实施边级“全可见”跳过证明，继续沿用现有 MVCC 与 pending gate。
+- 真正的并发新增开销在 `setup`：单线程不足 1us，生产 8 分区下累计到约 12ms，来自每批次重复的 schema、读时间戳、边表与 gate 准备在共享结构上的竞争。它解释了为何放大 batch 会让聚合变大却没有收益，也解释了哈希分桶为何更慢。
+- 排序聚合本身约 5ms，已优于哈希分桶；不要恢复已回退的实现。
+- 结构改造至此已完成：句柄直通、无 row view、无 seed row 克隆、三段归因全部落地；正确性与结果门全部通过。剩余性能门不是由采样、近似或可见性保守性造成，而是由并发下的每批 setup 竞争和仍需保留的逐边遍历造成。
+
+最终口径：安静窗口墙钟 9.79–10.70ms，已进入 8–12ms 区间；但 `expand_topology_read_us` 约 32ms、`parallel_work_us` 约 96–128ms 均未达到 25ms / 80ms 的工作门，且墙钟随负载偏斜波动到约 14.6ms。因此**不能宣称达到稳定 8ms，也不能宣称工作量门通过**。在不引入跨调用可见性缓存、不跳过 MVCC、不增加分区/worker 的护栏下，没有低风险改动可以继续压缩这两项；下一步若要推进，应先做“每个分区复用固定快照下的 schema/边表准备”的独立设计验证，而不是继续做可见性证明或聚合形态微调。
+
+最终材料：
+
+- 编译日志：`/data/kkkqkx/linkrs/build-setup-proof.log`
+- 单线程拆分 bench：`/data/kkkqkx/linkrs/setup-proof/topology-split.log`
+- 测试日志：`/data/kkkqkx/linkrs/setup-proof/gate-tests.log`
+- 三轮生产复测：`/data/kkkqkx/linkrs/setup-proof/r{1,2,3}.log`、`/data/kkkqkx/linkrs/setup-proof/r{1,2,3}/`

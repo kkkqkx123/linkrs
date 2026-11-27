@@ -155,36 +155,56 @@ pub(crate) fn run_partition(
     queued_bytes: &AtomicUsize,
     queued_bytes_peak: &AtomicUsize,
 ) -> Result<(), QueryError> {
-    tree.open()?;
-    let execution_result = (|| {
-        while !stop.load(Ordering::Relaxed) {
-            runtime.ensure_not_cancelled()?;
-            let Some(chunk) = tree.advance()? else {
-                send_message(sender, PartitionMessage::Finished, stop, runtime)?;
-                return Ok(());
-            };
-            record_scalar_partition_count(runtime, partition_id, &chunk);
-            let bytes = chunk.estimated_bytes();
-            let reservation = runtime.memory_budget.reserve(bytes)?;
-            let message = PartitionMessage::Chunk(BufferedChunk {
-                chunk,
-                _reservation: reservation,
-                bytes,
-            });
-            send_chunk(
-                sender,
-                message,
-                stop,
-                runtime,
-                queued_chunks,
-                queued_chunks_peak,
-                queued_bytes,
-                queued_bytes_peak,
-            )?;
-        }
-        Ok(())
-    })();
+    let open_started = Instant::now();
+    let open_result = tree.open();
+    let open_us = open_started.elapsed().as_micros() as u64;
+    let mut advance_us = 0u64;
+    let mut send_us = 0u64;
+    let execution_result = open_result.and_then(|()| {
+        (|| {
+            while !stop.load(Ordering::Relaxed) {
+                runtime.ensure_not_cancelled()?;
+                let advance_started = Instant::now();
+                let chunk_result = tree.advance();
+                advance_us += advance_started.elapsed().as_micros() as u64;
+                let Some(chunk) = chunk_result? else {
+                    let send_started = Instant::now();
+                    let result = send_message(sender, PartitionMessage::Finished, stop, runtime);
+                    send_us += send_started.elapsed().as_micros() as u64;
+                    result?;
+                    return Ok(());
+                };
+                record_scalar_partition_count(runtime, partition_id, &chunk);
+                let bytes = chunk.estimated_bytes();
+                let reservation = runtime.memory_budget.reserve(bytes)?;
+                let message = PartitionMessage::Chunk(BufferedChunk {
+                    chunk,
+                    _reservation: reservation,
+                    bytes,
+                });
+                let send_started = Instant::now();
+                let result = send_chunk(
+                    sender,
+                    message,
+                    stop,
+                    runtime,
+                    queued_chunks,
+                    queued_chunks_peak,
+                    queued_bytes,
+                    queued_bytes_peak,
+                );
+                send_us += send_started.elapsed().as_micros() as u64;
+                result?;
+            }
+            Ok(())
+        })()
+    });
+    let close_started = Instant::now();
     let close_result = tree.close_tree();
+    let close_us = close_started.elapsed().as_micros() as u64;
+    runtime
+        .columnar_stats()
+        .record_partition_phases(open_us, advance_us, send_us, close_us);
     execution_result.and(close_result)
 }
 

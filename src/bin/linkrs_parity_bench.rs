@@ -128,13 +128,25 @@ struct QueryDiagnostics {
     scan_decode_us: u64,
     scan_assemble_us: u64,
     scan_predicate_us: u64,
+    scan_chunk_build_us: u64,
     expand_read_us: u64,
     expand_topology_read_us: u64,
     expand_destination_read_us: u64,
     expand_tag_resolve_us: u64,
+    expand_handle_setup_us: u64,
+    expand_handle_visit_us: u64,
+    expand_handle_aggregate_us: u64,
     expand_handle_traverse_us: u64,
     expand_key_resolve_us: u64,
     expand_weight_us: u64,
+    expand_seed_us: u64,
+    expand_typed_clone_us: u64,
+    expand_guard_us: u64,
+    expand_step_us: u64,
+    partition_open_us: u64,
+    partition_advance_us: u64,
+    partition_send_us: u64,
+    partition_close_us: u64,
     expand_view_us: u64,
     expand_output_us: u64,
     expand_parent_batches: u64,
@@ -1200,9 +1212,20 @@ fn cmd_run(args: &[String]) {
                 scan_decode_us: explain_metric(&explain_text, "scan_decode_us").unwrap_or(0),
                 scan_assemble_us: explain_metric(&explain_text, "scan_assemble_us").unwrap_or(0),
                 scan_predicate_us: explain_metric(&explain_text, "scan_predicate_us").unwrap_or(0),
+                scan_chunk_build_us: explain_metric(&explain_text, "scan_chunk_build_us")
+                    .unwrap_or(0),
                 expand_read_us: explain_metric(&explain_text, "expand_read_us").unwrap_or(0),
                 expand_topology_read_us: explain_metric(&explain_text, "expand_topology_read_us")
                     .unwrap_or(0),
+                expand_handle_setup_us: explain_metric(&explain_text, "expand_handle_setup_us")
+                    .unwrap_or(0),
+                expand_handle_visit_us: explain_metric(&explain_text, "expand_handle_visit_us")
+                    .unwrap_or(0),
+                expand_handle_aggregate_us: explain_metric(
+                    &explain_text,
+                    "expand_handle_aggregate_us",
+                )
+                .unwrap_or(0),
                 expand_handle_traverse_us: explain_metric(
                     &explain_text,
                     "expand_handle_traverse_us",
@@ -1211,6 +1234,17 @@ fn cmd_run(args: &[String]) {
                 expand_key_resolve_us: explain_metric(&explain_text, "expand_key_resolve_us")
                     .unwrap_or(0),
                 expand_weight_us: explain_metric(&explain_text, "expand_weight_us").unwrap_or(0),
+                expand_seed_us: explain_metric(&explain_text, "expand_seed_us").unwrap_or(0),
+                expand_typed_clone_us: explain_metric(&explain_text, "expand_typed_clone_us")
+                    .unwrap_or(0),
+                expand_guard_us: explain_metric(&explain_text, "expand_guard_us").unwrap_or(0),
+                expand_step_us: explain_metric(&explain_text, "expand_step_us").unwrap_or(0),
+                partition_open_us: explain_metric(&explain_text, "partition_open_us").unwrap_or(0),
+                partition_advance_us: explain_metric(&explain_text, "partition_advance_us")
+                    .unwrap_or(0),
+                partition_send_us: explain_metric(&explain_text, "partition_send_us").unwrap_or(0),
+                partition_close_us: explain_metric(&explain_text, "partition_close_us")
+                    .unwrap_or(0),
                 dangling_exist_skips: explain_metric(&explain_text, "dangling_exist_skips")
                     .unwrap_or(0),
                 frontier_first_hop_us: explain_metric(&explain_text, "frontier_first_hop_us")
@@ -1371,6 +1405,11 @@ fn patch_resource_result(
         "scan_predicate_us",
         diagnostics.scan_predicate_us,
     );
+    set_json_u64(
+        &mut text,
+        "scan_chunk_build_us",
+        diagnostics.scan_chunk_build_us,
+    );
     set_json_u64(&mut text, "expand_read_us", diagnostics.expand_read_us);
     set_json_u64(
         &mut text,
@@ -1384,6 +1423,21 @@ fn patch_resource_result(
     );
     set_json_u64(
         &mut text,
+        "expand_handle_setup_us",
+        diagnostics.expand_handle_setup_us,
+    );
+    set_json_u64(
+        &mut text,
+        "expand_handle_visit_us",
+        diagnostics.expand_handle_visit_us,
+    );
+    set_json_u64(
+        &mut text,
+        "expand_handle_aggregate_us",
+        diagnostics.expand_handle_aggregate_us,
+    );
+    set_json_u64(
+        &mut text,
         "expand_handle_traverse_us",
         diagnostics.expand_handle_traverse_us,
     );
@@ -1393,6 +1447,34 @@ fn patch_resource_result(
         diagnostics.expand_key_resolve_us,
     );
     set_json_u64(&mut text, "expand_weight_us", diagnostics.expand_weight_us);
+    set_json_u64(&mut text, "expand_seed_us", diagnostics.expand_seed_us);
+    set_json_u64(
+        &mut text,
+        "expand_typed_clone_us",
+        diagnostics.expand_typed_clone_us,
+    );
+    set_json_u64(&mut text, "expand_guard_us", diagnostics.expand_guard_us);
+    set_json_u64(&mut text, "expand_step_us", diagnostics.expand_step_us);
+    set_json_u64(
+        &mut text,
+        "partition_open_us",
+        diagnostics.partition_open_us,
+    );
+    set_json_u64(
+        &mut text,
+        "partition_advance_us",
+        diagnostics.partition_advance_us,
+    );
+    set_json_u64(
+        &mut text,
+        "partition_send_us",
+        diagnostics.partition_send_us,
+    );
+    set_json_u64(
+        &mut text,
+        "partition_close_us",
+        diagnostics.partition_close_us,
+    );
     set_json_u64(
         &mut text,
         "expand_tag_resolve_us",
@@ -1680,13 +1762,25 @@ fn write_run_result(
     json.push_str("  \"scan_decode_us\": 0,\n");
     json.push_str("  \"scan_assemble_us\": 0,\n");
     json.push_str("  \"scan_predicate_us\": 0,\n");
+    json.push_str("  \"scan_chunk_build_us\": 0,\n");
     json.push_str("  \"expand_read_us\": 0,\n");
     json.push_str("  \"expand_topology_read_us\": 0,\n");
     json.push_str("  \"expand_destination_read_us\": 0,\n");
     json.push_str("  \"expand_tag_resolve_us\": 0,\n");
+    json.push_str("  \"expand_handle_setup_us\": 0,\n");
+    json.push_str("  \"expand_handle_visit_us\": 0,\n");
+    json.push_str("  \"expand_handle_aggregate_us\": 0,\n");
     json.push_str("  \"expand_handle_traverse_us\": 0,\n");
     json.push_str("  \"expand_key_resolve_us\": 0,\n");
     json.push_str("  \"expand_weight_us\": 0,\n");
+    json.push_str("  \"expand_seed_us\": 0,\n");
+    json.push_str("  \"expand_typed_clone_us\": 0,\n");
+    json.push_str("  \"expand_guard_us\": 0,\n");
+    json.push_str("  \"expand_step_us\": 0,\n");
+    json.push_str("  \"partition_open_us\": 0,\n");
+    json.push_str("  \"partition_advance_us\": 0,\n");
+    json.push_str("  \"partition_send_us\": 0,\n");
+    json.push_str("  \"partition_close_us\": 0,\n");
     json.push_str("  \"expand_view_us\": 0,\n");
     json.push_str("  \"expand_output_us\": 0,\n");
     json.push_str("  \"expand_parent_batches\": 0,\n");

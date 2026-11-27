@@ -455,6 +455,7 @@ fn next_column_chunk(
     if batch.is_empty() {
         return Ok(None);
     }
+    let build_started = std::time::Instant::now();
     let chunk = build_column_chunk(
         &op.runtime,
         &op.output_layout,
@@ -463,6 +464,11 @@ fn next_column_chunk(
         identity_only,
         skip_rows,
     )?;
+    if let Some(runtime) = op.runtime.as_ref() {
+        runtime
+            .columnar_stats()
+            .record_scan_chunk_build_us(build_started.elapsed().as_micros() as u64);
+    }
     *cursor = Some(cur);
     Ok(Some(chunk))
 }

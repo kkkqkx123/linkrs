@@ -349,6 +349,31 @@ fn main() {
                 children,
                 first.handles.len(),
             );
+            let mut setup_samples = Vec::with_capacity(ITERATIONS);
+            let mut visit_samples = Vec::with_capacity(ITERATIONS);
+            let mut aggregate_samples = Vec::with_capacity(ITERATIONS);
+            for _ in 0..ITERATIONS {
+                let split = storage
+                    .get_packed_handle_counts_batch(
+                        SPACE,
+                        &parents,
+                        None,
+                        EdgeDirection::Out,
+                        &edge_types,
+                        &schema_filtered,
+                    )
+                    .expect("handle-count read")
+                    .expect("native handle counts");
+                setup_samples.push(split.setup_us as u128);
+                visit_samples.push(split.traverse_us as u128);
+                aggregate_samples.push(split.aggregate_us as u128);
+            }
+            println!(
+                "  split: setup={}us visit={}us aggregate={}us",
+                median_us(&setup_samples),
+                median_us(&visit_samples),
+                median_us(&aggregate_samples),
+            );
         }
     }
 

@@ -695,6 +695,7 @@ pub(crate) fn packed_handle_counts_batch(
     {
         return Ok(None);
     }
+    let setup_started = std::time::Instant::now();
     let owned_schema = if schema.matches(space, ctx.layout_version()) {
         None
     } else {
@@ -745,6 +746,8 @@ pub(crate) fn packed_handle_counts_batch(
         }
         staged.push(((label as u64) << 32) | hot.endpoint as u64);
     };
+    let visit_started = std::time::Instant::now();
+    let setup_us = visit_started.duration_since(setup_started).as_micros() as u64;
     if outward {
         ctx.visit_out_nbrs_by_internal(
             entry.edge_label,
@@ -765,10 +768,12 @@ pub(crate) fn packed_handle_counts_batch(
         );
     }
     drop(aggregate);
+    let traverse_us = visit_started.elapsed().as_micros() as u64;
     if foreign_label {
         return Ok(None);
     }
 
+    let aggregate_started = std::time::Instant::now();
     let mut result = PackedHandleCounts {
         parents: parents.to_vec(),
         ..PackedHandleCounts::default()
@@ -787,6 +792,9 @@ pub(crate) fn packed_handle_counts_batch(
         result.counts.push(1);
         previous = Some(key);
     }
+    result.setup_us = setup_us;
+    result.traverse_us = traverse_us;
+    result.aggregate_us = aggregate_started.elapsed().as_micros() as u64;
     Ok(Some(result))
 }
 

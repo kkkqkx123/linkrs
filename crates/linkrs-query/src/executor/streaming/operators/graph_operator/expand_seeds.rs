@@ -120,11 +120,13 @@ pub(super) fn lightweight_seed_row(row: &[Value], src_slot: usize, vid: VertexId
 
 /// Parse seeds from both row and rowless inputs. Returns the seed ids, the
 /// materialized seed rows for row outputs, and the absolute input positions
-/// for typed gathering in rowless outputs.
+/// for typed gathering in rowless outputs. Consumers served entirely by
+/// typed columns can skip row materialization.
 pub(super) fn parse_seeds(
     chunk: &DataChunk,
     seed_slot: usize,
     src_vids: &[Value],
+    materialize_rows: bool,
 ) -> (Vec<VertexId>, Vec<Vec<Value>>, Vec<usize>) {
     let mut vids = Vec::new();
     let mut rows = Vec::new();
@@ -134,7 +136,9 @@ pub(super) fn parse_seeds(
         for (index, row) in visible_rows(chunk) {
             if let Some(vid) = seed_vid(identity, index, row, seed_slot) {
                 vids.push(vid);
-                rows.push(row.clone());
+                if materialize_rows {
+                    rows.push(row.clone());
+                }
                 positions.push(index);
             }
         }
@@ -154,15 +158,17 @@ pub(super) fn parse_seeds(
             };
             if let Some(vid) = vid_opt {
                 vids.push(vid);
-                let mut row = Vec::with_capacity(width);
-                for slot in 0..width {
-                    row.push(
-                        chunk
-                            .get_typed_by_slot(pos, slot)
-                            .unwrap_or(Value::Null(linkrs_core::NullType::Null)),
-                    );
+                if materialize_rows {
+                    let mut row = Vec::with_capacity(width);
+                    for slot in 0..width {
+                        row.push(
+                            chunk
+                                .get_typed_by_slot(pos, slot)
+                                .unwrap_or(Value::Null(linkrs_core::NullType::Null)),
+                        );
+                    }
+                    rows.push(row);
                 }
-                rows.push(row);
                 positions.push(pos);
             }
         }
@@ -171,7 +177,9 @@ pub(super) fn parse_seeds(
         for vid_val in src_vids {
             if let Ok(vid) = VertexId::try_from(vid_val) {
                 vids.push(vid);
-                rows.push(Vec::new());
+                if materialize_rows {
+                    rows.push(Vec::new());
+                }
                 positions.push(0);
             }
         }
@@ -259,6 +267,23 @@ mod tests {
             Some(2),
             "typed layout stays in lockstep with the rebuilt rows"
         );
+    }
+
+    #[test]
+    fn parse_seeds_can_skip_row_materialization() {
+        let layout = Arc::new(layout_of(&["vid"]));
+        let mut chunk = DataChunk::new_with_layout(Vec::new(), layout);
+        chunk.typed_columns = Some(vec![TypedColumn::VertexIdentity(vec![
+            VertexId::from_u32(7),
+            VertexId::from_u32(9),
+        ])]);
+        chunk.selection = Some(vec![1]);
+        let with_rows = parse_seeds(&chunk, 0, &[], true);
+        let without_rows = parse_seeds(&chunk, 0, &[], false);
+        assert_eq!(with_rows.0, without_rows.0);
+        assert_eq!(with_rows.2, without_rows.2);
+        assert_eq!(without_rows.1, Vec::<Vec<Value>>::new());
+        assert_eq!(with_rows.1.len(), 1);
     }
 
     #[test]

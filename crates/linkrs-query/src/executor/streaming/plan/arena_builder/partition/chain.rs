@@ -175,11 +175,18 @@ pub(super) fn build_partition_local_fragments(
             SourceSpec::StorageScanVertices {
                 identity_only,
                 handle_only,
+                skip_rows,
                 partition_range,
                 shard_slice,
                 ..
             } => {
                 *handle_only = *identity_only && seed_handle_only;
+                if *handle_only {
+                    // The packed identity proof certifies that the expand
+                    // consumes only the handle column and emits packed
+                    // output, so the scan's row view has no reader.
+                    *skip_rows = true;
+                }
                 match division {
                     ScanDivision::ByValueRange => *partition_range = Some(range.clone()),
                     ScanDivision::ByShardSlice => {

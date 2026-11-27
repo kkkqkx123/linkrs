@@ -173,6 +173,12 @@ pub struct PackedHandleCounts {
     pub parents: Vec<VertexId>,
     pub handles: Vec<(u32, LabelId)>,
     pub counts: Vec<u64>,
+    /// Snapshot, schema, handle and edge-table setup before the CSR walk.
+    pub setup_us: u64,
+    /// Visible CSR walk time, including the per-edge MVCC gate.
+    pub traverse_us: u64,
+    /// Endpoint ordering and multiplicity aggregation time.
+    pub aggregate_us: u64,
 }
 
 impl PackedHandleCounts {

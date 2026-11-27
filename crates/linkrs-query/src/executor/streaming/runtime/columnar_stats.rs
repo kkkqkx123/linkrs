@@ -151,6 +151,8 @@ pub struct ColumnarStats {
     pub scan_assemble_us: AtomicU64,
     /// Zone pruning and residual predicate filtering inside a scan batch read.
     pub scan_predicate_us: AtomicU64,
+    /// Query-side assembly of a storage column batch into a data chunk.
+    pub scan_chunk_build_us: AtomicU64,
     /// Wall-clock microseconds spent in columnar adjacency and destination reads.
     pub expand_read_us: AtomicU64,
     /// Packed adjacency read inside a columnar expand batch.
@@ -159,12 +161,34 @@ pub struct ColumnarStats {
     pub expand_destination_read_us: AtomicU64,
     /// Neighbor tag resolution before the destination read.
     pub expand_tag_resolve_us: AtomicU64,
-    /// Handle-level adjacency aggregation inside a count-only expand batch.
+    /// Snapshot and edge-table setup inside a handle-count storage read.
+    pub expand_handle_setup_us: AtomicU64,
+    /// Visible CSR walk inside a handle-count storage read.
+    pub expand_handle_visit_us: AtomicU64,
+    /// Endpoint ordering and aggregation inside a handle-count storage read.
+    pub expand_handle_aggregate_us: AtomicU64,
+    /// Query-side handle deduplication inside a count-only expand batch.
     pub expand_handle_traverse_us: AtomicU64,
     /// External key resolution for unique destination handles.
     pub expand_key_resolve_us: AtomicU64,
     /// Weight assembly after handle deduplication.
     pub expand_weight_us: AtomicU64,
+    /// Seed extraction and handle collection before an expand storage read.
+    pub expand_seed_us: AtomicU64,
+    /// Cloning the incoming typed columns at expand entry.
+    pub expand_typed_clone_us: AtomicU64,
+    /// Schema, TTL and dangling-proof checks around an expand storage read.
+    pub expand_guard_us: AtomicU64,
+    /// Whole expand step dispatch, including work outside the columnar helper.
+    pub expand_step_us: AtomicU64,
+    /// Partition pipeline open time in parallel workers.
+    pub partition_open_us: AtomicU64,
+    /// Partition operator advance time in parallel workers.
+    pub partition_advance_us: AtomicU64,
+    /// Partition output queue send time in parallel workers.
+    pub partition_send_us: AtomicU64,
+    /// Partition pipeline close time in parallel workers.
+    pub partition_close_us: AtomicU64,
     /// Destination deduplication, existence view and edge-order expansion.
     pub expand_view_us: AtomicU64,
     /// Typed or row output assembly after existence filtering.
@@ -240,13 +264,25 @@ impl Default for ColumnarStats {
             scan_decode_us: AtomicU64::new(0),
             scan_assemble_us: AtomicU64::new(0),
             scan_predicate_us: AtomicU64::new(0),
+            scan_chunk_build_us: AtomicU64::new(0),
             expand_read_us: AtomicU64::new(0),
             expand_topology_read_us: AtomicU64::new(0),
             expand_destination_read_us: AtomicU64::new(0),
             expand_tag_resolve_us: AtomicU64::new(0),
+            expand_handle_setup_us: AtomicU64::new(0),
+            expand_handle_visit_us: AtomicU64::new(0),
+            expand_handle_aggregate_us: AtomicU64::new(0),
             expand_handle_traverse_us: AtomicU64::new(0),
             expand_key_resolve_us: AtomicU64::new(0),
             expand_weight_us: AtomicU64::new(0),
+            expand_seed_us: AtomicU64::new(0),
+            expand_typed_clone_us: AtomicU64::new(0),
+            expand_guard_us: AtomicU64::new(0),
+            expand_step_us: AtomicU64::new(0),
+            partition_open_us: AtomicU64::new(0),
+            partition_advance_us: AtomicU64::new(0),
+            partition_send_us: AtomicU64::new(0),
+            partition_close_us: AtomicU64::new(0),
             expand_view_us: AtomicU64::new(0),
             expand_output_us: AtomicU64::new(0),
             expand_parent_batches: AtomicU64::new(0),
@@ -346,6 +382,12 @@ impl ColumnarStats {
             .fetch_add(predicate_us, Ordering::Relaxed);
     }
 
+    /// Add query-side column batch assembly time for one scan chunk.
+    pub fn record_scan_chunk_build_us(&self, micros: u64) {
+        self.scan_chunk_build_us
+            .fetch_add(micros, Ordering::Relaxed);
+    }
+
     /// Add columnar expand read time for one batch.
     pub fn record_expand_read_us(&self, micros: u64) {
         self.expand_read_us.fetch_add(micros, Ordering::Relaxed);
@@ -369,6 +411,53 @@ impl ColumnarStats {
         self.expand_view_us.fetch_add(view_us, Ordering::Relaxed);
         self.expand_output_us
             .fetch_add(output_us, Ordering::Relaxed);
+    }
+
+    /// Record the disjoint phases of one worker partition execution.
+    pub fn record_partition_phases(
+        &self,
+        open_us: u64,
+        advance_us: u64,
+        send_us: u64,
+        close_us: u64,
+    ) {
+        self.partition_open_us.fetch_add(open_us, Ordering::Relaxed);
+        self.partition_advance_us
+            .fetch_add(advance_us, Ordering::Relaxed);
+        self.partition_send_us.fetch_add(send_us, Ordering::Relaxed);
+        self.partition_close_us
+            .fetch_add(close_us, Ordering::Relaxed);
+    }
+
+    /// Add seed extraction time for one columnar expand batch.
+    pub fn record_expand_seed_us(&self, micros: u64) {
+        self.expand_seed_us.fetch_add(micros, Ordering::Relaxed);
+    }
+
+    /// Add typed column clone time for one columnar expand batch.
+    pub fn record_expand_typed_clone_us(&self, micros: u64) {
+        self.expand_typed_clone_us
+            .fetch_add(micros, Ordering::Relaxed);
+    }
+
+    /// Add catalog and dangling-proof guard time for one expand batch.
+    pub fn record_expand_guard_us(&self, micros: u64) {
+        self.expand_guard_us.fetch_add(micros, Ordering::Relaxed);
+    }
+
+    /// Add whole expand step dispatch time for one input chunk.
+    pub fn record_expand_step_us(&self, micros: u64) {
+        self.expand_step_us.fetch_add(micros, Ordering::Relaxed);
+    }
+
+    /// Record the disjoint storage-side phases of a handle-count read.
+    pub fn record_handle_visit_phases(&self, setup_us: u64, visit_us: u64, aggregate_us: u64) {
+        self.expand_handle_setup_us
+            .fetch_add(setup_us, Ordering::Relaxed);
+        self.expand_handle_visit_us
+            .fetch_add(visit_us, Ordering::Relaxed);
+        self.expand_handle_aggregate_us
+            .fetch_add(aggregate_us, Ordering::Relaxed);
     }
 
     /// Record the disjoint query-side phases of a handle-count expand.
@@ -566,13 +655,25 @@ pub struct ColumnarStatsSnapshot {
     pub scan_decode_us: u64,
     pub scan_assemble_us: u64,
     pub scan_predicate_us: u64,
+    pub scan_chunk_build_us: u64,
     pub expand_read_us: u64,
     pub expand_topology_read_us: u64,
     pub expand_destination_read_us: u64,
     pub expand_tag_resolve_us: u64,
+    pub expand_handle_setup_us: u64,
+    pub expand_handle_visit_us: u64,
+    pub expand_handle_aggregate_us: u64,
     pub expand_handle_traverse_us: u64,
     pub expand_key_resolve_us: u64,
     pub expand_weight_us: u64,
+    pub expand_seed_us: u64,
+    pub expand_typed_clone_us: u64,
+    pub expand_guard_us: u64,
+    pub expand_step_us: u64,
+    pub partition_open_us: u64,
+    pub partition_advance_us: u64,
+    pub partition_send_us: u64,
+    pub partition_close_us: u64,
     pub expand_view_us: u64,
     pub expand_output_us: u64,
     pub expand_parent_batches: u64,
@@ -626,13 +727,25 @@ impl ColumnarStatsSnapshot {
             scan_decode_us: stats.scan_decode_us.load(Ordering::Relaxed),
             scan_assemble_us: stats.scan_assemble_us.load(Ordering::Relaxed),
             scan_predicate_us: stats.scan_predicate_us.load(Ordering::Relaxed),
+            scan_chunk_build_us: stats.scan_chunk_build_us.load(Ordering::Relaxed),
             expand_read_us: stats.expand_read_us.load(Ordering::Relaxed),
             expand_topology_read_us: stats.expand_topology_read_us.load(Ordering::Relaxed),
             expand_destination_read_us: stats.expand_destination_read_us.load(Ordering::Relaxed),
             expand_tag_resolve_us: stats.expand_tag_resolve_us.load(Ordering::Relaxed),
+            expand_handle_setup_us: stats.expand_handle_setup_us.load(Ordering::Relaxed),
+            expand_handle_visit_us: stats.expand_handle_visit_us.load(Ordering::Relaxed),
+            expand_handle_aggregate_us: stats.expand_handle_aggregate_us.load(Ordering::Relaxed),
             expand_handle_traverse_us: stats.expand_handle_traverse_us.load(Ordering::Relaxed),
             expand_key_resolve_us: stats.expand_key_resolve_us.load(Ordering::Relaxed),
             expand_weight_us: stats.expand_weight_us.load(Ordering::Relaxed),
+            expand_seed_us: stats.expand_seed_us.load(Ordering::Relaxed),
+            expand_typed_clone_us: stats.expand_typed_clone_us.load(Ordering::Relaxed),
+            expand_guard_us: stats.expand_guard_us.load(Ordering::Relaxed),
+            expand_step_us: stats.expand_step_us.load(Ordering::Relaxed),
+            partition_open_us: stats.partition_open_us.load(Ordering::Relaxed),
+            partition_advance_us: stats.partition_advance_us.load(Ordering::Relaxed),
+            partition_send_us: stats.partition_send_us.load(Ordering::Relaxed),
+            partition_close_us: stats.partition_close_us.load(Ordering::Relaxed),
             expand_view_us: stats.expand_view_us.load(Ordering::Relaxed),
             expand_output_us: stats.expand_output_us.load(Ordering::Relaxed),
             expand_parent_batches: stats.expand_parent_batches.load(Ordering::Relaxed),
@@ -702,7 +815,7 @@ impl ColumnarStatsSnapshot {
     /// Human-readable one-line summary for PROFILE output.
     pub fn summary(&self) -> String {
         format!(
-            "columnar_hits={}, misses={}, hit_rate={:.3}, typed_hit_rate={:.3}, b_path_hits={}, wasted_builds={}, typed_group_hits={}, typed_group_fallbacks={}, scan_read_us={}, scan_enumerate_us={}, scan_table_load_us={}, scan_window_filter_us={}, scan_merge_us={}, scan_visibility_us={}, scan_decode_us={}, scan_assemble_us={}, scan_predicate_us={}, expand_read_us={}, expand_topology_read_us={}, expand_destination_read_us={}, expand_tag_resolve_us={}, expand_handle_traverse_us={}, expand_key_resolve_us={}, expand_weight_us={}, expand_view_us={}, expand_output_us={}, expand_parent_batches={}, expand_parents={}, expand_events={}, expand_unique_destinations={}, expand_missing_destinations={}, dangling_exist_skips={}, frontier_first_hop_us={}, frontier_sort_us={}, frontier_resolve_us={}, frontier_tail_us={}, expand_output_rows={}, ordered_existence_candidates={}, ordered_existence_matches={}, ordered_existence_output_rows={}, ordered_existence_drift={}, ordered_existence_cursor_us={}, ordered_existence_gate_us={}, ordered_existence_open_us={}, ordered_existence_opens={}, ordered_existence_contract_violations={}, ordered_existence_contract_discarded={}, selection_attached={}, selection_materialized={}, selection_pushed={}, column_block_hits={}, multiplicity_expanded={}, spill_rows={}, spill_bytes={}, spill_runs={}, batch_outlets={}",
+            "columnar_hits={}, misses={}, hit_rate={:.3}, typed_hit_rate={:.3}, b_path_hits={}, wasted_builds={}, typed_group_hits={}, typed_group_fallbacks={}, scan_read_us={}, scan_enumerate_us={}, scan_table_load_us={}, scan_window_filter_us={}, scan_merge_us={}, scan_visibility_us={}, scan_decode_us={}, scan_assemble_us={}, scan_predicate_us={}, scan_chunk_build_us={}, expand_read_us={}, expand_topology_read_us={}, expand_destination_read_us={}, expand_tag_resolve_us={}, expand_handle_setup_us={}, expand_handle_visit_us={}, expand_handle_aggregate_us={}, expand_handle_traverse_us={}, expand_key_resolve_us={}, expand_weight_us={}, expand_seed_us={}, expand_typed_clone_us={}, expand_guard_us={}, expand_step_us={}, partition_open_us={}, partition_advance_us={}, partition_send_us={}, partition_close_us={}, expand_view_us={}, expand_output_us={}, expand_parent_batches={}, expand_parents={}, expand_events={}, expand_unique_destinations={}, expand_missing_destinations={}, dangling_exist_skips={}, frontier_first_hop_us={}, frontier_sort_us={}, frontier_resolve_us={}, frontier_tail_us={}, expand_output_rows={}, ordered_existence_candidates={}, ordered_existence_matches={}, ordered_existence_output_rows={}, ordered_existence_drift={}, ordered_existence_cursor_us={}, ordered_existence_gate_us={}, ordered_existence_open_us={}, ordered_existence_opens={}, ordered_existence_contract_violations={}, ordered_existence_contract_discarded={}, selection_attached={}, selection_materialized={}, selection_pushed={}, column_block_hits={}, multiplicity_expanded={}, spill_rows={}, spill_bytes={}, spill_runs={}, batch_outlets={}",
             self.columnar_hits,
             self.columnar_misses,
             self.hit_rate(),
@@ -720,13 +833,25 @@ impl ColumnarStatsSnapshot {
             self.scan_decode_us,
             self.scan_assemble_us,
             self.scan_predicate_us,
+            self.scan_chunk_build_us,
             self.expand_read_us,
             self.expand_topology_read_us,
             self.expand_destination_read_us,
             self.expand_tag_resolve_us,
+            self.expand_handle_setup_us,
+            self.expand_handle_visit_us,
+            self.expand_handle_aggregate_us,
             self.expand_handle_traverse_us,
             self.expand_key_resolve_us,
             self.expand_weight_us,
+            self.expand_seed_us,
+            self.expand_typed_clone_us,
+            self.expand_guard_us,
+            self.expand_step_us,
+            self.partition_open_us,
+            self.partition_advance_us,
+            self.partition_send_us,
+            self.partition_close_us,
             self.expand_view_us,
             self.expand_output_us,
             self.expand_parent_batches,

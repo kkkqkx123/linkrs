@@ -691,21 +691,38 @@ pub(super) fn expand_single_step_columnar(
         ctx.skip_rows && edge_bypass_opt.is_some() && dst_bypass_opt.is_some() && !conflict;
     let edge_bypass = edge_bypass_opt.clone().unwrap_or_default();
     let dst_bypass = dst_bypass_opt.clone().unwrap_or_default();
+    let typed_complete = chunk
+        .typed_columns
+        .as_ref()
+        .is_some_and(|cols| cols.len() >= seed_width);
+    let clone_started = std::time::Instant::now();
     let input_typed = chunk.typed_columns.clone();
-    let (seed_vids, seed_rows, seed_positions) = parse_seeds(chunk, seed_slot, &src_vids);
+    let stats: Option<std::sync::Arc<ColumnarStats>> =
+        ctx.runtime.as_ref().map(|runtime| runtime.columnar_stats());
+    if let Some(stats) = &stats {
+        stats.record_expand_typed_clone_us(clone_started.elapsed().as_micros() as u64);
+    }
+    let seed_started = std::time::Instant::now();
+    let (seed_vids, seed_rows, seed_positions) =
+        parse_seeds(chunk, seed_slot, &src_vids, !rowless || !typed_complete);
+    if let Some(stats) = &stats {
+        stats.record_expand_seed_us(seed_started.elapsed().as_micros() as u64);
+    }
     if seed_vids.is_empty() {
         return Ok(ColumnarOutcome::Empty);
     }
-    let stats: Option<std::sync::Arc<ColumnarStats>> =
-        ctx.runtime.as_ref().map(|runtime| runtime.columnar_stats());
     let projection = edge_projection(ctx.edge_required_props.as_deref());
     let projection_ref = projection.as_deref();
     let edge_empty = matches!(ctx.edge_required_props.as_ref(), Some(v) if v.is_empty());
+    let handle_started = std::time::Instant::now();
     let seed_handles = if edge_empty && ctx.edge_required_props.is_some() {
         identity_seed_handles(chunk, seed_slot, &seed_positions)
     } else {
         Vec::new()
     };
+    if let Some(stats) = &stats {
+        stats.record_expand_seed_us(handle_started.elapsed().as_micros() as u64);
+    }
     let dst_empty = matches!(ctx.dst_required_props.as_ref(), Some(v) if v.is_empty());
 
     struct PendingEdge {
@@ -717,6 +734,7 @@ pub(super) fn expand_single_step_columnar(
     let mut parent_of_child: Vec<usize> = Vec::new();
     let mut all_dst: Vec<VertexId> = Vec::new();
     let mut packed_edges: Option<PackedEdgeTopology> = None;
+    let guard_started = std::time::Instant::now();
     if edge_empty && ctx.edge_required_props.is_some() && edge_bypass.is_empty() {
         let topology_schema = ctx.topology_schema(reader)?;
         let count_edge_ttl_active = reader.edge_types_ttl_active(space_name, edge_types)?;
@@ -736,6 +754,9 @@ pub(super) fn expand_single_step_columnar(
                 && !matches!(direction, linkrs_core::EdgeDirection::Both)
                 && !count_edge_ttl_active
             {
+                if let Some(stats) = &stats {
+                    stats.record_expand_guard_us(guard_started.elapsed().as_micros() as u64);
+                }
                 let read_started = std::time::Instant::now();
                 let counts = reader.get_packed_handle_counts_batch(
                     space_name,
@@ -751,16 +772,27 @@ pub(super) fn expand_single_step_columnar(
                     stats.record_expand_phases(read_us, 0, 0, 0, 0);
                 }
                 if let Some(counts) = counts? {
+                    if let Some(stats) = &stats {
+                        stats.record_handle_visit_phases(
+                            counts.setup_us,
+                            counts.traverse_us,
+                            counts.aggregate_us,
+                        );
+                    }
                     if counts.total_edges() == 0 && ctx.include_empty_paths {
                         return Ok(ColumnarOutcome::Declined);
                     }
                     let edge_type_names = [Arc::from(ctx.edge_types[0].as_str())];
+                    let proof_started = std::time::Instant::now();
                     let proven_present = identity_presence_proven(
                         reader,
                         space_name,
                         &planned_tag,
                         &edge_type_names,
                     );
+                    if let Some(stats) = &stats {
+                        stats.record_expand_guard_us(proof_started.elapsed().as_micros() as u64);
+                    }
                     if let Some(outcome) = expand_handle_counts_identity(
                         reader,
                         space_name,

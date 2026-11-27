@@ -272,6 +272,7 @@ pub(super) fn handle_all(
                 topology_schema: None,
                 runtime: count_runtime.clone(),
             };
+            let step_started = std::time::Instant::now();
             let expand_result = if let Some(limits) = step_limits.clone() {
                 let var_eligible = !limits.is_empty()
                     && src_vids.is_empty()
@@ -389,6 +390,11 @@ pub(super) fn handle_all(
                     &mut ctx,
                 )?
             };
+            if let Some(runtime) = &count_runtime {
+                runtime
+                    .columnar_stats()
+                    .record_expand_step_us(step_started.elapsed().as_micros() as u64);
+            }
             if let Some(output) = expand_result {
                 return Ok(Some(output));
             }

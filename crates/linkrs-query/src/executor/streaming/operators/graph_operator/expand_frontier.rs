@@ -90,7 +90,7 @@ pub(super) fn expand_multi_hop_frontier(
     let edge_bypass = edge_bypass_opt.clone().unwrap_or_default();
     let dst_bypass = dst_bypass_opt.clone().unwrap_or_default();
     let input_typed = chunk.typed_columns.clone();
-    let (seed_vids, seed_rows, seed_positions) = parse_seeds(chunk, seed_slot, &src_vids);
+    let (seed_vids, seed_rows, seed_positions) = parse_seeds(chunk, seed_slot, &src_vids, true);
     if seed_vids.is_empty() {
         return Ok(ColumnarOutcome::Empty);
     }
@@ -373,7 +373,7 @@ pub(super) fn expand_variable_frontier(
     let edge_bypass = edge_bypass_opt.clone().unwrap_or_default();
     let dst_bypass = dst_bypass_opt.clone().unwrap_or_default();
     let input_typed = chunk.typed_columns.clone();
-    let (seed_vids, seed_rows, seed_positions) = parse_seeds(chunk, seed_slot, &src_vids);
+    let (seed_vids, seed_rows, seed_positions) = parse_seeds(chunk, seed_slot, &src_vids, true);
     if seed_vids.is_empty() {
         return Ok(ColumnarOutcome::Empty);
     }
