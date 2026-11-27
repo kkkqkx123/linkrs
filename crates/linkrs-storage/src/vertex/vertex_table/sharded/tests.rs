@@ -1043,3 +1043,25 @@ fn test_dry_run_refuses_pending_schema_change() {
         .expect("dry run succeeds after abort");
     assert_eq!(preview.live_rows, 1);
 }
+
+#[test]
+fn merge_sorted_pairs_matches_global_sort() {
+    use linkrs_core::types::VertexId;
+    // Ascending per-shard runs with interleaved global ids, plus empties.
+    let runs: Vec<Vec<(u32, VertexId)>> = vec![
+        vec![],
+        (0..100u32)
+            .step_by(3)
+            .map(|id| (id, VertexId::try_from_int64(id as i64).unwrap()))
+            .collect(),
+        (0..100u32)
+            .filter(|id| id % 3 != 0)
+            .map(|id| (id, VertexId::try_from_int64(id as i64).unwrap()))
+            .collect(),
+        vec![],
+    ];
+    let mut sorted: Vec<(u32, VertexId)> = runs.iter().flatten().copied().collect();
+    sorted.sort_unstable_by_key(|&(id, _)| id);
+    assert_eq!(ShardedVertexTable::merge_sorted_pairs(runs), sorted);
+    assert!(ShardedVertexTable::merge_sorted_pairs(Vec::new()).is_empty());
+}

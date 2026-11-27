@@ -117,11 +117,23 @@ impl Visibility {
 pub struct PendingGate<'a> {
     manager: &'a VersionManager,
     own_write: Option<Timestamp>,
+    /// Live read frontier captured at construction. The frontier only moves
+    /// forward, so a captured (possibly stale, lower) value keeps every
+    /// verdict: stamps at or below it are trusted exactly as with a live
+    /// read, and stamps above it take the slot-state path, which resolves
+    /// committed-or-vanished stamps to the same trusted verdict the live
+    /// fast path would give. Capturing once per gate instead of loading per
+    /// stamp removes one atomic load from every row-visibility probe.
+    frontier: Timestamp,
 }
 
 impl<'a> PendingGate<'a> {
     pub fn new(manager: &'a VersionManager, own_write: Option<Timestamp>) -> Self {
-        Self { manager, own_write }
+        Self {
+            manager,
+            own_write,
+            frontier: manager.read_timestamp(),
+        }
     }
 
     /// Whether `stamp` names a foreign uncommitted write at `snapshot`.
@@ -133,7 +145,7 @@ impl<'a> PendingGate<'a> {
         if stamp > snapshot {
             return false;
         }
-        if stamp <= self.manager.read_timestamp() {
+        if stamp <= self.frontier {
             return false;
         }
         if Some(stamp) == self.own_write {
@@ -150,7 +162,7 @@ impl<'a> PendingGate<'a> {
         if create_ts > snapshot {
             return false;
         }
-        if create_ts <= self.manager.read_timestamp() {
+        if create_ts <= self.frontier {
             return true;
         }
         if Some(create_ts) == self.own_write {
@@ -177,7 +189,7 @@ impl<'a> PendingGate<'a> {
         if snapshot < delete_ts {
             return None;
         }
-        if delete_ts <= self.manager.read_timestamp() {
+        if delete_ts <= self.frontier {
             return Some(delete_ts);
         }
         if Some(delete_ts) == self.own_write {

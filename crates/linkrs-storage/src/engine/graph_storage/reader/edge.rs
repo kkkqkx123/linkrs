@@ -1088,6 +1088,7 @@ pub(crate) fn frontier_degree_batch(
     let mut offsets = vec![0usize; src_ids.len() + 1];
     let mut raw_endpoints = Vec::new();
     let mut foreign_label = false;
+    let first_hop_start = std::time::Instant::now();
     if direction == EdgeDirection::Out {
         ctx.visit_out_nbrs_batched(
             edge_label,
@@ -1115,6 +1116,7 @@ pub(crate) fn frontier_degree_batch(
             },
         );
     }
+    let first_hop_us = first_hop_start.elapsed().as_micros() as u64;
     if foreign_label {
         return portable_frontier_degrees(ctx, space, src_ids, direction, edge_types);
     }
@@ -1133,6 +1135,7 @@ pub(crate) fn frontier_degree_batch(
         && ctx.is_edge_type_dangling_free(space, edge_type_name);
     let mut visible_offsets = Vec::with_capacity(src_ids.len() + 1);
     let mut endpoints = Vec::with_capacity(raw_endpoints.len());
+    let resolve_start = std::time::Instant::now();
     if skip_visibility {
         endpoints.extend_from_slice(&raw_endpoints);
         visible_offsets.extend_from_slice(&offsets);
@@ -1159,9 +1162,11 @@ pub(crate) fn frontier_degree_batch(
             record_vertex_reads(ctx, &read_vids);
         }
     }
+    let resolve_us = resolve_start.elapsed().as_micros() as u64;
     // Read tail degrees in internal-endpoint order so scattered CSR head
     // reads become sequential runs. The per-seed sums are order-independent,
     // so the sorted reads scatter back into the seed-indexed totals.
+    let sort_start = std::time::Instant::now();
     let mut order: Vec<(u32, usize)> = Vec::with_capacity(endpoints.len());
     for (seed_index, pair) in visible_offsets.windows(2).enumerate() {
         for position in pair[0]..pair[1] {
@@ -1170,19 +1175,47 @@ pub(crate) fn frontier_degree_batch(
     }
     order.sort_unstable_by_key(|&(endpoint, _)| endpoint);
     let sorted: Vec<u32> = order.iter().map(|&(endpoint, _)| endpoint).collect();
-    let sorted_degrees = if direction == EdgeDirection::Out {
-        ctx.count_out_nbrs_by_internal(edge_label, neighbor_label, &sorted, ts)
+    let sort_us = sort_start.elapsed().as_micros() as u64;
+    let tail_start = std::time::Instant::now();
+    // The endpoint-sorted order places repeat visits of one endpoint (one
+    // per seed sharing it) adjacently. Read each distinct endpoint once and
+    // scatter the same degree to every seed pair: identical sums with fewer
+    // CSR head reads, and no extra allocation since adjacency comes free
+    // from the sort above.
+    let mut unique: Vec<u32> = Vec::with_capacity(sorted.len());
+    let mut last_endpoint: Option<u32> = None;
+    for endpoint in &sorted {
+        if last_endpoint != Some(*endpoint) {
+            unique.push(*endpoint);
+            last_endpoint = Some(*endpoint);
+        }
+    }
+    let unique_degrees = if direction == EdgeDirection::Out {
+        ctx.count_out_nbrs_by_internal(edge_label, neighbor_label, &unique, ts)
     } else {
-        ctx.count_in_nbrs_by_internal(edge_label, neighbor_label, &sorted, ts)
+        ctx.count_in_nbrs_by_internal(edge_label, neighbor_label, &unique, ts)
     };
     let mut two_hop = vec![0usize; src_ids.len()];
-    for ((_, seed_index), degree) in order.iter().zip(sorted_degrees.iter()) {
-        two_hop[*seed_index] += *degree;
+    let mut cursor = 0usize;
+    let mut last_scattered: Option<u32> = None;
+    let mut current_degree = 0usize;
+    for &(endpoint, seed_index) in &order {
+        if last_scattered != Some(endpoint) {
+            current_degree = unique_degrees[cursor];
+            cursor += 1;
+            last_scattered = Some(endpoint);
+        }
+        two_hop[seed_index] += current_degree;
     }
+    let tail_us = tail_start.elapsed().as_micros() as u64;
     Ok(FrontierDegrees {
         direct,
         two_hop,
         dangling_skipped: skip_visibility,
+        first_hop_us,
+        sort_us,
+        resolve_us,
+        tail_us,
     })
 }
 
@@ -1220,6 +1253,10 @@ fn portable_frontier_degrees(
         direct,
         two_hop,
         dangling_skipped: false,
+        first_hop_us: 0,
+        sort_us: 0,
+        resolve_us: 0,
+        tail_us: 0,
     })
 }
 

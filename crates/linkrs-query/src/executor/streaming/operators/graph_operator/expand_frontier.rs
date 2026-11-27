@@ -676,14 +676,16 @@ pub(super) fn expand_count_only(
     if depths.contains(&1) && depths.contains(&2) {
         let degrees =
             reader.frontier_degree_batch(space_name, &seed_vids, direction, edge_types)?;
-        if degrees.dangling_skipped {
-            if let Some(stats) = ctx
-                .runtime
-                .as_ref()
-                .map(|runtime| runtime.columnar_stats())
-            {
+        if let Some(stats) = ctx.runtime.as_ref().map(|runtime| runtime.columnar_stats()) {
+            if degrees.dangling_skipped {
                 stats.record_dangling_exist_skip();
             }
+            stats.record_frontier_phases(
+                degrees.first_hop_us,
+                degrees.sort_us,
+                degrees.resolve_us,
+                degrees.tail_us,
+            );
         }
         total += degrees.direct.iter().map(|&d| d as i64).sum::<i64>();
         total += degrees.two_hop.iter().map(|&d| d as i64).sum::<i64>();
@@ -696,14 +698,16 @@ pub(super) fn expand_count_only(
         // first hop once, and the dangling-skip mark survives for EXPLAIN.
         let degrees =
             reader.frontier_degree_batch(space_name, &seed_vids, direction, edge_types)?;
-        if degrees.dangling_skipped {
-            if let Some(stats) = ctx
-                .runtime
-                .as_ref()
-                .map(|runtime| runtime.columnar_stats())
-            {
+        if let Some(stats) = ctx.runtime.as_ref().map(|runtime| runtime.columnar_stats()) {
+            if degrees.dangling_skipped {
                 stats.record_dangling_exist_skip();
             }
+            stats.record_frontier_phases(
+                degrees.first_hop_us,
+                degrees.sort_us,
+                degrees.resolve_us,
+                degrees.tail_us,
+            );
         }
         total += degrees.two_hop.iter().map(|&d| d as i64).sum::<i64>();
     }

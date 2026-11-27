@@ -306,7 +306,11 @@ impl ShardedVertexTable {
         slice: &crate::cursor::ShardSlice,
         universes: &[u32],
     ) -> Vec<u32> {
-        let mut ids = Vec::new();
+        // Per-shard runs are ascending by construction (the range walk is
+        // ordered and the shard encoding is monotonic in the local id), so
+        // a k-way merge keeps the ascending global-id order contract at
+        // O(n log S) instead of re-sorting at O(n log n).
+        let mut runs: Vec<Vec<u32>> = Vec::new();
         for (shard_idx, shard) in self.shards.iter().enumerate() {
             let Some(universe) = universes.get(shard_idx) else {
                 continue;
@@ -316,15 +320,15 @@ impl ShardedVertexTable {
                 continue;
             }
             let table = shard.read();
-            ids.extend(
+            runs.push(
                 table
                     .live_ids_in_range(chunk, guard)
                     .into_iter()
-                    .map(|local_id| self.encode_id(shard_idx, local_id)),
+                    .map(|local_id| self.encode_id(shard_idx, local_id))
+                    .collect(),
             );
         }
-        ids.sort_unstable();
-        ids
+        Self::merge_sorted_ids(runs)
     }
 
     /// Slice-restricted identity enumeration that resolves external ids while
@@ -338,7 +342,11 @@ impl ShardedVertexTable {
         universes: &[u32],
         timings: &mut ScanTimings,
     ) -> (Vec<u32>, Vec<VertexId>) {
-        let mut resolved: Vec<(u32, VertexId)> = Vec::new();
+        // Per-shard runs are ascending by construction (same argument as
+        // [`Self::live_ids_in_slice`]), so a k-way merge over the paired
+        // runs keeps the global-id order contract at O(n log S) instead of
+        // re-sorting at O(n log n).
+        let mut runs: Vec<Vec<(u32, VertexId)>> = Vec::new();
         for (shard_idx, shard) in self.shards.iter().enumerate() {
             let Some(universe) = universes.get(shard_idx) else {
                 continue;
@@ -352,17 +360,21 @@ impl ShardedVertexTable {
             let mut keys: Vec<Option<IdKey>> = Vec::new();
             let visibility_start = std::time::Instant::now();
             table.get_external_ids_raw(&locals, &mut keys);
+            let mut run: Vec<(u32, VertexId)> = Vec::new();
             for (local, key) in locals.into_iter().zip(keys) {
                 if let Some(vid) = key.and_then(vertex_id_of) {
-                    resolved.push((self.encode_id(shard_idx, local), vid));
+                    run.push((self.encode_id(shard_idx, local), vid));
                 }
             }
             record_elapsed(visibility_start, &mut timings.scan_visibility_us);
+            if !run.is_empty() {
+                runs.push(run);
+            }
         }
-        resolved.sort_unstable_by_key(|&(id, _)| id);
-        let mut ids = Vec::with_capacity(resolved.len());
-        let mut vids = Vec::with_capacity(resolved.len());
-        for (id, vid) in resolved {
+        let total: usize = runs.iter().map(|run| run.len()).sum();
+        let mut ids = Vec::with_capacity(total);
+        let mut vids = Vec::with_capacity(total);
+        for (id, vid) in Self::merge_sorted_pairs(runs) {
             ids.push(id);
             vids.push(vid);
         }
@@ -659,6 +671,33 @@ impl ShardedVertexTable {
         // Release per-shard buffers eagerly; the merged order is the only
         // retained allocation.
         runs.clear();
+        out
+    }
+
+    /// K-way heap merge of sorted `(global id, external id)` runs into
+    /// global id order. Same ordering contract as sorting the concatenated
+    /// runs; the per-shard runs arrive ascending so the merge is exact.
+    pub(super) fn merge_sorted_pairs(
+        runs: Vec<Vec<(u32, VertexId)>>,
+    ) -> Vec<(u32, VertexId)> {
+        use std::cmp::Reverse;
+        use std::collections::BinaryHeap;
+        let total: usize = runs.iter().map(|run| run.len()).sum();
+        let mut heap: BinaryHeap<(Reverse<u32>, usize, usize)> = BinaryHeap::new();
+        for (run_idx, run) in runs.iter().enumerate() {
+            if let Some(&(first, _)) = run.first() {
+                heap.push((Reverse(first), run_idx, 0));
+            }
+        }
+        let mut out = Vec::with_capacity(total);
+        while let Some((Reverse(_), run_idx, pos)) = heap.pop() {
+            let (id, vid) = runs[run_idx][pos];
+            out.push((id, vid));
+            let next = pos + 1;
+            if next < runs[run_idx].len() {
+                heap.push((Reverse(runs[run_idx][next].0), run_idx, next));
+            }
+        }
         out
     }
 

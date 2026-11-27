@@ -170,6 +170,13 @@ pub struct FrontierDegrees {
     /// Whether the dangling-visibility resolution was skipped under a proven
     /// dangling-free token. Query layers surface this as a plan mark.
     pub dangling_skipped: bool,
+    /// Phase timings (microseconds) of the fused two-hop read: first-hop
+    /// topology visit, endpoint ordering, conditional external resolution,
+    /// tail-degree reads plus scatter. Portable fallbacks leave zeros.
+    pub first_hop_us: u64,
+    pub sort_us: u64,
+    pub resolve_us: u64,
+    pub tail_us: u64,
 }
 
 /// Portable existence gate built from topology-only edge reads and visible
@@ -651,6 +658,10 @@ pub trait StorageReader: Send + Sync + std::fmt::Debug {
             direct,
             two_hop,
             dangling_skipped: false,
+            first_hop_us: 0,
+            sort_us: 0,
+            resolve_us: 0,
+            tail_us: 0,
         })
     }
 

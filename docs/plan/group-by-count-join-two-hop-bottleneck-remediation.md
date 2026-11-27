@@ -63,3 +63,5 @@
 - 其六（计划复用）：已闭环。compiled memo 全命中，group_by 编译由约 2.4ms 降到约 0.05ms，join_two 由约 0.02ms 降到约 0.03ms 量级（原本已低）。
 
 生产默认对照（prove 开 / 关，v4 库）：group_by 22.58 / 23.52ms，distinct_limit（无序索引的旧路径）21.84 / 29.53ms，join_two 3.75 / 4.03ms，variable_path_count 5.47 / 5.68ms。相对资源对齐基线：group_by 26.41→22.58（对 Ladybug 2.77×），join_two 5.41→3.75（对 Ladybug 2.43×）。完成门（20ms、3ms）尚未同时达成：剩余主因是扫描可见性（约 16ms）与单跳拓扑读取（约 55ms），分区扫描与 CSR 区间读取是下一轮主线。
+
+后继（见 followup 设计文档实施 §4）：其四闭环后 join_two 门已关闭——前沿分段计数显示尾边读主导，重复端点去重读数使 tail 工作量 3592→443µs，join_two 达 2.96ms（安静）/ 1.49ms（高负载，工作量结构性下降），variable_path 同路径 5.47→1.92ms；group_by 最优 22.01ms，门仍差约 2ms，待安静窗口复核与扫描深水区工作。

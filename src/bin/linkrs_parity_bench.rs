@@ -137,6 +137,10 @@ struct QueryDiagnostics {
     expand_unique_destinations: u64,
     expand_missing_destinations: u64,
     dangling_exist_skips: u64,
+    frontier_first_hop_us: u64,
+    frontier_sort_us: u64,
+    frontier_resolve_us: u64,
+    frontier_tail_us: u64,
     expand_output_rows: u64,
     ordered_existence_candidates: u64,
     ordered_existence_matches: u64,
@@ -1190,6 +1194,14 @@ fn cmd_run(args: &[String]) {
                     .unwrap_or(0),
                 dangling_exist_skips: explain_metric(&explain_text, "dangling_exist_skips")
                     .unwrap_or(0),
+                frontier_first_hop_us: explain_metric(&explain_text, "frontier_first_hop_us")
+                    .unwrap_or(0),
+                frontier_sort_us: explain_metric(&explain_text, "frontier_sort_us")
+                    .unwrap_or(0),
+                frontier_resolve_us: explain_metric(&explain_text, "frontier_resolve_us")
+                    .unwrap_or(0),
+                frontier_tail_us: explain_metric(&explain_text, "frontier_tail_us")
+                    .unwrap_or(0),
                 expand_destination_read_us: explain_metric(
                     &explain_text,
                     "expand_destination_read_us",
@@ -1371,6 +1383,22 @@ fn patch_resource_result(
         "dangling_exist_skips",
         diagnostics.dangling_exist_skips,
     );
+    set_json_u64(
+        &mut text,
+        "frontier_first_hop_us",
+        diagnostics.frontier_first_hop_us,
+    );
+    set_json_u64(
+        &mut text,
+        "frontier_sort_us",
+        diagnostics.frontier_sort_us,
+    );
+    set_json_u64(
+        &mut text,
+        "frontier_resolve_us",
+        diagnostics.frontier_resolve_us,
+    );
+    set_json_u64(&mut text, "frontier_tail_us", diagnostics.frontier_tail_us);
     set_json_u64(
         &mut text,
         "expand_output_rows",
@@ -1622,6 +1650,10 @@ fn write_run_result(
     json.push_str("  \"expand_unique_destinations\": 0,\n");
     json.push_str("  \"expand_missing_destinations\": 0,\n");
     json.push_str("  \"dangling_exist_skips\": 0,\n");
+    json.push_str("  \"frontier_first_hop_us\": 0,\n");
+    json.push_str("  \"frontier_sort_us\": 0,\n");
+    json.push_str("  \"frontier_resolve_us\": 0,\n");
+    json.push_str("  \"frontier_tail_us\": 0,\n");
     json.push_str("  \"expand_output_rows\": 0,\n");
     json.push_str("  \"ordered_existence_candidates\": 0,\n");
     json.push_str("  \"ordered_existence_matches\": 0,\n");
