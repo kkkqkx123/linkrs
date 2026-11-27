@@ -1048,7 +1048,7 @@ fn test_dry_run_refuses_pending_schema_change() {
 fn merge_sorted_pairs_matches_global_sort() {
     use linkrs_core::types::VertexId;
     // Ascending per-shard runs with interleaved global ids, plus empties.
-    let runs: Vec<Vec<(u32, VertexId)>> = vec![
+    let mut runs: Vec<Vec<(u32, VertexId)>> = vec![
         vec![],
         (0..100u32)
             .step_by(3)
@@ -1062,6 +1062,80 @@ fn merge_sorted_pairs_matches_global_sort() {
     ];
     let mut sorted: Vec<(u32, VertexId)> = runs.iter().flatten().copied().collect();
     sorted.sort_unstable_by_key(|&(id, _)| id);
-    assert_eq!(ShardedVertexTable::merge_sorted_pairs(runs), sorted);
-    assert!(ShardedVertexTable::merge_sorted_pairs(Vec::new()).is_empty());
+    let mut timings = crate::cursor::ScanTimings::default();
+    let mut ids = Vec::new();
+    let mut vids = Vec::new();
+    ShardedVertexTable::merge_sorted_pairs_into(&mut runs, &mut ids, &mut vids, &mut timings);
+    assert_eq!(ids.into_iter().zip(vids).collect::<Vec<_>>(), sorted);
+    assert_eq!(timings.scan_merge_us, timings.scan_enumerate_us);
+
+    ids = Vec::new();
+    vids = Vec::new();
+    ShardedVertexTable::merge_sorted_pairs_into(&mut [], &mut ids, &mut vids, &mut timings);
+    assert!(ids.is_empty());
+    assert!(vids.is_empty());
+}
+
+#[test]
+fn fused_identity_enumeration_matches_key_conversion() {
+    use crate::cursor::{ScanScratch, ScanTimings, ShardSlice};
+    use crate::vertex::{ExternalKeyKind, IdKey};
+    use linkrs_core::types::VertexId;
+
+    let ts = TEST_TS;
+    for key_kind in [ExternalKeyKind::Int, ExternalKeyKind::Text] {
+        let mut schema = test_schema();
+        if key_kind == ExternalKeyKind::Int {
+            schema.properties[0].data_type = DataType::BigInt;
+        }
+        let table = ShardedVertexTable::with_config(1, "t".into(), schema, 4);
+        for i in 0..64i64 {
+            match key_kind {
+                ExternalKeyKind::Int => table
+                    .insert_by_i64(i, &[("name".into(), Value::BigInt(i))], ts)
+                    .unwrap(),
+                ExternalKeyKind::Text => insert_with_name(&table, &format!("k{i}"), ts),
+            };
+        }
+        let manager = linkrs_transaction::VersionManager::new();
+        let guard = scan_guard(ts, &manager);
+        let slice = ShardSlice::new(0, 1);
+        let universes = table.shard_universes();
+        let mut live = Vec::new();
+        table.live_ids(&guard, &mut live);
+        let expected: Vec<(u32, VertexId)> = live
+            .into_iter()
+            .filter(|id| table.slice_owns_id(*id, &slice, &universes))
+            .map(|id| {
+                let vid = match (key_kind, table.get_external_id_raw(id)) {
+                    (ExternalKeyKind::Int, Some(IdKey::Int(value))) => {
+                        VertexId::try_from_int64(value).unwrap()
+                    }
+                    (ExternalKeyKind::Text, Some(IdKey::Text(text))) => {
+                        VertexId::try_from_string(text).unwrap()
+                    }
+                    _ => panic!("unexpected external key"),
+                };
+                (id, vid)
+            })
+            .collect();
+
+        let mut scratch = ScanScratch::default();
+        let mut ids = Vec::new();
+        let mut vids = Vec::new();
+        let mut timings = ScanTimings::default();
+        table.live_ids_in_slice_with_vids(
+            &guard,
+            &slice,
+            &universes,
+            key_kind,
+            &mut scratch,
+            &mut ids,
+            &mut vids,
+            &mut timings,
+        );
+        assert_eq!(ids.into_iter().zip(vids).collect::<Vec<_>>(), expected);
+        assert!(timings.scan_merge_us > 0);
+        assert_eq!(timings.scan_merge_us, timings.scan_enumerate_us);
+    }
 }

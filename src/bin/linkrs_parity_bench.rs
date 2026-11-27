@@ -121,6 +121,9 @@ struct QueryDiagnostics {
     local_topk_unpushed: u64,
     scan_read_us: u64,
     scan_enumerate_us: u64,
+    scan_table_load_us: u64,
+    scan_window_filter_us: u64,
+    scan_merge_us: u64,
     scan_visibility_us: u64,
     scan_decode_us: u64,
     scan_assemble_us: u64,
@@ -1184,6 +1187,11 @@ fn cmd_run(args: &[String]) {
                 local_topk_unpushed: count_occurrences(&explain_text, "local_topk:unpushed"),
                 scan_read_us: explain_metric(&explain_text, "scan_read_us").unwrap_or(0),
                 scan_enumerate_us: explain_metric(&explain_text, "scan_enumerate_us").unwrap_or(0),
+                scan_table_load_us: explain_metric(&explain_text, "scan_table_load_us")
+                    .unwrap_or(0),
+                scan_window_filter_us: explain_metric(&explain_text, "scan_window_filter_us")
+                    .unwrap_or(0),
+                scan_merge_us: explain_metric(&explain_text, "scan_merge_us").unwrap_or(0),
                 scan_visibility_us: explain_metric(&explain_text, "scan_visibility_us")
                     .unwrap_or(0),
                 scan_decode_us: explain_metric(&explain_text, "scan_decode_us").unwrap_or(0),
@@ -1196,12 +1204,10 @@ fn cmd_run(args: &[String]) {
                     .unwrap_or(0),
                 frontier_first_hop_us: explain_metric(&explain_text, "frontier_first_hop_us")
                     .unwrap_or(0),
-                frontier_sort_us: explain_metric(&explain_text, "frontier_sort_us")
-                    .unwrap_or(0),
+                frontier_sort_us: explain_metric(&explain_text, "frontier_sort_us").unwrap_or(0),
                 frontier_resolve_us: explain_metric(&explain_text, "frontier_resolve_us")
                     .unwrap_or(0),
-                frontier_tail_us: explain_metric(&explain_text, "frontier_tail_us")
-                    .unwrap_or(0),
+                frontier_tail_us: explain_metric(&explain_text, "frontier_tail_us").unwrap_or(0),
                 expand_destination_read_us: explain_metric(
                     &explain_text,
                     "expand_destination_read_us",
@@ -1333,6 +1339,17 @@ fn patch_resource_result(
     );
     set_json_u64(
         &mut text,
+        "scan_table_load_us",
+        diagnostics.scan_table_load_us,
+    );
+    set_json_u64(
+        &mut text,
+        "scan_window_filter_us",
+        diagnostics.scan_window_filter_us,
+    );
+    set_json_u64(&mut text, "scan_merge_us", diagnostics.scan_merge_us);
+    set_json_u64(
+        &mut text,
         "scan_visibility_us",
         diagnostics.scan_visibility_us,
     );
@@ -1388,11 +1405,7 @@ fn patch_resource_result(
         "frontier_first_hop_us",
         diagnostics.frontier_first_hop_us,
     );
-    set_json_u64(
-        &mut text,
-        "frontier_sort_us",
-        diagnostics.frontier_sort_us,
-    );
+    set_json_u64(&mut text, "frontier_sort_us", diagnostics.frontier_sort_us);
     set_json_u64(
         &mut text,
         "frontier_resolve_us",
@@ -1624,7 +1637,11 @@ fn write_run_result(
         json_escape(&resources.numa_policy)
     );
     json.push_str("  \"reclaim_failures\": 0,\n");
-    let _ = writeln!(json, "  \"dangling_repaired\": {},", resources.dangling_repaired);
+    let _ = writeln!(
+        json,
+        "  \"dangling_repaired\": {},",
+        resources.dangling_repaired
+    );
     json.push_str("  \"typed_group_hits\": 0,\n");
     json.push_str("  \"typed_group_fallbacks\": 0,\n");
     json.push_str("  \"partition_skew_ratio\": 0.0,\n");
@@ -1634,6 +1651,9 @@ fn write_run_result(
     json.push_str("  \"local_topk_unpushed\": 0,\n");
     json.push_str("  \"scan_read_us\": 0,\n");
     json.push_str("  \"scan_enumerate_us\": 0,\n");
+    json.push_str("  \"scan_table_load_us\": 0,\n");
+    json.push_str("  \"scan_window_filter_us\": 0,\n");
+    json.push_str("  \"scan_merge_us\": 0,\n");
     json.push_str("  \"scan_visibility_us\": 0,\n");
     json.push_str("  \"scan_decode_us\": 0,\n");
     json.push_str("  \"scan_assemble_us\": 0,\n");

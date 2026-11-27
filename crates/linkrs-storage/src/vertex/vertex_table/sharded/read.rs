@@ -1,8 +1,8 @@
 use super::super::core::VertexTable;
 use super::ShardedVertexTable;
-use crate::cursor::{ColumnValues, ScanIdProvenance, ScanTimings};
+use crate::cursor::{ColumnValues, ScanIdProvenance, ScanScratch, ScanTimings};
 use crate::mvcc_visibility::VisibilityGuard;
-use crate::vertex::{IdKey, PkLookup, VertexRecord};
+use crate::vertex::{ExternalKeyKind, IdKey, PkLookup, VertexRecord};
 use linkrs_core::types::{DataType, Timestamp, VertexId};
 use linkrs_core::StorageResult;
 use std::sync::Arc;
@@ -226,10 +226,10 @@ impl ShardedVertexTable {
     /// Shards are read without a global lock, so concurrent writes may be
     /// observed inconsistently across shards. Shards decode in parallel and
     /// merge in global id order, matching [`Self::scan`].
-    pub fn live_ids(&self, guard: &VisibilityGuard<'_>) -> Vec<u32> {
+    pub fn live_ids(&self, guard: &VisibilityGuard<'_>, out: &mut Vec<u32>) {
         use rayon::prelude::*;
         let snapshot = guard.snapshot();
-        let per_shard: Vec<Vec<u32>> = self
+        let mut per_shard: Vec<Vec<u32>> = self
             .shards
             .par_iter()
             .enumerate()
@@ -248,7 +248,8 @@ impl ShardedVertexTable {
                 shard_ids
             })
             .collect();
-        Self::merge_sorted_ids(per_shard)
+        out.clear();
+        Self::merge_sorted_ids(&mut per_shard, out, &mut ScanTimings::default());
     }
 
     /// High-water mark of every shard's local-id universe. Every assigned
@@ -305,12 +306,15 @@ impl ShardedVertexTable {
         guard: &VisibilityGuard<'_>,
         slice: &crate::cursor::ShardSlice,
         universes: &[u32],
-    ) -> Vec<u32> {
+        scratch: &mut ScanScratch,
+        ids_out: &mut Vec<u32>,
+        timings: &mut ScanTimings,
+    ) {
         // Per-shard runs are ascending by construction (the range walk is
         // ordered and the shard encoding is monotonic in the local id), so
         // a k-way merge keeps the ascending global-id order contract at
         // O(n log S) instead of re-sorting at O(n log n).
-        let mut runs: Vec<Vec<u32>> = Vec::new();
+        scratch.reset_identity();
         for (shard_idx, shard) in self.shards.iter().enumerate() {
             let Some(universe) = universes.get(shard_idx) else {
                 continue;
@@ -320,33 +324,41 @@ impl ShardedVertexTable {
                 continue;
             }
             let table = shard.read();
-            runs.push(
-                table
-                    .live_ids_in_range(chunk, guard)
-                    .into_iter()
-                    .map(|local_id| self.encode_id(shard_idx, local_id))
-                    .collect(),
-            );
+            let run_index = scratch.next_id_run_index();
+            table.live_ids_in_range(chunk, guard, &mut scratch.id_runs[run_index]);
+            for local in scratch.id_runs[run_index].iter_mut() {
+                *local = self.encode_id(shard_idx, *local);
+            }
+            if scratch.id_runs[run_index].is_empty() {
+                scratch.id_run_count -= 1;
+            }
         }
-        Self::merge_sorted_ids(runs)
+        ids_out.clear();
+        Self::merge_sorted_ids(scratch.active_id_runs(), ids_out, timings);
     }
 
     /// Slice-restricted identity enumeration that resolves external ids while
     /// each shard is already locked. The result preserves the global-id order
     /// contract of [`Self::live_ids_in_slice`] and omits rows with no external
-    /// identity, matching the topology-only scan's output.
+    /// identity, matching the topology-only scan's output. The key shape is
+    /// resolved once per space so the integer path never materializes an
+    /// `IdKey` for each row.
     pub(crate) fn live_ids_in_slice_with_vids(
         &self,
         guard: &VisibilityGuard<'_>,
         slice: &crate::cursor::ShardSlice,
         universes: &[u32],
+        key_kind: ExternalKeyKind,
+        scratch: &mut ScanScratch,
+        ids_out: &mut Vec<u32>,
+        vids_out: &mut Vec<VertexId>,
         timings: &mut ScanTimings,
-    ) -> (Vec<u32>, Vec<VertexId>) {
+    ) {
         // Per-shard runs are ascending by construction (same argument as
         // [`Self::live_ids_in_slice`]), so a k-way merge over the paired
         // runs keeps the global-id order contract at O(n log S) instead of
         // re-sorting at O(n log n).
-        let mut runs: Vec<Vec<(u32, VertexId)>> = Vec::new();
+        scratch.reset_identity();
         for (shard_idx, shard) in self.shards.iter().enumerate() {
             let Some(universe) = universes.get(shard_idx) else {
                 continue;
@@ -356,29 +368,42 @@ impl ShardedVertexTable {
                 continue;
             }
             let table = shard.read();
-            let locals = table.live_ids_in_range(chunk, guard);
-            let mut keys: Vec<Option<IdKey>> = Vec::new();
+            table.live_ids_in_range(chunk, guard, &mut scratch.locals);
+            let run_index = scratch.next_pair_run_index();
             let visibility_start = std::time::Instant::now();
-            table.get_external_ids_raw(&locals, &mut keys);
-            let mut run: Vec<(u32, VertexId)> = Vec::new();
-            for (local, key) in locals.into_iter().zip(keys) {
-                if let Some(vid) = key.and_then(vertex_id_of) {
-                    run.push((self.encode_id(shard_idx, local), vid));
+            match key_kind {
+                ExternalKeyKind::Int => {
+                    table.get_int_keys_raw(&scratch.locals, &mut scratch.int_keys);
+                    let run = &mut scratch.pair_runs[run_index];
+                    for (&local, key) in scratch.locals.iter().zip(scratch.int_keys.iter()) {
+                        if let Some(value) = key {
+                            if let Ok(vid) = VertexId::try_from_int64(*value) {
+                                run.push((self.encode_id(shard_idx, local), vid));
+                            }
+                        }
+                    }
+                }
+                ExternalKeyKind::Text => {
+                    table.get_external_ids_raw(&scratch.locals, &mut scratch.keys);
+                    let run = &mut scratch.pair_runs[run_index];
+                    for (&local, key) in scratch.locals.iter().zip(scratch.keys.iter()) {
+                        if let Some(vid) = key.clone().and_then(vertex_id_of) {
+                            run.push((self.encode_id(shard_idx, local), vid));
+                        }
+                    }
                 }
             }
             record_elapsed(visibility_start, &mut timings.scan_visibility_us);
-            if !run.is_empty() {
-                runs.push(run);
+            if scratch.pair_runs[run_index].is_empty() {
+                scratch.pair_run_count -= 1;
             }
         }
-        let total: usize = runs.iter().map(|run| run.len()).sum();
-        let mut ids = Vec::with_capacity(total);
-        let mut vids = Vec::with_capacity(total);
-        for (id, vid) in Self::merge_sorted_pairs(runs) {
-            ids.push(id);
-            vids.push(vid);
-        }
-        (ids, vids)
+        ids_out.clear();
+        vids_out.clear();
+        let total: usize = scratch.active_pair_runs().iter().map(|run| run.len()).sum();
+        ids_out.reserve(total);
+        vids_out.reserve(total);
+        Self::merge_sorted_pairs_into(scratch.active_pair_runs(), ids_out, vids_out, timings);
     }
 
     /// Column-major batch decode for paginated scans.
@@ -393,7 +418,9 @@ impl ShardedVertexTable {
         names: &[std::sync::Arc<str>],
         provenance: ScanIdProvenance,
         timings: &mut ScanTimings,
-    ) -> (Vec<u32>, Vec<VertexId>, Vec<ColumnRow>) {
+        ids_out: &mut Vec<u32>,
+        vids_out: &mut Vec<VertexId>,
+    ) -> Vec<ColumnRow> {
         if let Err(error) = self.verify_shard_schema_uniform() {
             log::error!(
                 "scan_columns proceeding under shard schema divergence: {}",
@@ -458,13 +485,13 @@ impl ShardedVertexTable {
         assemble_start = std::time::Instant::now();
         // Compact to the surviving rows: the decode was pre-sized to the
         // candidate count, which includes rows the guard hid.
-        let mut kept_ids = Vec::new();
-        let mut kept_vids = Vec::new();
+        ids_out.clear();
+        vids_out.clear();
         let mut selection = Vec::new();
         for (slot, vid) in vids.into_iter().enumerate() {
             let Some(vid) = vid else { continue };
-            kept_ids.push(global_ids[slot]);
-            kept_vids.push(vid);
+            ids_out.push(global_ids[slot]);
+            vids_out.push(vid);
             selection.push(slot);
         }
         if selection.len() != global_ids.len() {
@@ -488,7 +515,7 @@ impl ShardedVertexTable {
                 }
             }
         }
-        (kept_ids, kept_vids, merged)
+        merged
     }
 
     /// Topology resolution for paginated scans: the same identity gate as
@@ -500,7 +527,9 @@ impl ShardedVertexTable {
         guard: &VisibilityGuard<'_>,
         provenance: ScanIdProvenance,
         timings: &mut ScanTimings,
-    ) -> (Vec<u32>, Vec<VertexId>) {
+        ids_out: &mut Vec<u32>,
+        vids_out: &mut Vec<VertexId>,
+    ) {
         let mut assemble_start = std::time::Instant::now();
         let groups = self.group_by_shard(global_ids);
         record_elapsed(assemble_start, &mut timings.scan_assemble_us);
@@ -526,10 +555,13 @@ impl ShardedVertexTable {
         }
         assemble_start = std::time::Instant::now();
         resolved.sort_unstable_by_key(|(slot, _, _)| *slot);
-        let ids = resolved.iter().map(|(_, id, _)| *id).collect();
-        let vids = resolved.into_iter().map(|(_, _, vid)| vid).collect();
+        ids_out.clear();
+        vids_out.clear();
+        for (_, id, vid) in resolved {
+            ids_out.push(id);
+            vids_out.push(vid);
+        }
         record_elapsed(assemble_start, &mut timings.scan_assemble_us);
-        (ids, vids)
     }
 
     /// Group input slots by shard so each shard is locked once per batch.
@@ -650,17 +682,19 @@ impl ShardedVertexTable {
 
     /// K-way heap merge of sorted id runs into global id order. Each input
     /// run is already sorted; the heap holds one head per non-empty run.
-    fn merge_sorted_ids(mut runs: Vec<Vec<u32>>) -> Vec<u32> {
+    fn merge_sorted_ids(runs: &mut [Vec<u32>], out: &mut Vec<u32>, timings: &mut ScanTimings) {
         use std::cmp::Reverse;
         use std::collections::BinaryHeap;
+        let merge_start = std::time::Instant::now();
+        out.clear();
         let total: usize = runs.iter().map(|r| r.len()).sum();
+        out.reserve(total);
         let mut heap: BinaryHeap<(Reverse<u32>, usize, usize)> = BinaryHeap::new();
         for (run_idx, run) in runs.iter().enumerate() {
             if let Some(&first) = run.first() {
                 heap.push((Reverse(first), run_idx, 0));
             }
         }
-        let mut out = Vec::with_capacity(total);
         while let Some((Reverse(value), run_idx, pos)) = heap.pop() {
             out.push(value);
             let next = pos + 1;
@@ -668,37 +702,40 @@ impl ShardedVertexTable {
                 heap.push((Reverse(runs[run_idx][next]), run_idx, next));
             }
         }
-        // Release per-shard buffers eagerly; the merged order is the only
-        // retained allocation.
-        runs.clear();
-        out
+        timings.record_merge(merge_start.elapsed().as_micros() as u64);
     }
 
     /// K-way heap merge of sorted `(global id, external id)` runs into
     /// global id order. Same ordering contract as sorting the concatenated
     /// runs; the per-shard runs arrive ascending so the merge is exact.
-    pub(super) fn merge_sorted_pairs(
-        runs: Vec<Vec<(u32, VertexId)>>,
-    ) -> Vec<(u32, VertexId)> {
+    pub(super) fn merge_sorted_pairs_into(
+        runs: &mut [Vec<(u32, VertexId)>],
+        ids_out: &mut Vec<u32>,
+        vids_out: &mut Vec<VertexId>,
+        timings: &mut ScanTimings,
+    ) {
         use std::cmp::Reverse;
         use std::collections::BinaryHeap;
+        let merge_start = std::time::Instant::now();
         let total: usize = runs.iter().map(|run| run.len()).sum();
+        ids_out.reserve(total);
+        vids_out.reserve(total);
         let mut heap: BinaryHeap<(Reverse<u32>, usize, usize)> = BinaryHeap::new();
         for (run_idx, run) in runs.iter().enumerate() {
             if let Some(&(first, _)) = run.first() {
                 heap.push((Reverse(first), run_idx, 0));
             }
         }
-        let mut out = Vec::with_capacity(total);
         while let Some((Reverse(_), run_idx, pos)) = heap.pop() {
             let (id, vid) = runs[run_idx][pos];
-            out.push((id, vid));
+            ids_out.push(id);
+            vids_out.push(vid);
             let next = pos + 1;
             if next < runs[run_idx].len() {
                 heap.push((Reverse(runs[run_idx][next].0), run_idx, next));
             }
         }
-        out
+        timings.record_merge(merge_start.elapsed().as_micros() as u64);
     }
 
     /// K-way heap merge of sorted record runs into global id order.

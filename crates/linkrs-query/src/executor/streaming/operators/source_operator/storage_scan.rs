@@ -441,6 +441,9 @@ fn next_column_chunk(
         let t = batch.timings;
         runtime.columnar_stats().record_scan_phases(
             t.scan_enumerate_us,
+            t.scan_table_load_us,
+            t.scan_window_filter_us,
+            t.scan_merge_us,
             t.scan_visibility_us,
             t.scan_decode_us,
             t.scan_assemble_us,

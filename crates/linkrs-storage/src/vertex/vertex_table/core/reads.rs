@@ -41,12 +41,17 @@ impl VertexTable {
     }
 
     /// Guard-visible local ids inside one contiguous range, determined under
-    /// a single identity-latch acquisition.
-    pub fn live_ids_in_range(&self, range: Range<u32>, guard: &VisibilityGuard<'_>) -> Vec<u32> {
+    /// a single identity-latch acquisition. Output capacity is retained by
+    /// the caller across scans.
+    pub fn live_ids_in_range(
+        &self,
+        range: Range<u32>,
+        guard: &VisibilityGuard<'_>,
+        out: &mut Vec<u32>,
+    ) {
         let stamps = self.timestamps.read();
-        range
-            .filter(|&local_id| stamps.is_row_visible(local_id, guard))
-            .collect()
+        out.clear();
+        out.extend(range.filter(|&local_id| stamps.is_row_visible(local_id, guard)));
     }
 
     /// Per-column covering version stamps for cache fences.

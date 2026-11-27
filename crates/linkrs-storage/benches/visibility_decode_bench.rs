@@ -131,9 +131,12 @@ fn measure(storage: &Arc<RwLock<GraphStorage>>, label: &str, options: &ScanOptio
     let bytes = total_bytes / ITERATIONS as u128;
     let divide = |value: u64| value / ITERATIONS as u64;
     println!(
-        "{label:<26} {us:>7} us  rows={rows:<6} {bytes_per_row:>6} B/row  enumerate={enumerate:>6} us  visibility={visibility:>6} us  decode={decode:>6} us  assemble={assemble:>6} us  predicate={predicate:>6} us",
+        "{label:<26} {us:>7} us  rows={rows:<6} {bytes_per_row:>6} B/row  enumerate={enumerate:>6} us (table={table_load:>6} window={window_filter:>6} merge={merge:>6})  visibility={visibility:>6} us  decode={decode:>6} us  assemble={assemble:>6} us  predicate={predicate:>6} us",
         bytes_per_row = bytes / rows.max(1) as u128,
         enumerate = divide(total_timings.scan_enumerate_us),
+        table_load = divide(total_timings.scan_table_load_us),
+        window_filter = divide(total_timings.scan_window_filter_us),
+        merge = divide(total_timings.scan_merge_us),
         visibility = divide(total_timings.scan_visibility_us),
         decode = divide(total_timings.scan_decode_us),
         assemble = divide(total_timings.scan_assemble_us),

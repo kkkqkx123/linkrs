@@ -302,7 +302,9 @@ pub(crate) fn count_visible_vertices(
                 if table.max_start_ts() <= ts {
                     live as u64
                 } else {
-                    table.live_ids(&guard).len() as u64
+                    let mut ids = Vec::new();
+                    table.live_ids(&guard, &mut ids);
+                    ids.len() as u64
                 }
             })
             .sum()

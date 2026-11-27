@@ -2,10 +2,28 @@
 //! the shape validation every mutation path shares.
 
 use linkrs_core::error::{StorageError, StorageResult};
-use linkrs_core::types::VERTEX_ID_MAX_SIZE;
+use linkrs_core::types::{DataType, VERTEX_ID_MAX_SIZE};
 
 pub(super) const ID_KEY_TYPE_INT: u8 = 0;
 pub(super) const ID_KEY_TYPE_TEXT: u8 = 1;
+
+/// External key representation of one space, resolved once at scan open.
+/// Every id written to a space is normalized to its `vid_type`, so all
+/// tables in that space share this shape.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExternalKeyKind {
+    Int,
+    Text,
+}
+
+impl ExternalKeyKind {
+    pub fn from_vid_type(vid_type: &DataType) -> Self {
+        match vid_type {
+            DataType::SmallInt | DataType::Int | DataType::BigInt => Self::Int,
+            _ => Self::Text,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
 pub enum IdKey {

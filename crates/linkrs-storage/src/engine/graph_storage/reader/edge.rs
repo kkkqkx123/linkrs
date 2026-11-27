@@ -1783,7 +1783,9 @@ pub(crate) fn count_visible_edges(
         if table.max_start_ts() <= ts && live == allocated {
             return (true, Vec::new());
         }
-        (false, table.live_ids(&guard))
+        let mut ids = Vec::new();
+        table.live_ids(&guard, &mut ids);
+        (false, ids)
     });
     let key = crate::engine::data_store::EdgeTableKey::new(
         src_label_id,

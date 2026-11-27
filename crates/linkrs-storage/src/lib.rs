@@ -45,7 +45,7 @@ pub use cursor::{
     open_edge_scan, open_index_cursor, open_vertex_scan, ColumnValues, EdgeColumnBatch, EdgeCursor,
     FlatVertexRecord, IndexCursor, IndexPredicate, IndexRow, IndexScanPlan, OrderedIndexProof,
     PartitionSelector, PredicateRange, PropertyColumn, RequiredProperty, ScanIdProvenance,
-    ScanOptions, ScanPredicate, ScanTarget, ScanTimings, ShardSlice, VecEdgeCursor,
+    ScanOptions, ScanPredicate, ScanScratch, ScanTarget, ScanTimings, ShardSlice, VecEdgeCursor,
     VecVertexCursor, VertexColumnBatch, VertexCursor,
 };
 pub use engine::config::{EncodingThresholds, FreezeConfig, PropertyGraphConfig, ResourceConfig};

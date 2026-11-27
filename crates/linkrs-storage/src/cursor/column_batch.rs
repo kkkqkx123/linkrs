@@ -1,4 +1,8 @@
-use linkrs_core::types::{DataType, LabelId};
+use std::sync::Arc;
+
+use linkrs_core::types::{DataType, LabelId, VertexId};
+
+use crate::vertex::IdKey;
 
 /// Raw decoded values for one property column, in column-major order.
 ///
@@ -614,7 +618,9 @@ pub struct PropertyColumn {
 /// time went. Enumeration covers candidate discovery, visibility covers
 /// repeated row-liveness checks on those candidates, decode covers column
 /// value reads, assemble covers grouping and batch construction, and
-/// predicate covers pruning and residual filtering.
+/// predicate covers pruning and residual filtering. The three enumeration
+/// components partition `scan_enumerate_us`: table loading, window
+/// filtering, and shard-run merging.
 /// Origin of the ids passed to a sharded table scan.
 ///
 /// `CursorVerified` ids came from the cursor's own guarded enumeration and
@@ -629,6 +635,9 @@ pub enum ScanIdProvenance {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ScanTimings {
     pub scan_enumerate_us: u64,
+    pub scan_table_load_us: u64,
+    pub scan_window_filter_us: u64,
+    pub scan_merge_us: u64,
     pub scan_visibility_us: u64,
     pub scan_decode_us: u64,
     pub scan_assemble_us: u64,
@@ -638,10 +647,118 @@ pub struct ScanTimings {
 impl ScanTimings {
     pub fn add(&mut self, other: &Self) {
         self.scan_enumerate_us += other.scan_enumerate_us;
+        self.scan_table_load_us += other.scan_table_load_us;
+        self.scan_window_filter_us += other.scan_window_filter_us;
+        self.scan_merge_us += other.scan_merge_us;
         self.scan_visibility_us += other.scan_visibility_us;
         self.scan_decode_us += other.scan_decode_us;
         self.scan_assemble_us += other.scan_assemble_us;
         self.scan_predicate_us += other.scan_predicate_us;
+    }
+
+    /// Add one elapsed table-load interval to its component and total.
+    pub fn record_table_load(&mut self, micros: u64) {
+        self.scan_table_load_us += micros;
+        self.scan_enumerate_us += micros;
+    }
+
+    /// Add one elapsed window-filter interval to its component and total.
+    pub fn record_window_filter(&mut self, micros: u64) {
+        self.scan_window_filter_us += micros;
+        self.scan_enumerate_us += micros;
+    }
+
+    /// Add one elapsed shard-merge interval to its component and total.
+    pub fn record_merge(&mut self, micros: u64) {
+        self.scan_merge_us += micros;
+        self.scan_enumerate_us += micros;
+    }
+}
+
+/// Reusable work buffers held by one scan cursor.
+///
+/// A cursor is owned by one partition thread, so its buffers survive
+/// between consecutive batch reads. Every reset clears lengths while
+/// keeping capacities; merged run slots keep their nested allocations for
+/// the next table load.
+#[derive(Debug, Default)]
+pub struct ScanScratch {
+    pub range_ids: Vec<u32>,
+    pub range_vids: Vec<VertexId>,
+    pub topology_ids: Vec<u32>,
+    pub topology_vids: Vec<VertexId>,
+    pub candidate_ids: Vec<u32>,
+    pub run_names: Vec<Arc<str>>,
+    pub run_internal: Vec<u32>,
+    pub run_vids: Vec<VertexId>,
+    pub selection: Vec<usize>,
+    pub keep: Vec<bool>,
+    pub locals: Vec<u32>,
+    pub keys: Vec<Option<IdKey>>,
+    pub int_keys: Vec<Option<i64>>,
+    pub id_runs: Vec<Vec<u32>>,
+    pub id_run_count: usize,
+    pub pair_runs: Vec<Vec<(u32, VertexId)>>,
+    pub pair_run_count: usize,
+}
+
+impl ScanScratch {
+    /// Reset all per-batch buffers without releasing their allocations.
+    pub fn reset(&mut self) {
+        self.range_ids.clear();
+        self.range_vids.clear();
+        self.topology_ids.clear();
+        self.topology_vids.clear();
+        self.candidate_ids.clear();
+        self.run_names.clear();
+        self.run_internal.clear();
+        self.run_vids.clear();
+        self.selection.clear();
+        self.keep.clear();
+        self.reset_identity();
+    }
+
+    /// Reset only the buffers used by one table-load enumeration.
+    pub fn reset_identity(&mut self) {
+        self.locals.clear();
+        self.keys.clear();
+        self.int_keys.clear();
+        for run in &mut self.id_runs {
+            run.clear();
+        }
+        for run in &mut self.pair_runs {
+            run.clear();
+        }
+        self.id_run_count = 0;
+        self.pair_run_count = 0;
+    }
+
+    /// Index of the next reusable shard-local id run.
+    pub fn next_id_run_index(&mut self) -> usize {
+        if self.id_run_count == self.id_runs.len() {
+            self.id_runs.push(Vec::new());
+        }
+        let index = self.id_run_count;
+        self.id_run_count += 1;
+        index
+    }
+
+    /// Index of the next reusable shard-local `(global id, external id)` run.
+    pub fn next_pair_run_index(&mut self) -> usize {
+        if self.pair_run_count == self.pair_runs.len() {
+            self.pair_runs.push(Vec::new());
+        }
+        let index = self.pair_run_count;
+        self.pair_run_count += 1;
+        index
+    }
+
+    pub fn active_id_runs(&mut self) -> &mut [Vec<u32>] {
+        &mut self.id_runs[..self.id_run_count]
+    }
+
+    pub fn active_pair_runs(&mut self) -> &mut [Vec<(u32, VertexId)>] {
+        &mut self.pair_runs[..self.pair_run_count]
     }
 }
 

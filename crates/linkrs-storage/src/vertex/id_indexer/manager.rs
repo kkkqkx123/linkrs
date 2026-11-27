@@ -315,6 +315,20 @@ impl IdManager {
         );
     }
 
+    /// Integer-only reverse lookup for spaces whose external keys are all
+    /// integers. Avoids cloning an `IdKey` into a per-row intermediate.
+    pub fn get_int_keys(&self, indices: &[u32], out: &mut Vec<Option<i64>>) {
+        let core = self.core.lock();
+        out.clear();
+        out.resize(indices.len(), None);
+        for (&index, target) in indices.iter().zip(out.iter_mut()) {
+            *target = match core.keys.get(index as usize) {
+                Some(Some(IdKey::Int(value))) => Some(*value),
+                _ => None,
+            };
+        }
+    }
+
     pub fn len(&self) -> usize {
         self.core.lock().live_ids.len()
     }

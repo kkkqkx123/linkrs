@@ -3,12 +3,12 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use crate::cursor::{
-    ColumnValues, FlatVertexRecord, ScanIdProvenance, ScanOptions, ScanTimings, ShardSlice,
-    VertexCursor,
+    ColumnValues, FlatVertexRecord, ScanIdProvenance, ScanOptions, ScanScratch, ScanTimings,
+    ShardSlice, VertexCursor,
 };
 use crate::engine::graph_storage::context::vertex_ops::StagedRow;
 use crate::engine::graph_storage::context::GraphStorageContext;
-use crate::vertex::ShardedVertexTable;
+use crate::vertex::{ExternalKeyKind, ShardedVertexTable};
 use linkrs_core::types::{LabelId, Timestamp, VertexId};
 use linkrs_core::vertex_edge_path::Tag;
 use linkrs_core::{StorageError, StorageResult, Value, Vertex};
@@ -16,6 +16,30 @@ use linkrs_core::{StorageError, StorageResult, Value, Vertex};
 #[inline]
 fn record_elapsed(start: std::time::Instant, counter: &mut u64) {
     *counter += start.elapsed().as_micros() as u64;
+}
+
+/// Gather one decoded run down to `selection`, keeping ids and external ids
+/// aligned with the surviving column values.
+fn select_run(
+    decoded: &mut [(Arc<str>, ColumnValues)],
+    ids: &mut Vec<u32>,
+    vids: &mut Vec<VertexId>,
+    selection: &[usize],
+) {
+    if selection.len() == ids.len() {
+        return;
+    }
+    for (_, column) in decoded.iter_mut() {
+        column.select(selection);
+    }
+    let mut write = 0;
+    for &row in selection {
+        ids[write] = ids[row];
+        vids[write] = vids[row];
+        write += 1;
+    }
+    ids.truncate(write);
+    vids.truncate(write);
 }
 
 // ---------------------------------------------------------------------------
@@ -67,6 +91,11 @@ pub(crate) struct GraphVertexCursor {
     /// Set from `ScanOptions`; only valid with an empty projection and no
     /// pushed predicates (rejected in `new`).
     topology_only: bool,
+    /// External key shape of the scanned space, resolved once at open.
+    /// Every table in the space shares it because writes normalize ids.
+    key_kind: ExternalKeyKind,
+    /// Reusable per-batch and per-table-load work buffers.
+    scratch: ScanScratch,
     /// Pushed conjunctive scan predicates evaluated on decoded rows.
     predicate: Vec<crate::cursor::ScanPredicate>,
     exhausted: bool,
@@ -113,6 +142,11 @@ impl GraphVertexCursor {
         let ts = options
             .read_timestamp
             .unwrap_or_else(|| ctx.get_read_timestamp());
+        let key_kind = ctx
+            .schema_manager()
+            .get_space(&space)?
+            .map(|info| ExternalKeyKind::from_vid_type(&info.vid_type))
+            .unwrap_or(ExternalKeyKind::Text);
         let tag_infos = ctx.schema_manager().list_tags(&space)?;
         let mut labels = Vec::with_capacity(tag_infos.len());
         let mut names = HashMap::with_capacity(tag_infos.len());
@@ -217,6 +251,8 @@ impl GraphVertexCursor {
                 .as_ref()
                 .map(|p| p.iter().map(|rp| rp.name.clone()).collect()),
             topology_only: options.topology_only,
+            key_kind,
+            scratch: ScanScratch::default(),
             predicate: options.predicate.clone().unwrap_or_default(),
             exhausted,
             ts,
@@ -277,6 +313,7 @@ impl GraphVertexCursor {
         &mut self,
         tables: &HashMap<LabelId, Arc<ShardedVertexTable>>,
         guard: &crate::mvcc_visibility::VisibilityGuard<'_>,
+        scratch: &mut ScanScratch,
     ) {
         self.current_table = None;
         self.current_label = None;
@@ -285,12 +322,13 @@ impl GraphVertexCursor {
         self.pending_idx = 0;
         self.staged_rows.clear();
         self.staged_idx = 0;
-        if let Some(ids) = self.allowlist.clone() {
+        if self.allowlist_loaded || self.allowlist.is_some() {
             if self.allowlist_loaded {
                 self.exhausted = true;
                 return;
             }
             self.allowlist_loaded = true;
+            let ids = self.allowlist.take().unwrap_or_default();
             for label_id in &self.tags.labels {
                 let Some(table) = tables.get(label_id) else {
                     continue;
@@ -303,15 +341,16 @@ impl GraphVertexCursor {
                     .slice
                     .as_ref()
                     .map(|slice| (slice, table.shard_universes()));
-                let ids: Vec<u32> = ids
-                    .into_iter()
-                    .filter(|id| !merge.dropped_ids.contains(id))
-                    .filter(|id| match owned.as_ref() {
-                        None => true,
-                        Some((slice, universes)) => table.slice_owns_id(*id, slice, universes),
-                    })
-                    .collect();
-                self.pending_ids = ids;
+                self.pending_ids.clear();
+                self.pending_ids.extend(
+                    ids.iter()
+                        .filter(|id| !merge.dropped_ids.contains(id))
+                        .filter(|id| match owned.as_ref() {
+                            None => true,
+                            Some((slice, universes)) => table.slice_owns_id(**id, slice, universes),
+                        })
+                        .copied(),
+                );
                 self.pending_vids.clear();
                 self.ids_verified = false;
                 self.current_label = Some(*label_id);
@@ -339,47 +378,56 @@ impl GraphVertexCursor {
                 .map(|slice| (slice, table.shard_universes()));
             let fuse_identity =
                 self.topology_only && self.table_ttl(label_id).is_none() && owned.is_some();
-            let (mut ids, mut vids) = match owned.as_ref() {
-                Some((slice, universes)) if fuse_identity => {
-                    table.live_ids_in_slice_with_vids(guard, slice, universes, &mut self.timings)
-                }
-                Some((slice, universes)) => {
-                    (table.live_ids_in_slice(guard, slice, universes), Vec::new())
-                }
-                None => (table.live_ids(guard), Vec::new()),
-            };
+            match owned.as_ref() {
+                Some((slice, universes)) if fuse_identity => table.live_ids_in_slice_with_vids(
+                    guard,
+                    slice,
+                    universes,
+                    self.key_kind,
+                    scratch,
+                    &mut self.pending_ids,
+                    &mut self.pending_vids,
+                    &mut self.timings,
+                ),
+                Some((slice, universes)) => table.live_ids_in_slice(
+                    guard,
+                    slice,
+                    universes,
+                    scratch,
+                    &mut self.pending_ids,
+                    &mut self.timings,
+                ),
+                None => table.live_ids(guard, &mut self.pending_ids),
+            }
             if !merge.dropped_ids.is_empty() {
-                let keep: Vec<bool> = ids
-                    .iter()
-                    .map(|id| !merge.dropped_ids.contains(id))
-                    .collect();
-                ids = ids
-                    .into_iter()
-                    .zip(keep.iter().copied())
-                    .filter_map(|(id, retained)| retained.then_some(id))
-                    .collect();
-                if vids.len() == keep.len() {
-                    vids = vids
-                        .into_iter()
-                        .zip(keep.into_iter())
-                        .filter_map(|(vid, retained)| retained.then_some(vid))
-                        .collect();
+                let fused = self.pending_vids.len() == self.pending_ids.len();
+                let mut write = 0;
+                for read in 0..self.pending_ids.len() {
+                    let id = self.pending_ids[read];
+                    if merge.dropped_ids.contains(&id) {
+                        continue;
+                    }
+                    self.pending_ids[write] = id;
+                    if fused {
+                        self.pending_vids[write] = self.pending_vids[read];
+                    }
+                    write += 1;
+                }
+                self.pending_ids.truncate(write);
+                if fused {
+                    self.pending_vids.truncate(write);
+                } else {
+                    self.pending_vids.clear();
                 }
             }
-            let staged_rows: Vec<StagedRow> = match owned.as_ref() {
-                None => merge.rows,
-                Some((slice, universes)) => merge
-                    .rows
-                    .into_iter()
-                    .filter(|row| table.slice_owns_id(row.id, slice, universes))
-                    .collect(),
-            };
-            if !ids.is_empty() || !staged_rows.is_empty() {
+            self.staged_rows = merge.rows;
+            if let Some((slice, universes)) = owned.as_ref() {
+                self.staged_rows
+                    .retain(|row| table.slice_owns_id(row.id, slice, universes));
+            }
+            if !self.pending_ids.is_empty() || !self.staged_rows.is_empty() {
                 self.current_label = Some(label_id);
                 self.ids_verified = true;
-                self.pending_ids = ids;
-                self.pending_vids = vids;
-                self.staged_rows = staged_rows;
                 self.current_table = Some(Arc::clone(table));
                 return;
             }
@@ -554,6 +602,8 @@ impl GraphVertexCursor {
         let (gate_vm, gate_own) = self.ctx.gate_inputs();
         let ts = self.ts;
         let now = linkrs_core::types::ttl::now_secs();
+        let mut scratch = std::mem::take(&mut self.scratch);
+        scratch.reset();
         let result = data_store.with_vertex_tables(|tables| {
             let guard = crate::mvcc_visibility::VisibilityGuard::new(
                 ts,
@@ -569,9 +619,13 @@ impl GraphVertexCursor {
 
             while internal_ids.len() < batch_size && !self.exhausted {
                 if self.current_table.is_none() {
-                    let enumerate_start = std::time::Instant::now();
-                    self.load_next_table(tables, &guard);
-                    record_elapsed(enumerate_start, &mut self.timings.scan_enumerate_us);
+                    let load_start = std::time::Instant::now();
+                    let merge_before = self.timings.scan_merge_us;
+                    self.load_next_table(tables, &guard, &mut scratch);
+                    let load_us = load_start.elapsed().as_micros() as u64;
+                    let merge_us = self.timings.scan_merge_us - merge_before;
+                    self.timings
+                        .record_table_load(load_us.saturating_sub(merge_us));
                     continue;
                 }
                 if self.pending_idx >= self.pending_ids.len() {
@@ -604,12 +658,13 @@ impl GraphVertexCursor {
                     continue;
                 }
 
+                let provenance = self.id_provenance();
                 let start = self.pending_idx;
                 let end = (start + (batch_size - internal_ids.len())).min(self.pending_ids.len());
-                let ids = &self.pending_ids[start..end];
-                let resolved_vids: Option<Vec<VertexId>> =
+                let window = &self.pending_ids[start..end];
+                let resolved_window: Option<&[VertexId]> =
                     if self.pending_vids.len() == self.pending_ids.len() {
-                        Some(self.pending_vids[start..end].to_vec())
+                        Some(&self.pending_vids[start..end])
                     } else {
                         None
                     };
@@ -622,33 +677,51 @@ impl GraphVertexCursor {
                 // (same rationale as the row path): a fragment keeps roughly
                 // 1/P of the window, and decoding the rest only to drop it
                 // repeats every sibling fragment's work.
-                let ranged: Vec<u32>;
-                let ranged_vids: Vec<VertexId>;
-                let (ids, resolved_vids) = match self.id_range.as_ref() {
-                    Some(range) => {
-                        let (topo_ids, topo_vids) = if let Some(window) = resolved_vids {
-                            (ids.to_vec(), window)
-                        } else {
-                            let provenance = self.id_provenance();
-                            table.scan_topology(ids, &guard, provenance, &mut self.timings)
-                        };
-                        let mut kept_ids = Vec::new();
-                        let mut kept_vids = Vec::new();
-                        for (id, vid) in topo_ids.into_iter().zip(topo_vids) {
-                            if vid
-                                .as_int64()
-                                .is_some_and(|v| (range.start..range.end).contains(&v))
-                            {
-                                kept_ids.push(id);
-                                kept_vids.push(vid);
+                let window_start = std::time::Instant::now();
+                let (ids, resolved_vids): (&[u32], Option<&[VertexId]>) =
+                    match self.id_range.as_ref() {
+                        Some(range) => {
+                            scratch.range_ids.clear();
+                            scratch.range_vids.clear();
+                            if let Some(vids) = resolved_window {
+                                for (&id, &vid) in window.iter().zip(vids.iter()) {
+                                    if vid
+                                        .as_int64()
+                                        .is_some_and(|v| (range.start..range.end).contains(&v))
+                                    {
+                                        scratch.range_ids.push(id);
+                                        scratch.range_vids.push(vid);
+                                    }
+                                }
+                            } else {
+                                table.scan_topology(
+                                    window,
+                                    &guard,
+                                    provenance,
+                                    &mut self.timings,
+                                    &mut scratch.topology_ids,
+                                    &mut scratch.topology_vids,
+                                );
+                                for (&id, &vid) in scratch
+                                    .topology_ids
+                                    .iter()
+                                    .zip(scratch.topology_vids.iter())
+                                {
+                                    if vid
+                                        .as_int64()
+                                        .is_some_and(|v| (range.start..range.end).contains(&v))
+                                    {
+                                        scratch.range_ids.push(id);
+                                        scratch.range_vids.push(vid);
+                                    }
+                                }
                             }
+                            (&scratch.range_ids[..], Some(&scratch.range_vids[..]))
                         }
-                        ranged = kept_ids;
-                        ranged_vids = kept_vids;
-                        (&ranged[..], Some(ranged_vids))
-                    }
-                    None => (ids, resolved_vids),
-                };
+                        None => (window, resolved_window),
+                    };
+                self.timings
+                    .record_window_filter(window_start.elapsed().as_micros() as u64);
                 let label_id = self.current_label;
                 let tag_name = label_id
                     .and_then(|l| names.get(&l))
@@ -662,23 +735,20 @@ impl GraphVertexCursor {
                 // always decodes its TTL column on top so expiry is
                 // decidable, even on the topology path that otherwise
                 // skips decode entirely.
-                let mut run_names: Vec<std::sync::Arc<str>> =
-                    if prop_names.is_empty() && !self.topology_only {
-                        Vec::new()
-                    } else {
-                        let mut run = prop_names.to_vec();
-                        for predicate in &self.predicate {
-                            let column: std::sync::Arc<str> = predicate.column().into();
-                            if !run.contains(&column) {
-                                run.push(column);
-                            }
+                scratch.run_names.clear();
+                if !(prop_names.is_empty() && !self.topology_only) {
+                    scratch.run_names.extend_from_slice(prop_names);
+                    for predicate in &self.predicate {
+                        let column: std::sync::Arc<str> = predicate.column().into();
+                        if !scratch.run_names.contains(&column) {
+                            scratch.run_names.push(column);
                         }
-                        run
-                    };
+                    }
+                }
                 let mut ttl_added = false;
                 if let Some((_, col)) = run_ttl.as_ref() {
-                    if !run_names.iter().any(|name| name == col) {
-                        run_names.push(col.clone());
+                    if !scratch.run_names.iter().any(|name| name == col) {
+                        scratch.run_names.push(col.clone());
                         ttl_added = true;
                     }
                 }
@@ -687,20 +757,21 @@ impl GraphVertexCursor {
                 // here are exactly those the pushed predicates would reject
                 // after decoding, so skipping their decode is a pure
                 // optimization with identical results.
-                let candidates: Vec<u32> = if self.predicate.is_empty() {
-                    ids.to_vec()
+                scratch.candidate_ids.clear();
+                if self.predicate.is_empty() {
+                    scratch.candidate_ids.extend_from_slice(ids);
                 } else {
                     let predicate_start = std::time::Instant::now();
                     let ranges = crate::cursor::ScanPredicate::merged_ranges(&self.predicate);
                     let mask = table.zone_prune_mask(ids, &ranges);
-                    let candidates = ids
-                        .iter()
-                        .zip(mask.iter())
-                        .filter_map(|(&id, &keep)| keep.then_some(id))
-                        .collect();
+                    scratch.candidate_ids.extend(
+                        ids.iter()
+                            .zip(mask.iter())
+                            .filter_map(|(&id, &keep)| keep.then_some(id)),
+                    );
                     record_elapsed(predicate_start, &mut self.timings.scan_predicate_us);
-                    candidates
-                };
+                }
+                let ids = &scratch.candidate_ids[..];
 
                 // Topology-only run: resolve identities with zero property
                 // decode. Predicates are empty by construction (rejected in
@@ -709,12 +780,20 @@ impl GraphVertexCursor {
                 // decode path, filters on the TTL column, and strips the
                 // helper column back out below.
                 if self.topology_only && run_ttl.is_none() {
-                    let (run_internal, run_vids) = if let Some(window) = resolved_vids {
-                        (candidates.clone(), window)
-                    } else {
-                        let provenance = self.id_provenance();
-                        table.scan_topology(&candidates, &guard, provenance, &mut self.timings)
-                    };
+                    let (run_internal, run_vids): (&[u32], &[VertexId]) =
+                        if let Some(window) = resolved_vids {
+                            (ids, window)
+                        } else {
+                            table.scan_topology(
+                                ids,
+                                &guard,
+                                provenance,
+                                &mut self.timings,
+                                &mut scratch.run_internal,
+                                &mut scratch.run_vids,
+                            );
+                            (&scratch.run_internal[..], &scratch.run_vids[..])
+                        };
                     if run_internal.is_empty() {
                         continue;
                     }
@@ -743,22 +822,23 @@ impl GraphVertexCursor {
                 // write is read at the version below it, so the scan never
                 // yields an uncommitted value. Rows with no visible version are
                 // dropped and the columns stay aligned with the surviving ids.
-                let provenance = self.id_provenance();
-                let (mut run_internal, mut run_vids, mut decoded) = table.scan_columns(
-                    &candidates,
+                let mut decoded = table.scan_columns(
+                    ids,
                     &guard,
-                    &run_names,
+                    &scratch.run_names,
                     provenance,
                     &mut self.timings,
+                    &mut scratch.run_internal,
+                    &mut scratch.run_vids,
                 );
-                if run_internal.is_empty() {
+                if scratch.run_internal.is_empty() {
                     continue;
                 }
 
                 // The external-id range and offset skipping are applied to the
                 // surviving rows, in scan order.
-                let mut selection: Vec<usize> = Vec::new();
-                for (row, vid) in run_vids.iter().enumerate() {
+                scratch.selection.clear();
+                for (row, vid) in scratch.run_vids.iter().enumerate() {
                     if let Some(ref range) = self.id_range {
                         match vid.as_int64() {
                             Some(vid) if (range.start..range.end).contains(&vid) => {}
@@ -769,18 +849,15 @@ impl GraphVertexCursor {
                         self.offset_remaining -= 1;
                         continue;
                     }
-                    selection.push(row);
+                    scratch.selection.push(row);
                 }
-                if selection.len() != run_internal.len() {
-                    for (_, column) in decoded.iter_mut() {
-                        column.select(&selection);
-                    }
-                    let pruned_ids = std::mem::take(&mut run_internal);
-                    let pruned_vids = std::mem::take(&mut run_vids);
-                    run_internal = selection.iter().map(|&row| pruned_ids[row]).collect();
-                    run_vids = selection.iter().map(|&row| pruned_vids[row]).collect();
-                }
-                let mut run_rows = run_internal.len();
+                select_run(
+                    &mut decoded,
+                    &mut scratch.run_internal,
+                    &mut scratch.run_vids,
+                    &scratch.selection,
+                );
+                let mut run_rows = scratch.run_internal.len();
                 if run_rows == 0 {
                     continue;
                 }
@@ -794,24 +871,21 @@ impl GraphVertexCursor {
                         .iter()
                         .position(|(name, _)| Some(name) == run_ttl.as_ref().map(|(_, col)| col))
                     {
-                        let mut selection: Vec<usize> = Vec::with_capacity(run_rows);
+                        scratch.selection.clear();
                         for row in 0..run_rows {
                             let expired = decoded[ttl_idx].1.value_at(row).is_some_and(|value| {
                                 linkrs_core::types::ttl::is_expired(*duration, Some(&value), now)
                             });
                             if !expired {
-                                selection.push(row);
+                                scratch.selection.push(row);
                             }
                         }
-                        if selection.len() != run_rows {
-                            for (_, column) in decoded.iter_mut() {
-                                column.select(&selection);
-                            }
-                            let pruned_ids = std::mem::take(&mut run_internal);
-                            let pruned_vids = std::mem::take(&mut run_vids);
-                            run_internal = selection.iter().map(|&row| pruned_ids[row]).collect();
-                            run_vids = selection.iter().map(|&row| pruned_vids[row]).collect();
-                        }
+                        select_run(
+                            &mut decoded,
+                            &mut scratch.run_internal,
+                            &mut scratch.run_vids,
+                            &scratch.selection,
+                        );
                     }
                 }
                 // The helper TTL column leaves the run again unless this
@@ -824,7 +898,7 @@ impl GraphVertexCursor {
                         }
                     }
                 }
-                run_rows = run_internal.len();
+                run_rows = scratch.run_internal.len();
                 if run_rows == 0 {
                     continue;
                 }
@@ -850,8 +924,8 @@ impl GraphVertexCursor {
                     }
                 }
 
-                internal_ids.extend(run_internal);
-                vids.extend(run_vids);
+                internal_ids.extend(scratch.run_internal.iter().copied());
+                vids.extend(scratch.run_vids.iter().copied());
                 label_ids.extend(std::iter::repeat_n(self.current_label, run_rows));
                 tag_names.extend(std::iter::repeat_n(tag_name.to_string(), run_rows));
                 record_elapsed(assemble_start, &mut self.timings.scan_assemble_us);
@@ -875,50 +949,55 @@ impl GraphVertexCursor {
         // produces a selection vector (index sequence, not a boolean mask)
         // and surviving rows are gathered via that selection.
         let predicate_start = std::time::Instant::now();
-        let (final_ids, final_labels, final_vids, final_tags) = if self.predicate.is_empty() {
-            (internal_ids, label_ids, vids, tag_names)
-        } else {
-            let mut keep = vec![true; internal_ids.len()];
-            for predicate in &self.predicate {
-                match union_names
-                    .iter()
-                    .position(|n| *n.as_ref() == *predicate.column())
-                {
-                    Some(index) => {
-                        let column = &columns[index];
-                        for (row, ok) in keep.iter_mut().enumerate() {
-                            if *ok && !predicate.matches_column(column, row) {
-                                *ok = false;
+        let (final_ids, final_labels, final_vids, final_tags) =
+            if self.predicate.is_empty() {
+                (internal_ids, label_ids, vids, tag_names)
+            } else {
+                scratch.keep.clear();
+                scratch.keep.resize(internal_ids.len(), true);
+                for predicate in &self.predicate {
+                    match union_names
+                        .iter()
+                        .position(|n| *n.as_ref() == *predicate.column())
+                    {
+                        Some(index) => {
+                            let column = &columns[index];
+                            for (row, ok) in scratch.keep.iter_mut().enumerate() {
+                                if *ok && !predicate.matches_column(column, row) {
+                                    *ok = false;
+                                }
                             }
                         }
+                        None => scratch.keep.fill(false),
                     }
-                    None => keep.fill(false),
                 }
-            }
-            if keep.iter().any(|&k| !k) {
-                let selection: Vec<usize> = keep
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(i, &k)| if k { Some(i) } else { None })
-                    .collect();
-                let mut kept_ids = Vec::with_capacity(selection.len());
-                let mut kept_labels = Vec::with_capacity(selection.len());
-                let mut kept_vids = Vec::with_capacity(selection.len());
-                let mut kept_tags = Vec::with_capacity(selection.len());
-                for &row in &selection {
-                    kept_ids.push(internal_ids[row]);
-                    kept_labels.push(label_ids[row]);
-                    kept_vids.push(vids[row]);
-                    kept_tags.push(tag_names[row].clone());
+                if scratch.keep.iter().any(|&k| !k) {
+                    scratch.selection.clear();
+                    scratch.selection.extend(
+                        scratch
+                            .keep
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(i, &k)| if k { Some(i) } else { None }),
+                    );
+                    let mut kept_ids = Vec::with_capacity(scratch.selection.len());
+                    let mut kept_labels = Vec::with_capacity(scratch.selection.len());
+                    let mut kept_vids = Vec::with_capacity(scratch.selection.len());
+                    let mut kept_tags = Vec::with_capacity(scratch.selection.len());
+                    for &row in &scratch.selection {
+                        kept_ids.push(internal_ids[row]);
+                        kept_labels.push(label_ids[row]);
+                        kept_vids.push(vids[row]);
+                        kept_tags.push(tag_names[row].clone());
+                    }
+                    for column in columns.iter_mut() {
+                        column.select(&scratch.selection);
+                    }
+                    (kept_ids, kept_labels, kept_vids, kept_tags)
+                } else {
+                    (internal_ids, label_ids, vids, tag_names)
                 }
-                for column in columns.iter_mut() {
-                    column.select(&selection);
-                }
-                (kept_ids, kept_labels, kept_vids, kept_tags)
-            } else {
-                (internal_ids, label_ids, vids, tag_names)
-            }
-        };
+            };
         record_elapsed(predicate_start, &mut self.timings.scan_predicate_us);
 
         let assemble_start = std::time::Instant::now();
@@ -951,6 +1030,7 @@ impl GraphVertexCursor {
 
         record_elapsed(assemble_start, &mut self.timings.scan_assemble_us);
         batch.timings = self.timings;
+        self.scratch = scratch;
 
         Ok(batch)
     }
@@ -975,6 +1055,7 @@ impl GraphVertexCursor {
         let (gate_vm, gate_own) = self.ctx.gate_inputs();
         let ts = self.ts;
         let now = linkrs_core::types::ttl::now_secs();
+        let mut scratch = std::mem::take(&mut self.scratch);
         let batch = data_store.with_vertex_tables(|tables| -> Result<Vec<T>, StorageError> {
             let guard = crate::mvcc_visibility::VisibilityGuard::new(
                 ts,
@@ -984,7 +1065,7 @@ impl GraphVertexCursor {
 
             while batch.len() < batch_size && !self.exhausted {
                 if self.current_table.is_none() {
-                    self.load_next_table(tables, &guard);
+                    self.load_next_table(tables, &guard, &mut scratch);
                     continue;
                 }
                 if self.pending_idx >= self.pending_ids.len() {
@@ -1069,12 +1150,20 @@ impl GraphVertexCursor {
                 // decoding the full window would repeat every sibling
                 // fragment's decode work. Order-preserving, same guard, so
                 // the decoded set is identical to decode-then-filter.
+                let provenance = self.id_provenance();
                 let ranged: Vec<u32>;
                 let ids: &[u32] = match self.id_range.as_ref() {
                     Some(range) => {
-                        let provenance = self.id_provenance();
-                        let (topo_ids, topo_vids) =
-                            table.scan_topology(window, &guard, provenance, &mut self.timings);
+                        let mut topo_ids = Vec::new();
+                        let mut topo_vids = Vec::new();
+                        table.scan_topology(
+                            window,
+                            &guard,
+                            provenance,
+                            &mut self.timings,
+                            &mut topo_ids,
+                            &mut topo_vids,
+                        );
                         ranged = topo_ids
                             .into_iter()
                             .zip(topo_vids)
@@ -1159,6 +1248,7 @@ impl GraphVertexCursor {
             }
             Ok(batch)
         })?;
+        self.scratch = scratch;
 
         Ok(batch)
     }

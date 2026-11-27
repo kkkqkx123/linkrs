@@ -71,7 +71,8 @@ pub(crate) fn scan_vertex_serial_column(
         let Some(table) = table else {
             return Ok(None);
         };
-        let ids = table.live_ids(&guard);
+        let mut ids = Vec::new();
+        table.live_ids(&guard, &mut ids);
         let mut present: Vec<i64> = Vec::new();
         let mut max_value: Option<i64> = None;
         if !ids.is_empty() {

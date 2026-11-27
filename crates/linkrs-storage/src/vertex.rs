@@ -110,7 +110,7 @@ use crate::types::StoragePropertyDef;
 
 pub use column::ColumnStore;
 pub use gc_manager::VertexGcConfig;
-pub use id_indexer::{IdIndexer, IdKey, PkLookup};
+pub use id_indexer::{ExternalKeyKind, IdIndexer, IdKey, PkLookup};
 pub use vertex_table::ShardedVertexTable;
 pub use vertex_timestamp::VertexTimestamp;
 pub use write_scope::{WriteScope, MAX_WRITE_SCOPE_KEYS};

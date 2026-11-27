@@ -17,7 +17,7 @@ pub mod manager;
 mod memory;
 
 pub use config::IdIndexerConfig;
-pub use key::IdKey;
+pub use key::{ExternalKeyKind, IdKey};
 pub use lookup::PkLookup;
 pub use manager::{stripe_index, IdManager};
 pub use memory::IdIndexMemoryBreakdown;
@@ -101,6 +101,11 @@ impl IdIndexer {
     /// Resolve several reverse lookups while holding the core lock once.
     pub fn get_keys(&self, indices: &[u32], out: &mut Vec<Option<IdKey>>) {
         self.manager.get_keys(indices, out);
+    }
+
+    /// Resolve integer keys directly, without materializing `IdKey` values.
+    pub fn get_int_keys(&self, indices: &[u32], out: &mut Vec<Option<i64>>) {
+        self.manager.get_int_keys(indices, out);
     }
 
     pub fn len(&self) -> usize {

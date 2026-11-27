@@ -59,6 +59,16 @@ impl VertexTable {
         self.id_indexer.get_keys(internal_ids, out);
     }
 
+    /// Integer-only variant of [`Self::get_external_ids_raw`].
+    pub fn get_int_keys_raw(&self, internal_ids: &[u32], out: &mut Vec<Option<i64>>) {
+        if !self.is_open.load(Ordering::Acquire) {
+            out.clear();
+            out.resize(internal_ids.len(), None);
+            return;
+        }
+        self.id_indexer.get_int_keys(internal_ids, out);
+    }
+
     /// Declared data type of the column `name`, if it exists in the schema.
     pub fn data_type_of(&self, name: &str) -> Option<linkrs_core::types::DataType> {
         self.columns.data_type_of(name)

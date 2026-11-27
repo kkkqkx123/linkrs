@@ -137,6 +137,12 @@ pub struct ColumnarStats {
     pub scan_read_us: AtomicU64,
     /// Candidate enumeration inside a storage scan batch read.
     pub scan_enumerate_us: AtomicU64,
+    /// Table loading component of candidate enumeration.
+    pub scan_table_load_us: AtomicU64,
+    /// Window filtering component of candidate enumeration.
+    pub scan_window_filter_us: AtomicU64,
+    /// Shard-run merge component of candidate enumeration.
+    pub scan_merge_us: AtomicU64,
     /// Repeated row-liveness checks on enumerated candidates.
     pub scan_visibility_us: AtomicU64,
     /// Column value decode inside a storage scan batch read.
@@ -221,6 +227,9 @@ impl Default for ColumnarStats {
             typed_group_fallbacks: AtomicU64::new(0),
             scan_read_us: AtomicU64::new(0),
             scan_enumerate_us: AtomicU64::new(0),
+            scan_table_load_us: AtomicU64::new(0),
+            scan_window_filter_us: AtomicU64::new(0),
+            scan_merge_us: AtomicU64::new(0),
             scan_visibility_us: AtomicU64::new(0),
             scan_decode_us: AtomicU64::new(0),
             scan_assemble_us: AtomicU64::new(0),
@@ -304,6 +313,9 @@ impl ColumnarStats {
     pub fn record_scan_phases(
         &self,
         enumerate_us: u64,
+        table_load_us: u64,
+        window_filter_us: u64,
+        merge_us: u64,
         visibility_us: u64,
         decode_us: u64,
         assemble_us: u64,
@@ -311,6 +323,11 @@ impl ColumnarStats {
     ) {
         self.scan_enumerate_us
             .fetch_add(enumerate_us, Ordering::Relaxed);
+        self.scan_table_load_us
+            .fetch_add(table_load_us, Ordering::Relaxed);
+        self.scan_window_filter_us
+            .fetch_add(window_filter_us, Ordering::Relaxed);
+        self.scan_merge_us.fetch_add(merge_us, Ordering::Relaxed);
         self.scan_visibility_us
             .fetch_add(visibility_us, Ordering::Relaxed);
         self.scan_decode_us.fetch_add(decode_us, Ordering::Relaxed);
@@ -523,6 +540,9 @@ pub struct ColumnarStatsSnapshot {
     pub typed_group_fallbacks: u64,
     pub scan_read_us: u64,
     pub scan_enumerate_us: u64,
+    pub scan_table_load_us: u64,
+    pub scan_window_filter_us: u64,
+    pub scan_merge_us: u64,
     pub scan_visibility_us: u64,
     pub scan_decode_us: u64,
     pub scan_assemble_us: u64,
@@ -577,6 +597,9 @@ impl ColumnarStatsSnapshot {
             typed_group_fallbacks: stats.typed_group_fallbacks.load(Ordering::Relaxed),
             scan_read_us: stats.scan_read_us.load(Ordering::Relaxed),
             scan_enumerate_us: stats.scan_enumerate_us.load(Ordering::Relaxed),
+            scan_table_load_us: stats.scan_table_load_us.load(Ordering::Relaxed),
+            scan_window_filter_us: stats.scan_window_filter_us.load(Ordering::Relaxed),
+            scan_merge_us: stats.scan_merge_us.load(Ordering::Relaxed),
             scan_visibility_us: stats.scan_visibility_us.load(Ordering::Relaxed),
             scan_decode_us: stats.scan_decode_us.load(Ordering::Relaxed),
             scan_assemble_us: stats.scan_assemble_us.load(Ordering::Relaxed),
@@ -654,7 +677,7 @@ impl ColumnarStatsSnapshot {
     /// Human-readable one-line summary for PROFILE output.
     pub fn summary(&self) -> String {
         format!(
-            "columnar_hits={}, misses={}, hit_rate={:.3}, typed_hit_rate={:.3}, b_path_hits={}, wasted_builds={}, typed_group_hits={}, typed_group_fallbacks={}, scan_read_us={}, scan_enumerate_us={}, scan_visibility_us={}, scan_decode_us={}, scan_assemble_us={}, scan_predicate_us={}, expand_read_us={}, expand_topology_read_us={}, expand_destination_read_us={}, expand_tag_resolve_us={}, expand_view_us={}, expand_output_us={}, expand_parent_batches={}, expand_parents={}, expand_events={}, expand_unique_destinations={}, expand_missing_destinations={}, dangling_exist_skips={}, frontier_first_hop_us={}, frontier_sort_us={}, frontier_resolve_us={}, frontier_tail_us={}, expand_output_rows={}, ordered_existence_candidates={}, ordered_existence_matches={}, ordered_existence_output_rows={}, ordered_existence_drift={}, ordered_existence_cursor_us={}, ordered_existence_gate_us={}, ordered_existence_open_us={}, ordered_existence_opens={}, ordered_existence_contract_violations={}, ordered_existence_contract_discarded={}, selection_attached={}, selection_materialized={}, selection_pushed={}, column_block_hits={}, multiplicity_expanded={}, spill_rows={}, spill_bytes={}, spill_runs={}, batch_outlets={}",
+            "columnar_hits={}, misses={}, hit_rate={:.3}, typed_hit_rate={:.3}, b_path_hits={}, wasted_builds={}, typed_group_hits={}, typed_group_fallbacks={}, scan_read_us={}, scan_enumerate_us={}, scan_table_load_us={}, scan_window_filter_us={}, scan_merge_us={}, scan_visibility_us={}, scan_decode_us={}, scan_assemble_us={}, scan_predicate_us={}, expand_read_us={}, expand_topology_read_us={}, expand_destination_read_us={}, expand_tag_resolve_us={}, expand_view_us={}, expand_output_us={}, expand_parent_batches={}, expand_parents={}, expand_events={}, expand_unique_destinations={}, expand_missing_destinations={}, dangling_exist_skips={}, frontier_first_hop_us={}, frontier_sort_us={}, frontier_resolve_us={}, frontier_tail_us={}, expand_output_rows={}, ordered_existence_candidates={}, ordered_existence_matches={}, ordered_existence_output_rows={}, ordered_existence_drift={}, ordered_existence_cursor_us={}, ordered_existence_gate_us={}, ordered_existence_open_us={}, ordered_existence_opens={}, ordered_existence_contract_violations={}, ordered_existence_contract_discarded={}, selection_attached={}, selection_materialized={}, selection_pushed={}, column_block_hits={}, multiplicity_expanded={}, spill_rows={}, spill_bytes={}, spill_runs={}, batch_outlets={}",
             self.columnar_hits,
             self.columnar_misses,
             self.hit_rate(),
@@ -665,6 +688,9 @@ impl ColumnarStatsSnapshot {
             self.typed_group_fallbacks,
             self.scan_read_us,
             self.scan_enumerate_us,
+            self.scan_table_load_us,
+            self.scan_window_filter_us,
+            self.scan_merge_us,
             self.scan_visibility_us,
             self.scan_decode_us,
             self.scan_assemble_us,
