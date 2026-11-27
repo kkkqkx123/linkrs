@@ -393,6 +393,7 @@ pub fn physical_plan_to_plan_description(plan: &PhysicalPlan) -> PlanDescription
                     col_names,
                     identity_only,
                     skip_rows,
+                    handle_only,
                     ..
                 } => {
                     if *identity_only {
@@ -402,6 +403,9 @@ pub fn physical_plan_to_plan_description(plan: &PhysicalPlan) -> PlanDescription
                     }
                     if *skip_rows {
                         pairs.push(crate::planning::plan::explain::Pair::new("rows", "skipped"));
+                    }
+                    if *handle_only {
+                        pairs.push(crate::planning::plan::explain::Pair::new("seed", "handles"));
                     }
                     col_names.clone()
                 }

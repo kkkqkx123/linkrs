@@ -234,6 +234,29 @@ impl StorageReader for GraphStorage {
         )
     }
 
+    fn get_packed_handle_counts_batch(
+        &self,
+        space: &str,
+        parents: &[VertexId],
+        handles: Option<&[Option<(u32, LabelId)>]>,
+        direction: linkrs_core::EdgeDirection,
+        edge_types: &[String],
+        schema: &crate::TopologySchema,
+    ) -> Result<Option<crate::PackedHandleCounts>, StorageError> {
+        reader::packed_handle_counts_batch(
+            &self.ctx, space, parents, handles, direction, edge_types, schema,
+        )
+    }
+
+    fn vertex_ids_by_handles_batch(
+        &self,
+        _space: &str,
+        _tag: &str,
+        handles: &[Option<(u32, LabelId)>],
+    ) -> Result<Option<Vec<Option<VertexId>>>, StorageError> {
+        reader::vertex_ids_by_handles_batch(&self.ctx, handles, self.ctx.get_read_timestamp())
+    }
+
     fn get_vertices_batch(
         &self,
         space: &str,

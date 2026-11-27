@@ -159,6 +159,12 @@ pub struct ColumnarStats {
     pub expand_destination_read_us: AtomicU64,
     /// Neighbor tag resolution before the destination read.
     pub expand_tag_resolve_us: AtomicU64,
+    /// Handle-level adjacency aggregation inside a count-only expand batch.
+    pub expand_handle_traverse_us: AtomicU64,
+    /// External key resolution for unique destination handles.
+    pub expand_key_resolve_us: AtomicU64,
+    /// Weight assembly after handle deduplication.
+    pub expand_weight_us: AtomicU64,
     /// Destination deduplication, existence view and edge-order expansion.
     pub expand_view_us: AtomicU64,
     /// Typed or row output assembly after existence filtering.
@@ -238,6 +244,9 @@ impl Default for ColumnarStats {
             expand_topology_read_us: AtomicU64::new(0),
             expand_destination_read_us: AtomicU64::new(0),
             expand_tag_resolve_us: AtomicU64::new(0),
+            expand_handle_traverse_us: AtomicU64::new(0),
+            expand_key_resolve_us: AtomicU64::new(0),
+            expand_weight_us: AtomicU64::new(0),
             expand_view_us: AtomicU64::new(0),
             expand_output_us: AtomicU64::new(0),
             expand_parent_batches: AtomicU64::new(0),
@@ -360,6 +369,16 @@ impl ColumnarStats {
         self.expand_view_us.fetch_add(view_us, Ordering::Relaxed);
         self.expand_output_us
             .fetch_add(output_us, Ordering::Relaxed);
+    }
+
+    /// Record the disjoint query-side phases of a handle-count expand.
+    pub fn record_handle_phases(&self, traverse_us: u64, key_resolve_us: u64, weight_us: u64) {
+        self.expand_handle_traverse_us
+            .fetch_add(traverse_us, Ordering::Relaxed);
+        self.expand_key_resolve_us
+            .fetch_add(key_resolve_us, Ordering::Relaxed);
+        self.expand_weight_us
+            .fetch_add(weight_us, Ordering::Relaxed);
     }
 
     /// Record the topology cardinality of one columnar expand batch.
@@ -551,6 +570,9 @@ pub struct ColumnarStatsSnapshot {
     pub expand_topology_read_us: u64,
     pub expand_destination_read_us: u64,
     pub expand_tag_resolve_us: u64,
+    pub expand_handle_traverse_us: u64,
+    pub expand_key_resolve_us: u64,
+    pub expand_weight_us: u64,
     pub expand_view_us: u64,
     pub expand_output_us: u64,
     pub expand_parent_batches: u64,
@@ -608,6 +630,9 @@ impl ColumnarStatsSnapshot {
             expand_topology_read_us: stats.expand_topology_read_us.load(Ordering::Relaxed),
             expand_destination_read_us: stats.expand_destination_read_us.load(Ordering::Relaxed),
             expand_tag_resolve_us: stats.expand_tag_resolve_us.load(Ordering::Relaxed),
+            expand_handle_traverse_us: stats.expand_handle_traverse_us.load(Ordering::Relaxed),
+            expand_key_resolve_us: stats.expand_key_resolve_us.load(Ordering::Relaxed),
+            expand_weight_us: stats.expand_weight_us.load(Ordering::Relaxed),
             expand_view_us: stats.expand_view_us.load(Ordering::Relaxed),
             expand_output_us: stats.expand_output_us.load(Ordering::Relaxed),
             expand_parent_batches: stats.expand_parent_batches.load(Ordering::Relaxed),
@@ -677,7 +702,7 @@ impl ColumnarStatsSnapshot {
     /// Human-readable one-line summary for PROFILE output.
     pub fn summary(&self) -> String {
         format!(
-            "columnar_hits={}, misses={}, hit_rate={:.3}, typed_hit_rate={:.3}, b_path_hits={}, wasted_builds={}, typed_group_hits={}, typed_group_fallbacks={}, scan_read_us={}, scan_enumerate_us={}, scan_table_load_us={}, scan_window_filter_us={}, scan_merge_us={}, scan_visibility_us={}, scan_decode_us={}, scan_assemble_us={}, scan_predicate_us={}, expand_read_us={}, expand_topology_read_us={}, expand_destination_read_us={}, expand_tag_resolve_us={}, expand_view_us={}, expand_output_us={}, expand_parent_batches={}, expand_parents={}, expand_events={}, expand_unique_destinations={}, expand_missing_destinations={}, dangling_exist_skips={}, frontier_first_hop_us={}, frontier_sort_us={}, frontier_resolve_us={}, frontier_tail_us={}, expand_output_rows={}, ordered_existence_candidates={}, ordered_existence_matches={}, ordered_existence_output_rows={}, ordered_existence_drift={}, ordered_existence_cursor_us={}, ordered_existence_gate_us={}, ordered_existence_open_us={}, ordered_existence_opens={}, ordered_existence_contract_violations={}, ordered_existence_contract_discarded={}, selection_attached={}, selection_materialized={}, selection_pushed={}, column_block_hits={}, multiplicity_expanded={}, spill_rows={}, spill_bytes={}, spill_runs={}, batch_outlets={}",
+            "columnar_hits={}, misses={}, hit_rate={:.3}, typed_hit_rate={:.3}, b_path_hits={}, wasted_builds={}, typed_group_hits={}, typed_group_fallbacks={}, scan_read_us={}, scan_enumerate_us={}, scan_table_load_us={}, scan_window_filter_us={}, scan_merge_us={}, scan_visibility_us={}, scan_decode_us={}, scan_assemble_us={}, scan_predicate_us={}, expand_read_us={}, expand_topology_read_us={}, expand_destination_read_us={}, expand_tag_resolve_us={}, expand_handle_traverse_us={}, expand_key_resolve_us={}, expand_weight_us={}, expand_view_us={}, expand_output_us={}, expand_parent_batches={}, expand_parents={}, expand_events={}, expand_unique_destinations={}, expand_missing_destinations={}, dangling_exist_skips={}, frontier_first_hop_us={}, frontier_sort_us={}, frontier_resolve_us={}, frontier_tail_us={}, expand_output_rows={}, ordered_existence_candidates={}, ordered_existence_matches={}, ordered_existence_output_rows={}, ordered_existence_drift={}, ordered_existence_cursor_us={}, ordered_existence_gate_us={}, ordered_existence_open_us={}, ordered_existence_opens={}, ordered_existence_contract_violations={}, ordered_existence_contract_discarded={}, selection_attached={}, selection_materialized={}, selection_pushed={}, column_block_hits={}, multiplicity_expanded={}, spill_rows={}, spill_bytes={}, spill_runs={}, batch_outlets={}",
             self.columnar_hits,
             self.columnar_misses,
             self.hit_rate(),
@@ -699,6 +724,9 @@ impl ColumnarStatsSnapshot {
             self.expand_topology_read_us,
             self.expand_destination_read_us,
             self.expand_tag_resolve_us,
+            self.expand_handle_traverse_us,
+            self.expand_key_resolve_us,
+            self.expand_weight_us,
             self.expand_view_us,
             self.expand_output_us,
             self.expand_parent_batches,

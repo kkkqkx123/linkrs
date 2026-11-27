@@ -91,6 +91,10 @@ pub(crate) struct GraphVertexCursor {
     /// Set from `ScanOptions`; only valid with an empty projection and no
     /// pushed predicates (rejected in `new`).
     topology_only: bool,
+    /// Handle-only scan: keep internal ids without resolving external keys.
+    /// Enabled only for an int-keyed, non-TTL topology scan over shard
+    /// slices, where no external-id range can be requested.
+    handle_only: bool,
     /// External key shape of the scanned space, resolved once at open.
     /// Every table in the space shares it because writes normalize ids.
     key_kind: ExternalKeyKind,
@@ -160,6 +164,7 @@ impl GraphVertexCursor {
                 }
             }
         }
+        let tag_ttl_active = !ttl.is_empty();
         let tags = TagCache { labels, names, ttl };
         // When the scan is tag-restricted, scan only that tag's table.  A tag
         // that does not exist in the schema yields no rows (an unknown tag
@@ -251,6 +256,12 @@ impl GraphVertexCursor {
                 .as_ref()
                 .map(|p| p.iter().map(|rp| rp.name.clone()).collect()),
             topology_only: options.topology_only,
+            handle_only: options.handle_only
+                && options.topology_only
+                && options.shard_slice.is_some()
+                && options.vertex_id_range.is_none()
+                && key_kind == ExternalKeyKind::Int
+                && !tag_ttl_active,
             key_kind,
             scratch: ScanScratch::default(),
             predicate: options.predicate.clone().unwrap_or_default(),
@@ -376,8 +387,10 @@ impl GraphVertexCursor {
                 .slice
                 .as_ref()
                 .map(|slice| (slice, table.shard_universes()));
-            let fuse_identity =
-                self.topology_only && self.table_ttl(label_id).is_none() && owned.is_some();
+            let fuse_identity = self.topology_only
+                && !self.handle_only
+                && self.table_ttl(label_id).is_none()
+                && owned.is_some();
             match owned.as_ref() {
                 Some((slice, universes)) if fuse_identity => table.live_ids_in_slice_with_vids(
                     guard,
@@ -485,7 +498,14 @@ impl GraphVertexCursor {
         if self.topology_only {
             let run_rows = rows_sel.len();
             internal_ids.extend(rows_sel.iter().map(|&index| self.staged_rows[index].id));
-            vids.extend(rows_sel.iter().map(|&index| self.staged_rows[index].vid));
+            vids.extend(rows_sel.iter().map(|&index| {
+                let row = &self.staged_rows[index];
+                if self.handle_only {
+                    VertexId::from_u32(row.id)
+                } else {
+                    row.vid
+                }
+            }));
             tag_names.extend(std::iter::repeat_n(tag_name.to_string(), run_rows));
             return;
         }
@@ -718,6 +738,16 @@ impl GraphVertexCursor {
                             }
                             (&scratch.range_ids[..], Some(&scratch.range_vids[..]))
                         }
+                        None if self.handle_only => {
+                            table.scan_handles(
+                                window,
+                                &guard,
+                                provenance,
+                                &mut self.timings,
+                                &mut scratch.topology_ids,
+                            );
+                            (&scratch.topology_ids[..], None)
+                        }
                         None => (window, resolved_window),
                     };
                 self.timings
@@ -783,6 +813,12 @@ impl GraphVertexCursor {
                     let (run_internal, run_vids): (&[u32], &[VertexId]) =
                         if let Some(window) = resolved_vids {
                             (ids, window)
+                        } else if self.handle_only {
+                            scratch.run_vids.clear();
+                            scratch
+                                .run_vids
+                                .extend(ids.iter().map(|&id| VertexId::from_u32(id)));
+                            (ids, &scratch.run_vids[..])
                         } else {
                             table.scan_topology(
                                 ids,
@@ -799,10 +835,12 @@ impl GraphVertexCursor {
                     }
                     let mut kept = 0usize;
                     for (row, vid) in run_vids.iter().enumerate() {
-                        if let Some(ref range) = self.id_range {
-                            match vid.as_int64() {
-                                Some(vid) if (range.start..range.end).contains(&vid) => {}
-                                _ => continue,
+                        if !self.handle_only {
+                            if let Some(ref range) = self.id_range {
+                                match vid.as_int64() {
+                                    Some(vid) if (range.start..range.end).contains(&vid) => {}
+                                    _ => continue,
+                                }
                             }
                         }
                         if self.offset_remaining > 0 {

@@ -132,6 +132,9 @@ struct QueryDiagnostics {
     expand_topology_read_us: u64,
     expand_destination_read_us: u64,
     expand_tag_resolve_us: u64,
+    expand_handle_traverse_us: u64,
+    expand_key_resolve_us: u64,
+    expand_weight_us: u64,
     expand_view_us: u64,
     expand_output_us: u64,
     expand_parent_batches: u64,
@@ -1200,6 +1203,14 @@ fn cmd_run(args: &[String]) {
                 expand_read_us: explain_metric(&explain_text, "expand_read_us").unwrap_or(0),
                 expand_topology_read_us: explain_metric(&explain_text, "expand_topology_read_us")
                     .unwrap_or(0),
+                expand_handle_traverse_us: explain_metric(
+                    &explain_text,
+                    "expand_handle_traverse_us",
+                )
+                .unwrap_or(0),
+                expand_key_resolve_us: explain_metric(&explain_text, "expand_key_resolve_us")
+                    .unwrap_or(0),
+                expand_weight_us: explain_metric(&explain_text, "expand_weight_us").unwrap_or(0),
                 dangling_exist_skips: explain_metric(&explain_text, "dangling_exist_skips")
                     .unwrap_or(0),
                 frontier_first_hop_us: explain_metric(&explain_text, "frontier_first_hop_us")
@@ -1371,6 +1382,17 @@ fn patch_resource_result(
         "expand_destination_read_us",
         diagnostics.expand_destination_read_us,
     );
+    set_json_u64(
+        &mut text,
+        "expand_handle_traverse_us",
+        diagnostics.expand_handle_traverse_us,
+    );
+    set_json_u64(
+        &mut text,
+        "expand_key_resolve_us",
+        diagnostics.expand_key_resolve_us,
+    );
+    set_json_u64(&mut text, "expand_weight_us", diagnostics.expand_weight_us);
     set_json_u64(
         &mut text,
         "expand_tag_resolve_us",
@@ -1662,6 +1684,9 @@ fn write_run_result(
     json.push_str("  \"expand_topology_read_us\": 0,\n");
     json.push_str("  \"expand_destination_read_us\": 0,\n");
     json.push_str("  \"expand_tag_resolve_us\": 0,\n");
+    json.push_str("  \"expand_handle_traverse_us\": 0,\n");
+    json.push_str("  \"expand_key_resolve_us\": 0,\n");
+    json.push_str("  \"expand_weight_us\": 0,\n");
     json.push_str("  \"expand_view_us\": 0,\n");
     json.push_str("  \"expand_output_us\": 0,\n");
     json.push_str("  \"expand_parent_batches\": 0,\n");

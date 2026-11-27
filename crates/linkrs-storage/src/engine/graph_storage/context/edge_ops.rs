@@ -864,6 +864,118 @@ impl GraphStorageContext {
         }
     }
 
+    /// Visit visible out-neighbors of resolved internal parent handles.
+    ///
+    /// Count-only reads use this instead of staging a full
+    /// [`PackedTopologyBatch`]: the callback receives only the far label and
+    /// neighbor slot, so no rank, edge id or external id is materialized.
+    pub fn visit_out_nbrs_by_internal<F>(
+        &self,
+        edge_label: LabelId,
+        src_label: LabelId,
+        parents: &[VertexId],
+        handles: Option<&[Option<(u32, LabelId)>]>,
+        ts: Timestamp,
+        mut f: F,
+    ) where
+        F: FnMut(usize, LabelId, HotNbr),
+    {
+        if !self.persistent.is_open.load(Ordering::Acquire) {
+            return;
+        }
+        let resolved: Vec<Option<(u32, LabelId)>> = match handles {
+            Some(handles) if handles.len() == parents.len() => handles
+                .iter()
+                .zip(parents.iter())
+                .map(|(&handle, &id)| match handle {
+                    Some((internal, label)) if label == src_label => Some((internal, label)),
+                    _ => self.resolve_node_endpoint(src_label, id, ts),
+                })
+                .collect(),
+            _ => self.resolve_node_endpoints(src_label, parents, ts),
+        };
+        let arcs = self
+            .persistent
+            .data_store
+            .matching_edge_partition_arcs(edge_label);
+        let gate = self.pending_gate();
+        let mut tables = Vec::new();
+        for arc in &arcs {
+            let table = self.persistent.data_store.read_edge_table(arc);
+            if table.label() != edge_label {
+                continue;
+            }
+            tables.push((table.dst_label(), table));
+        }
+        for (index, seed) in resolved.iter().enumerate() {
+            let Some((src_internal, actual_src)) = seed else {
+                continue;
+            };
+            for (far_label, table) in &tables {
+                if table.src_label() != *actual_src {
+                    continue;
+                }
+                table.visit_out_with_gate(*src_internal, ts, &gate, |nbr| {
+                    f(index, *far_label, nbr)
+                });
+            }
+        }
+    }
+
+    /// In-direction counterpart of [`Self::visit_out_nbrs_by_internal`].
+    pub fn visit_in_nbrs_by_internal<F>(
+        &self,
+        edge_label: LabelId,
+        dst_label: LabelId,
+        parents: &[VertexId],
+        handles: Option<&[Option<(u32, LabelId)>]>,
+        ts: Timestamp,
+        mut f: F,
+    ) where
+        F: FnMut(usize, LabelId, HotNbr),
+    {
+        if !self.persistent.is_open.load(Ordering::Acquire) {
+            return;
+        }
+        let resolved: Vec<Option<(u32, LabelId)>> = match handles {
+            Some(handles) if handles.len() == parents.len() => handles
+                .iter()
+                .zip(parents.iter())
+                .map(|(&handle, &id)| match handle {
+                    Some((internal, label)) if label == dst_label => Some((internal, label)),
+                    _ => self.resolve_node_endpoint(dst_label, id, ts),
+                })
+                .collect(),
+            _ => self.resolve_node_endpoints(dst_label, parents, ts),
+        };
+        let arcs = self
+            .persistent
+            .data_store
+            .matching_edge_partition_arcs(edge_label);
+        let gate = self.pending_gate();
+        let mut tables = Vec::new();
+        for arc in &arcs {
+            let table = self.persistent.data_store.read_edge_table(arc);
+            if table.label() != edge_label {
+                continue;
+            }
+            tables.push((table.src_label(), table));
+        }
+        for (index, seed) in resolved.iter().enumerate() {
+            let Some((dst_internal, actual_dst)) = seed else {
+                continue;
+            };
+            for (far_label, table) in &tables {
+                if table.dst_label() != *actual_dst {
+                    continue;
+                }
+                table.visit_in_with_gate(*dst_internal, ts, &gate, |nbr| {
+                    f(index, *far_label, nbr)
+                });
+            }
+        }
+    }
+
     /// Count visible out-edges for already resolved internal row ids.
     ///
     /// Used by the fused two-hop count after the first adjacency pass has
@@ -1136,9 +1248,20 @@ impl GraphStorageContext {
         edge_label: LabelId,
         dst_label: LabelId,
         dst_ids: &[VertexId],
+        handles: Option<&[Option<(u32, LabelId)>]>,
         ts: Timestamp,
     ) -> PackedTopologyBatch {
-        let resolved = self.resolve_node_endpoints(dst_label, dst_ids, ts);
+        let resolved: Vec<Option<(u32, LabelId)>> = match handles {
+            Some(handles) => handles
+                .iter()
+                .zip(dst_ids.iter())
+                .map(|(&handle, &id)| match handle {
+                    Some((internal, label)) if label == dst_label => Some((internal, label)),
+                    _ => self.resolve_node_endpoint(dst_label, id, ts),
+                })
+                .collect(),
+            None => self.resolve_node_endpoints(dst_label, dst_ids, ts),
+        };
         let arcs = self
             .persistent
             .data_store

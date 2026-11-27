@@ -5,7 +5,7 @@ use crate::executor::streaming::chunk::{
 };
 use crate::executor::streaming::runtime::ColumnarStats;
 use crate::executor::streaming::slot::SlotLayout;
-use crate::storage::{EdgeTopology, PackedEdgeTopology, QueryStorage};
+use crate::storage::{EdgeTopology, PackedEdgeTopology, PackedHandleCounts, QueryStorage};
 use linkrs_core::error::QueryError;
 use linkrs_core::types::{storage_ids::VertexId, LabelId};
 use linkrs_core::{Edge, EdgeDirection, EdgeHeader, Value, Vertex};
@@ -319,6 +319,198 @@ fn identity_key_value(vid: VertexId, data_type: &linkrs_core::DataType) -> Optio
     }
 }
 
+/// Whether destination existence may be skipped for a proven identity hop.
+///
+/// The proof covers one edge type, no vertex or edge TTL, and a storage
+/// token that rules out plain deletes since the last endpoint validation.
+fn identity_presence_proven(
+    reader: &dyn crate::storage::QueryStorage,
+    space_name: &str,
+    dst_tag: &str,
+    edge_type_names: &[Arc<str>],
+) -> bool {
+    if !reader.allows_dangling_skip() || edge_type_names.len() != 1 {
+        return false;
+    }
+    let edge_type_name = edge_type_names[0].as_ref();
+    let vertex_ttl = reader
+        .get_tag(space_name, dst_tag)
+        .map(|tag| tag.is_some_and(|info| info.ttl_duration.is_some()))
+        .unwrap_or(true);
+    let edge_ttl = reader
+        .list_edge_types(space_name)
+        .map(|types| {
+            types.iter().any(|info| {
+                info.edge_type_name.as_str() == edge_type_name && info.ttl_duration.is_some()
+            })
+        })
+        .unwrap_or(true);
+    !vertex_ttl && !edge_ttl && reader.edge_type_dangling_free(space_name, edge_type_name)
+}
+
+/// Handle-count fast path for the packed group-count handoff.
+///
+/// Storage aggregates visible CSR edges by internal far endpoint. Query
+/// deduplicates integer handles, resolves each unique handle to its public
+/// identity once, and emits the same weighted key payload as the packed
+/// topology path without ever expanding per-edge identities.
+fn expand_handle_counts_identity(
+    reader: &dyn crate::storage::QueryStorage,
+    space_name: &str,
+    dst_tag: &str,
+    counts: &PackedHandleCounts,
+    key_name: &str,
+    identity_type: &linkrs_core::DataType,
+    presence_proven: bool,
+    stats: Option<&ColumnarStats>,
+    output_layout: Arc<crate::executor::streaming::slot::SlotLayout>,
+) -> Result<Option<ColumnarOutcome>, QueryError> {
+    let traverse_started = std::time::Instant::now();
+    let mut unique_handles: Vec<(u32, LabelId)> = Vec::new();
+    let mut weights: Vec<u64> = Vec::new();
+    let mut far_label: Option<LabelId> = None;
+    let mut pending: Option<((u32, LabelId), u64)> = None;
+    // The storage contract returns handles sorted, so equal handles are
+    // adjacent and the whole batch collapses in one linear pass.
+    for (&handle, &count) in counts.handles.iter().zip(&counts.counts) {
+        match far_label {
+            None => far_label = Some(handle.1),
+            Some(label) if label != handle.1 => return Ok(None),
+            Some(_) => {}
+        }
+        match pending {
+            Some((key, weight)) if key == handle => pending = Some((key, weight + count)),
+            Some(entry) => {
+                unique_handles.push(entry.0);
+                weights.push(entry.1);
+                pending = Some((handle, count));
+            }
+            None => pending = Some((handle, count)),
+        }
+    }
+    if let Some(entry) = pending {
+        unique_handles.push(entry.0);
+        weights.push(entry.1);
+    }
+    let traverse_us = traverse_started.elapsed().as_micros() as u64;
+    let total_edges = counts.total_edges();
+    if unique_handles.is_empty() {
+        return Ok(Some(ColumnarOutcome::Empty));
+    }
+
+    let resolve_started = std::time::Instant::now();
+    let handle_options: Vec<Option<(u32, LabelId)>> =
+        unique_handles.iter().copied().map(Some).collect();
+    let Some(resolved) =
+        reader.vertex_ids_by_handles_batch(space_name, dst_tag, &handle_options)?
+    else {
+        return Ok(None);
+    };
+    if resolved.len() != unique_handles.len() || resolved.iter().any(Option::is_none) {
+        return Ok(None);
+    }
+    // Collapse by public identity as well, so a duplicated external key
+    // keeps the same multiplicity as the external-id dedup path. A handle
+    // set with mixed labels cannot prove that equivalence.
+    if unique_handles
+        .iter()
+        .any(|&(_, label)| Some(label) != far_label)
+    {
+        return Ok(None);
+    }
+    let mut unique: Vec<VertexId> = Vec::with_capacity(resolved.len());
+    let mut merged_weights: Vec<u64> = Vec::with_capacity(resolved.len());
+    let mut id_slots: std::collections::HashMap<VertexId, usize> = std::collections::HashMap::new();
+    for (external, weight) in resolved.into_iter().zip(weights) {
+        let Some(external) = external else {
+            return Ok(None);
+        };
+        let slot = match id_slots.get(&external) {
+            Some(&slot) => slot,
+            None => {
+                let slot = unique.len();
+                id_slots.insert(external, slot);
+                unique.push(external);
+                merged_weights.push(0);
+                slot
+            }
+        };
+        merged_weights[slot] += weight;
+    }
+    let Some(keys) = unique
+        .iter()
+        .map(|id| identity_key_value(*id, identity_type))
+        .collect::<Option<Vec<Value>>>()
+    else {
+        return Ok(None);
+    };
+
+    let (present, missing, presence_us) = if presence_proven {
+        if let Some(stats) = stats {
+            stats.record_dangling_exist_skip();
+        }
+        (vec![true; unique.len()], 0, 0)
+    } else {
+        let presence_started = std::time::Instant::now();
+        let presence = reader.get_vertex_property_columns_with_handles_batch(
+            space_name,
+            dst_tag,
+            &unique,
+            &[],
+            &handle_options,
+        )?;
+        let present: Vec<bool> = presence.iter().map(Option::is_some).collect();
+        let missing = present.iter().filter(|found| !**found).count();
+        (
+            present,
+            missing,
+            presence_started.elapsed().as_micros() as u64,
+        )
+    };
+    let key_resolve_us = resolve_started.elapsed().as_micros() as u64;
+
+    let weight_started = std::time::Instant::now();
+    let mut out_keys = Vec::with_capacity(unique.len());
+    let mut non_uniform_weight = false;
+    for (index, found) in present.iter().enumerate() {
+        if *found {
+            out_keys.push(keys[index].clone());
+            non_uniform_weight |= merged_weights[index] != 1;
+        }
+    }
+    let out_weights = if non_uniform_weight {
+        present
+            .iter()
+            .enumerate()
+            .filter_map(|(index, found)| found.then_some(merged_weights[index]))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let weight_us = weight_started.elapsed().as_micros() as u64;
+    if let Some(stats) = stats {
+        stats.record_expand_topology_counts(counts.parents.len() as u64, total_edges);
+        stats.record_handle_phases(traverse_us, key_resolve_us + presence_us, weight_us);
+        stats.record_expand_read_us(key_resolve_us + presence_us);
+        stats.record_expand_phases(0, presence_us, 0, weight_us, 0);
+        stats.record_expand_destination_counts(unique.len() as u64, missing as u64);
+        stats.record_expand_output_rows(out_keys.len() as u64);
+    }
+    if out_keys.is_empty() {
+        return Ok(Some(ColumnarOutcome::Empty));
+    }
+    Ok(Some(ColumnarOutcome::Produced(
+        DataChunk::new_packed_expand(
+            output_layout,
+            PackedExpandPayload {
+                key_name: key_name.to_string(),
+                keys: out_keys,
+                weights: out_weights,
+            },
+        ),
+    )))
+}
+
 /// Identity-key fast path for one packed expand batch.
 ///
 /// The plan proves that the demanded destination property is the declared
@@ -379,38 +571,12 @@ fn expand_packed_identity(
     // Proven dangling-free destinations skip the existence re-read: inserts
     // validate endpoints, the token rules out deletes since, and the gates
     // below keep write transactions and expiring tags on the checked path.
-    let mut proven_present = reader.allows_dangling_skip()
-        && packed
-            .edge_type_ids
-            .iter()
-            .all(|&id| Some(id) == packed.edge_type_ids.first().copied());
-    if proven_present {
-        if let Some(edge_type_name) = packed
-            .edge_type_ids
-            .first()
-            .and_then(|&id| packed.edge_type_names.get(id as usize))
-            .map(|name| &**name)
-        {
-            let vertex_ttl = reader
-                .get_tag(space_name, dst_tag)
-                .map(|tag| tag.is_some_and(|info| info.ttl_duration.is_some()))
-                .unwrap_or(true);
-            let edge_ttl = reader
-                .list_edge_types(space_name)
-                .map(|types| {
-                    types.iter().any(|info| {
-                        info.edge_type_name.as_str() == edge_type_name
-                            && info.ttl_duration.is_some()
-                    })
-                })
-                .unwrap_or(true);
-            proven_present = !vertex_ttl
-                && !edge_ttl
-                && reader.edge_type_dangling_free(space_name, edge_type_name);
-        } else {
-            proven_present = false;
-        }
-    }
+    let edge_type_names: Vec<Arc<str>> = packed
+        .edge_type_ids
+        .iter()
+        .filter_map(|&id| packed.edge_type_names.get(id as usize).cloned())
+        .collect();
+    let proven_present = identity_presence_proven(reader, space_name, dst_tag, &edge_type_names);
     let read_started = std::time::Instant::now();
     let (present, missing, read_us) = if proven_present {
         if let Some(stats) = stats {
@@ -553,6 +719,64 @@ pub(super) fn expand_single_step_columnar(
     let mut packed_edges: Option<PackedEdgeTopology> = None;
     if edge_empty && ctx.edge_required_props.is_some() && edge_bypass.is_empty() {
         let topology_schema = ctx.topology_schema(reader)?;
+        let count_edge_ttl_active = reader.edge_types_ttl_active(space_name, edge_types)?;
+        let identity_key = ctx
+            .packed_key_name
+            .clone()
+            .zip(ctx.packed_identity_type.clone());
+        if let Some((key_name, identity_type)) = identity_key.clone() {
+            let key_property = key_name.rsplit('.').next().unwrap_or(&key_name);
+            let planned_tag = ctx.dst_tag.to_string();
+            let runtime_tag = ctx.resolved_dst_tag(reader);
+            if dst_bypass.len() == 1
+                && dst_bypass[0] == key_property
+                && runtime_tag.as_deref() == Some(planned_tag.as_str())
+                && !planned_tag.is_empty()
+                && ctx.edge_types.len() == 1
+                && !matches!(direction, linkrs_core::EdgeDirection::Both)
+                && !count_edge_ttl_active
+            {
+                let read_started = std::time::Instant::now();
+                let counts = reader.get_packed_handle_counts_batch(
+                    space_name,
+                    &seed_vids,
+                    Some(&seed_handles),
+                    direction,
+                    edge_types,
+                    topology_schema.as_ref(),
+                );
+                let read_us = read_started.elapsed().as_micros() as u64;
+                if let Some(stats) = &stats {
+                    stats.record_expand_read_us(read_us);
+                    stats.record_expand_phases(read_us, 0, 0, 0, 0);
+                }
+                if let Some(counts) = counts? {
+                    if counts.total_edges() == 0 && ctx.include_empty_paths {
+                        return Ok(ColumnarOutcome::Declined);
+                    }
+                    let edge_type_names = [Arc::from(ctx.edge_types[0].as_str())];
+                    let proven_present = identity_presence_proven(
+                        reader,
+                        space_name,
+                        &planned_tag,
+                        &edge_type_names,
+                    );
+                    if let Some(outcome) = expand_handle_counts_identity(
+                        reader,
+                        space_name,
+                        &planned_tag,
+                        &counts,
+                        &key_name,
+                        &identity_type,
+                        proven_present,
+                        stats.as_deref(),
+                        Arc::clone(&output_layout),
+                    )? {
+                        return Ok(outcome);
+                    }
+                }
+            }
+        }
         let read_started = std::time::Instant::now();
         let read = reader.get_packed_node_edge_headers_batch(
             space_name,
@@ -568,10 +792,6 @@ pub(super) fn expand_single_step_columnar(
             stats.record_expand_phases(read_us, 0, 0, 0, 0);
         }
         let packed = read?;
-        let identity_key = ctx
-            .packed_key_name
-            .clone()
-            .zip(ctx.packed_identity_type.clone());
         if let Some((key_name, identity_type)) = identity_key {
             let key_property = key_name.rsplit('.').next().unwrap_or(&key_name);
             if edge_bypass.is_empty() && dst_bypass.len() == 1 && dst_bypass[0] == key_property {

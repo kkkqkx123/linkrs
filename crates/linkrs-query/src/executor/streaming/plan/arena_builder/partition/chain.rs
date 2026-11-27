@@ -152,29 +152,44 @@ pub(super) fn build_partition_local_fragments(
     let mut partition_fids = Vec::with_capacity(spec.partition_count());
     let packed_key = packed_expand_key(chain, exec_ctx);
     let packed_key_name = packed_key.as_ref().map(|key| key.name.clone());
-    let packed_identity_type = packed_key.and_then(|key| key.identity_type);
+    let packed_identity_type = packed_key
+        .as_ref()
+        .and_then(|key| key.identity_type.clone());
     let packed_expand_id = chain
         .local
         .iter()
         .rev()
         .find(|op| matches!(op, PlanNodeEnum::ExpandAll(_)))
         .map(|op| op.id());
+    // The packed identity proof also certifies that the expand never needs
+    // the seed's external id. Only a scan whose first local consumer is that
+    // expand may skip external key decoding.
+    let seed_handle_only = packed_identity_type.is_some()
+        && matches!(
+            chain.local.first(),
+            Some(PlanNodeEnum::ExpandAll(expand)) if Some(expand.id()) == packed_expand_id
+        );
     for (index, range) in spec.ranges().iter().enumerate() {
         let mut scan_spec = build_source_spec(scan, exec_ctx)?;
         match &mut scan_spec {
             SourceSpec::StorageScanVertices {
+                identity_only,
+                handle_only,
                 partition_range,
                 shard_slice,
                 ..
-            } => match division {
-                ScanDivision::ByValueRange => *partition_range = Some(range.clone()),
-                ScanDivision::ByShardSlice => {
-                    *shard_slice = Some(crate::storage::ShardSlice::new(
-                        index,
-                        spec.partition_count(),
-                    ));
+            } => {
+                *handle_only = *identity_only && seed_handle_only;
+                match division {
+                    ScanDivision::ByValueRange => *partition_range = Some(range.clone()),
+                    ScanDivision::ByShardSlice => {
+                        *shard_slice = Some(crate::storage::ShardSlice::new(
+                            index,
+                            spec.partition_count(),
+                        ));
+                    }
                 }
-            },
+            }
             SourceSpec::StorageScanEdges { shard_slice, .. } => {
                 *shard_slice = Some(crate::storage::ShardSlice::new(
                     index,

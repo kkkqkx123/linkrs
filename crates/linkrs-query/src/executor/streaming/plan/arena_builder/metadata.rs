@@ -1268,6 +1268,7 @@ mod tests {
             projected_properties: Vec::new(),
             identity_only: true,
             skip_rows: false,
+            handle_only: false,
             predicate: Vec::new(),
             tag: Some("person".to_string()),
             partition_range: None,

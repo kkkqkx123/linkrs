@@ -146,6 +146,11 @@ pub struct ScanOptions {
     /// pushed predicates; the cursor rejects any other combination at open
     /// so misuse surfaces as an error instead of silently wrong rows.
     pub topology_only: bool,
+    /// Carry only internal `(id, label)` handles in a topology-only vertex
+    /// scan. Enabled when the planner proves the seed consumer never reads
+    /// the external identity. The cursor declines this mode for shapes that
+    /// need external ids (value ranges, text keys or TTL tables).
+    pub handle_only: bool,
     /// Read timestamp captured by the caller.
     pub read_timestamp: Option<Timestamp>,
     /// Optional conjunctive scan predicates pushed from the query layer.

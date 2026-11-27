@@ -162,6 +162,25 @@ impl PackedEdgeTopology {
     }
 }
 
+/// Handle-level edge counts for one seed batch.
+///
+/// Entries are batch-wide and sorted by internal handle. Count-only
+/// consumers sum multiplicities globally, so per-parent boundaries carry no
+/// information and are deliberately not materialized. `parents` keeps the
+/// seed cardinality for diagnostics.
+#[derive(Debug, Clone, Default)]
+pub struct PackedHandleCounts {
+    pub parents: Vec<VertexId>,
+    pub handles: Vec<(u32, LabelId)>,
+    pub counts: Vec<u64>,
+}
+
+impl PackedHandleCounts {
+    pub fn total_edges(&self) -> u64 {
+        self.counts.iter().sum()
+    }
+}
+
 /// Direct and two-hop frontier degrees of one seed batch.
 #[derive(Debug, Clone, Default)]
 pub struct FrontierDegrees {
@@ -462,6 +481,40 @@ pub trait StorageReader: Send + Sync + std::fmt::Debug {
             packed.child_offsets.push(packed.dst.len());
         }
         Ok(packed)
+    }
+
+    /// Handle-level adjacency counts for a count-only packed expand.
+    ///
+    /// The native engine groups visible CSR neighbors by internal far
+    /// endpoint handle and returns them sorted by handle. `None` means the
+    /// shape is not served natively and the caller must use the full packed
+    /// topology path.
+    fn get_packed_handle_counts_batch(
+        &self,
+        space: &str,
+        parents: &[VertexId],
+        handles: Option<&[Option<(u32, LabelId)>]>,
+        direction: EdgeDirection,
+        edge_types: &[String],
+        _schema: &TopologySchema,
+    ) -> Result<Option<PackedHandleCounts>, StorageError> {
+        let _ = (space, parents, handles, direction, edge_types);
+        Ok(None)
+    }
+
+    /// Resolve external vertex ids from topology-carried internal handles.
+    ///
+    /// `None` signals that the reader cannot serve a handle-only lookup;
+    /// callers then take the ordinary external-id path. A `Some` entry may
+    /// still be `None` when the row is absent at the read snapshot.
+    fn vertex_ids_by_handles_batch(
+        &self,
+        space: &str,
+        tag: &str,
+        handles: &[Option<(u32, LabelId)>],
+    ) -> Result<Option<Vec<Option<VertexId>>>, StorageError> {
+        let _ = (space, tag, handles);
+        Ok(None)
     }
 
     /// Batch vertex point lookups with the schema resolved once.

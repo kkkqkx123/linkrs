@@ -308,7 +308,48 @@ fn main() {
             children,
             0,
         );
+    }
 
+    println!("-- F1h handle-level counts by parent batch --");
+    for &count in &BATCH_SIZES {
+        let children = count * EDGES_PER_VERTEX;
+        for (parents, label) in [
+            (prefix_seeds(count), "batch"),
+            (spread_seeds(count), "spread"),
+        ] {
+            let (samples, bytes) = measure(|| {
+                storage
+                    .get_packed_handle_counts_batch(
+                        SPACE,
+                        &parents,
+                        None,
+                        EdgeDirection::Out,
+                        &edge_types,
+                        &schema_filtered,
+                    )
+                    .expect("handle-count read")
+                    .expect("native handle counts")
+            });
+            let first = storage
+                .get_packed_handle_counts_batch(
+                    SPACE,
+                    &parents,
+                    None,
+                    EdgeDirection::Out,
+                    &edge_types,
+                    &schema_filtered,
+                )
+                .expect("handle-count read")
+                .expect("native handle counts");
+            assert_eq!(first.total_edges() as usize, children);
+            report(
+                &format!("F1h {label}={count}"),
+                samples,
+                bytes,
+                children,
+                first.handles.len(),
+            );
+        }
     }
 
     println!("-- F2 direction and edge-type filtering --");

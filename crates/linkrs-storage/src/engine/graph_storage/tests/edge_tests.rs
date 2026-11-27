@@ -658,3 +658,127 @@ fn test_batch_delete_edges_removes_many_keys_under_one_timestamp() {
         1
     );
 }
+
+#[test]
+fn packed_handle_counts_match_topology_multiplicity() {
+    let mut storage = create_test_storage();
+    setup_space(&mut storage);
+    setup_person_tag(&mut storage);
+    let edge_type = EdgeTypeInfo::new("KNOWS".into())
+        .with_properties(vec![PropertyDef::new("since".into(), DataType::Int)])
+        .with_src_tag("Person".into())
+        .with_dst_tag("Person".into());
+    storage
+        .create_edge_type("test_space", &edge_type)
+        .expect("create edge type");
+    for (id, name) in [(1, "a"), (2, "b"), (3, "c")] {
+        insert_test_vertex(&mut storage, id, name);
+    }
+    let edge = |src: i64, dst: i64, rank: i64| {
+        Edge::new(
+            VertexId::try_from_int64(src).expect("test vertex id"),
+            VertexId::try_from_int64(dst).expect("test vertex id"),
+            "KNOWS".into(),
+            rank,
+            [("since".into(), Value::Int(2020))].into_iter().collect(),
+        )
+    };
+    for edge in [edge(1, 2, 0), edge(1, 2, 1), edge(1, 3, 0), edge(2, 3, 0)] {
+        storage
+            .insert_edge("test_space", edge)
+            .expect("insert edge");
+    }
+
+    let parents = [VertexId::try_from_int64(1).expect("test vertex id")];
+    let edge_types = vec!["KNOWS".to_string()];
+    let schema = storage
+        .resolve_topology_schema("test_space", &edge_types)
+        .expect("resolve schema");
+    let counts = storage
+        .get_packed_handle_counts_batch(
+            "test_space",
+            &parents,
+            None,
+            EdgeDirection::Out,
+            &edge_types,
+            &schema,
+        )
+        .expect("handle counts")
+        .expect("native handle counts");
+    assert_eq!(counts.parents.len(), 1);
+    assert_eq!(counts.total_edges(), 3);
+    let external = storage
+        .vertex_ids_by_handles_batch(
+            "test_space",
+            "Person",
+            &counts.handles.iter().copied().map(Some).collect::<Vec<_>>(),
+        )
+        .expect("resolve handles")
+        .expect("native handle resolution");
+    let mut actual: Vec<(i64, u64)> = external
+        .into_iter()
+        .zip(&counts.counts)
+        .map(|(vid, count)| {
+            (
+                vid.expect("visible endpoint").as_int64().expect("int id"),
+                *count,
+            )
+        })
+        .collect();
+    actual.sort_unstable();
+    assert_eq!(actual, vec![(2, 2), (3, 1)]);
+
+    let packed = storage
+        .get_packed_node_edge_headers_batch(
+            "test_space",
+            &parents,
+            None,
+            EdgeDirection::Out,
+            &edge_types,
+            &schema,
+        )
+        .expect("packed topology");
+    let mut topology: Vec<i64> = packed
+        .dst
+        .iter()
+        .map(|id| id.as_int64().expect("int id"))
+        .collect();
+    topology.sort_unstable();
+    assert_eq!(topology, vec![2, 2, 3]);
+
+    let empty = storage
+        .get_packed_handle_counts_batch(
+            "test_space",
+            &[],
+            None,
+            EdgeDirection::Out,
+            &edge_types,
+            &schema,
+        )
+        .expect("empty handle counts")
+        .expect("native handle counts");
+    assert_eq!(empty.total_edges(), 0);
+
+    storage
+        .create_edge_type(
+            "test_space",
+            &EdgeTypeInfo::new("OTHER".into())
+                .with_src_tag("Person".into())
+                .with_dst_tag("Person".into()),
+        )
+        .expect("create second edge type");
+    let multi_schema = storage
+        .resolve_topology_schema("test_space", &[])
+        .expect("resolve all schemas");
+    assert!(storage
+        .get_packed_handle_counts_batch(
+            "test_space",
+            &parents,
+            None,
+            EdgeDirection::Out,
+            &[],
+            &multi_schema,
+        )
+        .expect("multi-type handle counts")
+        .is_none());
+}

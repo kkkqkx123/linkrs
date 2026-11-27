@@ -186,6 +186,7 @@ fn failed_open_closes_children_opened_before_the_failure() {
                 projected_properties: vec![],
                 identity_only: false,
                 skip_rows: false,
+                handle_only: false,
                 predicate: Vec::new(),
                 tag: None,
                 semi_mask: None,

@@ -60,6 +60,7 @@ pub(crate) fn open(op: &mut SourceOperator) -> Result<(), QueryError> {
             col_names,
             projected_properties,
             identity_only,
+            handle_only,
             predicate,
             tag,
             semi_mask,
@@ -92,6 +93,7 @@ pub(crate) fn open(op: &mut SourceOperator) -> Result<(), QueryError> {
                     })
                 },
                 topology_only,
+                handle_only: *handle_only,
                 predicate: (!predicate.is_empty()).then(|| predicate.clone()),
                 tag: tag.clone(),
                 column_block_mode: column_block_enabled(),

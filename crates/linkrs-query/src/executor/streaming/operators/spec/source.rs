@@ -83,6 +83,9 @@ pub enum SourceSpec {
         /// and emit typed columns only. Valid only when the columnar path
         /// is on; the scan falls back to rows when it is off.
         skip_rows: bool,
+        /// Handle-only identity mode: the seed consumer uses internal row
+        /// handles, so a topology scan skips external key decoding.
+        handle_only: bool,
         /// Scan predicates pushed into the storage layer (pure pre-filter;
         /// the original filter still runs on top).
         predicate: Vec<ScanPredicate>,

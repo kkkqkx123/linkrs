@@ -11,7 +11,7 @@ use crate::engine::graph_storage::ops::{
 };
 use crate::engine::params::EdgeOperationParams;
 use crate::EdgeTopology;
-use crate::{FrontierDegrees, PackedEdgeTopology, TopologySchema};
+use crate::{FrontierDegrees, PackedEdgeTopology, PackedHandleCounts, TopologySchema};
 use linkrs_core::types::{EdgeTypeInfo, LabelId, Timestamp, VertexId};
 use linkrs_core::{Edge, EdgeDirection, StorageError, StorageResult, Value};
 
@@ -639,6 +639,157 @@ where
     resolved
 }
 
+/// Resolve external ids for topology-carried internal handles.
+///
+/// The handles already carry their owning label, so resolution groups by
+/// label and shares one table lock per label. Visible rows only: the
+/// caller's existence gate still decides whether a far endpoint survives
+/// the snapshot, while this lookup supplies the public id for grouping.
+pub(crate) fn vertex_ids_by_handles_batch(
+    ctx: &GraphStorageContext,
+    handles: &[Option<(u32, LabelId)>],
+    ts: Timestamp,
+) -> StorageResult<Option<Vec<Option<VertexId>>>> {
+    if handles.iter().any(Option::is_none) {
+        return Ok(None);
+    }
+    let mut by_label: HashMap<LabelId, Vec<(usize, u32)>> = HashMap::new();
+    for (slot, handle) in handles.iter().enumerate() {
+        let Some((internal, label)) = *handle else {
+            return Ok(None);
+        };
+        by_label.entry(label).or_default().push((slot, internal));
+    }
+    if by_label.len() != 1 {
+        return Ok(None);
+    }
+    let mut out: Vec<Option<VertexId>> = vec![None; handles.len()];
+    for (label, group) in by_label {
+        let slots: Vec<usize> = group.iter().map(|&(slot, _)| slot).collect();
+        let ids: Vec<u32> = group.into_iter().map(|(_, id)| id).collect();
+        for (slot, external) in slots
+            .into_iter()
+            .zip(ctx.external_ids_by_internal_batch(label, &ids, ts))
+        {
+            out[slot] = external;
+        }
+    }
+    Ok(Some(out))
+}
+
+/// Handle-level adjacency counts for the packed group-count path.
+///
+/// Only one edge type, one direction and one far label are served. The
+/// count is per visible CSR edge, aggregated by internal far endpoint, so
+/// no external endpoint id, rank or edge-type id is constructed.
+pub(crate) fn packed_handle_counts_batch(
+    ctx: &GraphStorageContext,
+    space: &str,
+    parents: &[VertexId],
+    handles: Option<&[Option<(u32, LabelId)>]>,
+    direction: EdgeDirection,
+    edge_types: &[String],
+    schema: &TopologySchema,
+) -> StorageResult<Option<PackedHandleCounts>> {
+    if matches!(direction, EdgeDirection::Both) || handles.is_some_and(|h| h.len() != parents.len())
+    {
+        return Ok(None);
+    }
+    let owned_schema = if schema.matches(space, ctx.layout_version()) {
+        None
+    } else {
+        Some(resolve_topology_schema(ctx, space, edge_types)?)
+    };
+    let schema = owned_schema.as_ref().unwrap_or(schema);
+    let [entry] = schema.entries.as_slice() else {
+        return Ok(None);
+    };
+    let (Some(src_label), Some(dst_label)) = (entry.src_label, entry.dst_label) else {
+        return Ok(None);
+    };
+    let outward = direction == EdgeDirection::Out;
+    let near_label = if outward { src_label } else { dst_label };
+    let far_label = if outward { dst_label } else { src_label };
+    if far_label == 0 {
+        return Ok(None);
+    }
+
+    record_schema_read(ctx, space);
+    let ts = ctx.get_read_timestamp();
+    let recorded_external = ctx.mutation_recorder().is_some().then(|| {
+        handles
+            .filter(|h| h.len() == parents.len() && h.iter().all(Option::is_some))
+            .map(|h| {
+                h.iter()
+                    .filter_map(|handle| match *handle {
+                        Some((internal, label)) if label == near_label => Some(internal),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .filter(|ids| ids.len() == parents.len())
+    });
+    match recorded_external {
+        Some(Some(ids)) => {
+            let external = ctx.external_ids_by_internal_batch(near_label, &ids, ts);
+            record_vertex_reads(ctx, &external.into_iter().flatten().collect::<Vec<_>>());
+        }
+        _ => record_vertex_reads(ctx, parents),
+    }
+    let mut staged: Vec<u64> = Vec::with_capacity(parents.len().saturating_mul(16));
+    let mut foreign_label = false;
+    let mut aggregate = |_index: usize, label: LabelId, hot: crate::edge::HotNbr| {
+        if label != far_label {
+            foreign_label = true;
+            return;
+        }
+        staged.push(((label as u64) << 32) | hot.endpoint as u64);
+    };
+    if outward {
+        ctx.visit_out_nbrs_by_internal(
+            entry.edge_label,
+            near_label,
+            parents,
+            handles,
+            ts,
+            &mut aggregate,
+        );
+    } else {
+        ctx.visit_in_nbrs_by_internal(
+            entry.edge_label,
+            near_label,
+            parents,
+            handles,
+            ts,
+            &mut aggregate,
+        );
+    }
+    drop(aggregate);
+    if foreign_label {
+        return Ok(None);
+    }
+
+    let mut result = PackedHandleCounts {
+        parents: parents.to_vec(),
+        ..PackedHandleCounts::default()
+    };
+    // Sorting the packed handle keys makes equal handles adjacent, so the
+    // count array is built by one run-length pass without a hash table.
+    staged.sort_unstable();
+    let mut previous = None;
+    for key in staged {
+        if Some(key) == previous {
+            let last = result.counts.len() - 1;
+            result.counts[last] += 1;
+            continue;
+        }
+        result.handles.push((key as u32, (key >> 32) as u32));
+        result.counts.push(1);
+        previous = Some(key);
+    }
+    Ok(Some(result))
+}
+
 pub(crate) fn packed_node_edge_headers_batch(
     ctx: &GraphStorageContext,
     space: &str,
@@ -695,15 +846,9 @@ pub(crate) fn packed_node_edge_headers_batch(
         let mut batches_by_type = Vec::with_capacity(endpoint_types.len());
         for (_, edge_label, src_label, dst_label) in &endpoint_types {
             let batches = if outward {
-                ctx.out_topology_batch(
-                    *edge_label,
-                    *src_label,
-                    &normalized,
-                    handles,
-                    ts,
-                )
+                ctx.out_topology_batch(*edge_label, *src_label, &normalized, handles, ts)
             } else {
-                ctx.in_topology_batch(*edge_label, *dst_label, &normalized, ts)
+                ctx.in_topology_batch(*edge_label, *dst_label, &normalized, handles, ts)
             };
             batches_by_type.push(batches);
         }
@@ -777,15 +922,10 @@ pub(crate) fn packed_node_edge_headers_batch(
     let mut by_type = Vec::with_capacity(endpoint_types.len());
     let mut endpoint_pairs: Vec<(LabelId, u32)> = Vec::new();
     for (type_id, edge_label, src_label_id, dst_label_id) in &endpoint_types {
-        let out_batches = ctx.out_topology_batch(
-            *edge_label,
-            *src_label_id,
-            &normalized,
-            handles,
-            ts,
-        );
+        let out_batches =
+            ctx.out_topology_batch(*edge_label, *src_label_id, &normalized, handles, ts);
         let in_batches =
-            ctx.in_topology_batch(*edge_label, *dst_label_id, &normalized, ts);
+            ctx.in_topology_batch(*edge_label, *dst_label_id, &normalized, handles, ts);
         for batches in [&out_batches, &in_batches] {
             endpoint_pairs.extend(
                 batches

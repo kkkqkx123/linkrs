@@ -564,6 +564,40 @@ impl ShardedVertexTable {
         record_elapsed(assemble_start, &mut timings.scan_assemble_us);
     }
 
+    /// Handle-only resolution for topology scans: keep visible internal row
+    /// ids without decoding their external keys. Candidate ids come from
+    /// the same visibility pass as the topology scan, so provenance decides
+    /// whether a second row-liveness check is needed.
+    pub fn scan_handles(
+        &self,
+        global_ids: &[u32],
+        guard: &VisibilityGuard<'_>,
+        provenance: ScanIdProvenance,
+        timings: &mut ScanTimings,
+        ids_out: &mut Vec<u32>,
+    ) {
+        let mut resolved: Vec<(usize, u32)> = Vec::with_capacity(global_ids.len());
+        for (_, group) in self.group_by_shard(global_ids) {
+            if group.is_empty() {
+                continue;
+            }
+            let table = self.shards[group[0].0].read();
+            let visibility_start = std::time::Instant::now();
+            for (slot, local_id) in group {
+                if provenance == ScanIdProvenance::Unverified
+                    && !Self::shard_row_visible(&table, local_id, guard)
+                {
+                    continue;
+                }
+                resolved.push((slot, global_ids[slot]));
+            }
+            record_elapsed(visibility_start, &mut timings.scan_visibility_us);
+        }
+        resolved.sort_unstable_by_key(|(slot, _)| *slot);
+        ids_out.clear();
+        ids_out.extend(resolved.into_iter().map(|(_, id)| id));
+    }
+
     /// Group input slots by shard so each shard is locked once per batch.
     ///
     /// The result is indexed by shard order; the tuple pairs the output slot

@@ -24,7 +24,8 @@ pub use traits_admin::{
     StorageTtlPurgeOps, TtlPurgeEntry,
 };
 pub use traits_reader::{
-    EdgeTopology, FrontierDegrees, PackedEdgeTopology, StorageReader, TopologySchema,
+    EdgeTopology, FrontierDegrees, PackedEdgeTopology, PackedHandleCounts, StorageReader,
+    TopologySchema,
 };
 pub use traits_schema::{StorageRecoveryOps, StorageSchemaContextOps, StorageSchemaOps};
 pub use traits_writer::{StorageCommitOps, StorageWriter};

@@ -44,6 +44,7 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_source_spec(
                 projected_properties,
                 identity_only: scan_node.identity_only(),
                 skip_rows: scan_node.skip_rows(),
+                handle_only: false,
                 predicate,
                 tag: scan_node.tag().map(|s| s.to_string()),
                 partition_range: None,

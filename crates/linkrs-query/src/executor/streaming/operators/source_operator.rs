@@ -104,6 +104,8 @@ pub enum SourceOperatorKind {
         /// Rowless mode: skip the row view, emit typed columns only.
         /// Honored only when the columnar path is on.
         skip_rows: bool,
+        /// Topology scan carries only internal handles.
+        handle_only: bool,
         /// Scan predicates pushed into the storage layer.
         predicate: Vec<ScanPredicate>,
         /// Tag-restricted scan: only rows of this tag are scanned at the
@@ -294,6 +296,7 @@ impl SourceOperator {
                 projected_properties,
                 identity_only,
                 skip_rows,
+                handle_only,
                 predicate,
                 tag,
                 partition_range,
@@ -308,6 +311,7 @@ impl SourceOperator {
                 projected_properties: shared_names(projected_properties),
                 identity_only: *identity_only,
                 skip_rows: *skip_rows,
+                handle_only: *handle_only,
                 predicate: predicate.clone(),
                 tag: tag.clone(),
                 semi_mask: None,
