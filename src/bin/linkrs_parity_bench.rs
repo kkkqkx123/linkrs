@@ -943,7 +943,7 @@ fn cmd_run(args: &[String]) {
         }
         db_config = db_config.with_parallel_config(parallel_config);
     }
-    let mut database = GraphDatabase::<GraphStorage>::open_with_config(db_config)
+    let database = GraphDatabase::<GraphStorage>::open_with_config(db_config)
         .unwrap_or_else(|e| die(format!("open db {}: {e}", db.display())));
     // One-time read-only proof for dangling-free fast paths: on a clean
     // import the repair finds nothing (no writes) and marks the space

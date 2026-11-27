@@ -337,6 +337,10 @@ impl TransactionMutationRecorder for TransactionContext {
         self.record_vertex_read(vertex_id);
     }
 
+    fn record_vertex_reads(&self, vids: &[VertexId]) {
+        self.record_vertex_reads(vids);
+    }
+
     fn record_edge_read(&self, edge: linkrs_core::types::EdgeIdentifier) {
         self.record_edge_read(edge);
     }
@@ -382,6 +386,23 @@ mod tests {
         assert_eq!(ctx.timestamp(), 1);
         assert_eq!(ctx.state(), TransactionState::Active);
         assert!(!ctx.read_only);
+    }
+
+    #[test]
+    fn batch_vertex_reads_match_single_reads() {
+        let vids: Vec<VertexId> = (1..=64)
+            .map(|i| VertexId::try_from_int64(i).expect("test vertex id"))
+            .collect();
+        let singles = TransactionContext::new(TransactionId(1), 1, TransactionConfig::default());
+        for vid in &vids {
+            singles.record_vertex_read(*vid);
+        }
+        let batched = TransactionContext::new(TransactionId(2), 1, TransactionConfig::default());
+        batched.record_vertex_reads(&vids);
+        assert_eq!(singles.get_read_set(), batched.get_read_set());
+        // Empty batches are no-ops and must not touch the set.
+        batched.record_vertex_reads(&[]);
+        assert_eq!(singles.get_read_set(), batched.get_read_set());
     }
 
     #[test]

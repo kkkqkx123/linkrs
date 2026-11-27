@@ -147,8 +147,9 @@ pub(crate) fn scan_vertices(ctx: &GraphStorageContext, space: &str) -> StorageRe
         let Some(records) = ctx.scan_vertices(tag.tag_id, ts) else {
             continue;
         };
+        let mut read_vids: Vec<VertexId> = Vec::new();
         for record in records {
-            record_vertex_read(ctx, record.vid);
+            read_vids.push(record.vid);
             let props: HashMap<std::sync::Arc<str>, Value> =
                 record.properties.iter().cloned().collect();
             let vertex = Vertex::new(record.vid, Tag::new(tag.tag_name.clone(), props));
@@ -157,6 +158,7 @@ pub(crate) fn scan_vertices(ctx: &GraphStorageContext, space: &str) -> StorageRe
             }
             out.push(vertex);
         }
+        record_vertex_reads(ctx, &read_vids);
     }
 
     Ok(out)
@@ -177,14 +179,16 @@ pub(crate) fn scan_vertices_by_tag(
 
     let label_id = tag_info.tag_id;
     if let Some(iterator) = ctx.scan_vertices(label_id, ts) {
+        let mut read_vids: Vec<VertexId> = Vec::new();
         for record in iterator {
-            record_vertex_read(ctx, record.vid);
+            read_vids.push(record.vid);
             let vertex = vertex_record_to_vertex(&record, tag);
             if vertex_is_expired(&tag_info, &vertex) {
                 continue;
             }
             vertices.push(vertex);
         }
+        record_vertex_reads(ctx, &read_vids);
     }
 
     Ok(vertices)
@@ -207,8 +211,9 @@ pub(crate) fn scan_vertices_by_prop(
 
     let label_id = tag_info.tag_id;
     if let Some(iterator) = ctx.scan_vertices(label_id, ts) {
+        let mut read_vids: Vec<VertexId> = Vec::new();
         for record in iterator {
-            record_vertex_read(ctx, record.vid);
+            read_vids.push(record.vid);
             if record
                 .properties
                 .iter()
@@ -221,6 +226,7 @@ pub(crate) fn scan_vertices_by_prop(
                 vertices.push(vertex);
             }
         }
+        record_vertex_reads(ctx, &read_vids);
     }
 
     Ok(vertices)
@@ -344,9 +350,7 @@ fn get_vertices_batch_impl(
         .ok_or_else(|| StorageError::not_found(format!("Tag {} not found", tag)))?;
     let label_id = tag_info.tag_id;
     let ts = ctx.get_read_timestamp();
-    for id in ids {
-        record_vertex_read(ctx, *id);
-    }
+    record_vertex_reads(ctx, ids);
     let staging = ctx.active_txn_staging();
     let mut normalized: Vec<Option<VertexId>> = Vec::with_capacity(ids.len());
     let mut keys: Vec<Option<crate::vertex::IdKey>> = Vec::with_capacity(ids.len());
@@ -555,9 +559,7 @@ fn get_vertex_property_columns_batch_impl(
         .ok_or_else(|| StorageError::not_found(format!("Tag {} not found", tag)))?;
     let label_id = tag_info.tag_id;
     let ts = ctx.get_read_timestamp();
-    for id in ids {
-        record_vertex_read(ctx, *id);
-    }
+    record_vertex_reads(ctx, ids);
 
     let extract = |record: &crate::vertex::VertexRecord| {
         properties

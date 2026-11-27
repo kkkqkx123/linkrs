@@ -167,6 +167,9 @@ impl PackedEdgeTopology {
 pub struct FrontierDegrees {
     pub direct: Vec<usize>,
     pub two_hop: Vec<usize>,
+    /// Whether the dangling-visibility resolution was skipped under a proven
+    /// dangling-free token. Query layers surface this as a plan mark.
+    pub dangling_skipped: bool,
 }
 
 /// Portable existence gate built from topology-only edge reads and visible
@@ -644,7 +647,11 @@ pub trait StorageReader: Send + Sync + std::fmt::Debug {
             two_hop.push(sum);
             offset += length;
         }
-        Ok(FrontierDegrees { direct, two_hop })
+        Ok(FrontierDegrees {
+            direct,
+            two_hop,
+            dangling_skipped: false,
+        })
     }
 
     /// Open an index cursor that materializes at most `max_entries` per

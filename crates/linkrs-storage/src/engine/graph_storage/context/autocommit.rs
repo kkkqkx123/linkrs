@@ -219,6 +219,8 @@ impl linkrs_transaction::TransactionMutationRecorder for AutoCommitMutationRecor
     }
 
     fn record_table_modification(&self, _table_name: &str) {}
+
+    fn record_vertex_reads(&self, _vids: &[VertexId]) {}
 }
 
 /// A shared auto-commit batch window.

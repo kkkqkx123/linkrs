@@ -411,35 +411,6 @@ fn expand_packed_identity(
             proven_present = false;
         }
     }
-    if std::env::var_os("LINKRS_DANGLING_DEBUG").is_some() {
-        eprintln!(
-            "dangling-skip gates: single_stmt={} single_type={} vertex_ttl_checked={} edge_ttl_checked={} token={} unique={}",
-            reader.allows_dangling_skip(),
-            packed
-                .edge_type_ids
-                .iter()
-                .all(|&id| Some(id) == packed.edge_type_ids.first().copied()),
-            reader
-                .get_tag(space_name, dst_tag)
-                .map(|tag| tag.is_some_and(|info| info.ttl_duration.is_some()))
-                .unwrap_or(true),
-            packed
-                .edge_type_ids
-                .first()
-                .and_then(|&id| packed.edge_type_names.get(id as usize))
-                .map(|name| reader.list_edge_types(space_name).map(|types| types.iter().any(
-                    |info| info.edge_type_name.as_str() == &**name && info.ttl_duration.is_some()
-                )).unwrap_or(true))
-                .unwrap_or(true),
-            packed
-                .edge_type_ids
-                .first()
-                .and_then(|&id| packed.edge_type_names.get(id as usize))
-                .map(|name| reader.edge_type_dangling_free(space_name, &**name))
-                .unwrap_or(false),
-            unique.len(),
-        );
-    }
     let read_started = std::time::Instant::now();
     let (present, missing, read_us) = if proven_present {
         if let Some(stats) = stats {

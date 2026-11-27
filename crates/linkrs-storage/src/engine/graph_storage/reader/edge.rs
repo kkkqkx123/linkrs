@@ -1142,18 +1142,22 @@ pub(crate) fn frontier_degree_batch(
         // recorder is active.
         let external = ctx.external_ids_by_internal_batch(neighbor_label, &raw_endpoints, ts);
         let recording = ctx.mutation_recorder().is_some();
+        let mut read_vids: Vec<VertexId> = Vec::new();
         for pair in offsets.windows(2) {
             visible_offsets.push(endpoints.len());
             for position in pair[0]..pair[1] {
                 if let Some(ext) = external[position] {
                     if recording {
-                        record_vertex_read(ctx, ext);
+                        read_vids.push(ext);
                     }
                     endpoints.push(raw_endpoints[position]);
                 }
             }
         }
         visible_offsets.push(endpoints.len());
+        if recording {
+            record_vertex_reads(ctx, &read_vids);
+        }
     }
     // Read tail degrees in internal-endpoint order so scattered CSR head
     // reads become sequential runs. The per-seed sums are order-independent,
@@ -1175,7 +1179,11 @@ pub(crate) fn frontier_degree_batch(
     for ((_, seed_index), degree) in order.iter().zip(sorted_degrees.iter()) {
         two_hop[*seed_index] += *degree;
     }
-    Ok(FrontierDegrees { direct, two_hop })
+    Ok(FrontierDegrees {
+        direct,
+        two_hop,
+        dangling_skipped: skip_visibility,
+    })
 }
 
 /// Two-hop tail degrees derived from the shared frontier staging.
@@ -1208,7 +1216,11 @@ fn portable_frontier_degrees(
         two_hop.push(sum);
         offset += length;
     }
-    Ok(FrontierDegrees { direct, two_hop })
+    Ok(FrontierDegrees {
+        direct,
+        two_hop,
+        dangling_skipped: false,
+    })
 }
 
 /// Stage hot-CSR neighbors for a whole seed batch, one edge type at a time.

@@ -46,6 +46,16 @@ impl TransactionContext {
         self.read_set.lock().record_vertex(vid);
     }
 
+    /// Batch form of [`Self::record_vertex_read`]: a single read-set guard
+    /// covers the whole batch. Same insertions as N single calls, so
+    /// certification observes the identical set.
+    pub fn record_vertex_reads(&self, vids: &[VertexId]) {
+        let mut read_set = self.read_set.lock();
+        for vid in vids {
+            read_set.record_vertex(*vid);
+        }
+    }
+
     pub fn record_edge_read(&self, edge: linkrs_core::types::EdgeIdentifier) {
         self.read_set.lock().record_edge(edge);
     }

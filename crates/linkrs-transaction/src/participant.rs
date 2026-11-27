@@ -85,6 +85,16 @@ pub trait TransactionMutationRecorder: Send + Sync + std::fmt::Debug {
 
     fn record_vertex_read(&self, _vertex_id: VertexId) {}
 
+    /// Batch form of [`Self::record_vertex_read`]: one call for a whole
+    /// scan/expand batch instead of one per vertex. The default loops over
+    /// the single-item method; recorders holding a set guard override this
+    /// to reuse one guard for the whole batch.
+    fn record_vertex_reads(&self, vids: &[VertexId]) {
+        for vid in vids {
+            self.record_vertex_read(*vid);
+        }
+    }
+
     fn record_edge_read(&self, _edge: EdgeIdentifier) {}
 
     fn record_schema_read(&self, _resource: &str) {}

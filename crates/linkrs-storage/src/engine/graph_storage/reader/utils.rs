@@ -9,15 +9,14 @@ pub(crate) fn record_vertex_read(ctx: &GraphStorageContext, vid: VertexId) {
     }
 }
 
-/// Batch form of [`record_vertex_read`]: the recorder handle is resolved
-/// once for the whole batch instead of once per vertex. Hot scan/expand
-/// paths call this with thousands of ids while no recorder is installed;
-/// a single `None` check then replaces thousands of `Arc` clones.
+/// Batch form of [`record_vertex_read`]: the recorder handle and its set
+/// guard are resolved once for the whole batch instead of once per vertex.
+/// Hot scan/expand paths call this with thousands of ids; a single `None`
+/// check then replaces thousands of `Arc` clones, and recording contexts
+/// reuse one read-set guard for all insertions.
 pub(crate) fn record_vertex_reads(ctx: &GraphStorageContext, vids: &[VertexId]) {
     if let Some(recorder) = ctx.mutation_recorder() {
-        for vid in vids {
-            recorder.record_vertex_read(*vid);
-        }
+        recorder.record_vertex_reads(vids);
     }
 }
 

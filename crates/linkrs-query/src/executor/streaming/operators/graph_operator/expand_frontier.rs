@@ -676,15 +676,36 @@ pub(super) fn expand_count_only(
     if depths.contains(&1) && depths.contains(&2) {
         let degrees =
             reader.frontier_degree_batch(space_name, &seed_vids, direction, edge_types)?;
+        if degrees.dangling_skipped {
+            if let Some(stats) = ctx
+                .runtime
+                .as_ref()
+                .map(|runtime| runtime.columnar_stats())
+            {
+                stats.record_dangling_exist_skip();
+            }
+        }
         total += degrees.direct.iter().map(|&d| d as i64).sum::<i64>();
         total += degrees.two_hop.iter().map(|&d| d as i64).sum::<i64>();
     } else if depths.contains(&1) {
         let degrees = reader.out_degree_batch(space_name, &seed_vids, direction, edge_types)?;
         total += degrees.iter().map(|&d| d as i64).sum::<i64>();
     } else if depths.contains(&2) {
+        // Prefer the fused frontier over the neighbor-degree tail: the
+        // portable composition is identical, the native engine stages the
+        // first hop once, and the dangling-skip mark survives for EXPLAIN.
         let degrees =
-            reader.neighbor_degree_batch(space_name, &seed_vids, direction, edge_types)?;
-        total += degrees.iter().map(|&d| d as i64).sum::<i64>();
+            reader.frontier_degree_batch(space_name, &seed_vids, direction, edge_types)?;
+        if degrees.dangling_skipped {
+            if let Some(stats) = ctx
+                .runtime
+                .as_ref()
+                .map(|runtime| runtime.columnar_stats())
+            {
+                stats.record_dangling_exist_skip();
+            }
+        }
+        total += degrees.two_hop.iter().map(|&d| d as i64).sum::<i64>();
     }
     Ok(total)
 }

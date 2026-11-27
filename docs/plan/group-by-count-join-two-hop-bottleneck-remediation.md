@@ -50,3 +50,16 @@
 门槛为 `group_by_count` 生产默认不超过 20ms 且与 Ladybug 倍率不超过 3 倍、`join_two_hop` 生产默认不超过 3ms 且结果恒为 382018；任一数值回归立即停止，先补反例再继续。门槛未达成不通过放宽并行、近似、截断或放宽 buffer 策略换取。
 
 不做项：近似聚合与采样截断；跨调用可见性或端点存在性缓存；属性内联进 CSR；无证明的存在性跳过；多谓词组合下推；去重计数向量化。
+
+## 6. 实施结果（2026-11-26，devs 实测）
+
+口径为 node1 绑定、三方 16 线程、warmup 1 + run 5 去最大值平均；v4 库。正确性门全绿：query lib 2364、storage lib 1420、DQL 324、parallel 27、typed group、local topk、column batch 与新增单测（token 生命周期、degree sketch 切分）。
+
+- 其一（度数感知切分）：已生效，固定门 EXPLAIN 显示 `degree-weighted`，分区偏斜比由约 1.6 降到约 1.1–1.3。形状为 stride 采样累计权重等分，退化时回退均匀切分。
+- 其二（无悬空边证明）：已生效。prove 开 / 关对照结果逐值一致；`dangling_exist_skips` 为 group_by 112/112 批、join_two 与变长计数各 2/2 前沿调用；group_by 目的端读取工作量由约 11ms 降到 0。token 由插入校验、plain 删除撤销、修复重建三条规则维护，重启后懒播种标脏。
+- 其三（并行计数前沿）：已生效。种子门槛（每 worker 32 种子）替代行数门后 join_two 进入并行（`actual>=2`，偏斜比约 1.1），串行约 5.4ms 降到约 3.7–3.9ms。`allow_parallel_count_frontier` 默认开启，保留一键关闭。
+- 其四（记账收紧）：已闭环。批量方法下沉到事务 trait（`record_vertex_reads` 默认逐条，真记账实现单守卫批量插入，auto-commit 空记账实现空体跳过虚调用），存储侧扫描与属性批量路径的逐行记账全部改为批量；等价性单测断言批量与逐条产出同一 read set。batch_acct 对照：group_by 22.58→22.01ms（扫描工作量约 -0.3ms），join_two 3.75→3.10ms（锚点扫描批量记账叠加负载窗口，机制为真、幅度待安静复核），结果逐值一致。未动项：边扫描路径的逐条边记账（冷路径，无热点依据不动）。
+- 其五（端点排序读度数）：已随前沿路径落地，只改变度数读取顺序，不改变累加结果；未单独 A/B，按语义中性保留。
+- 其六（计划复用）：已闭环。compiled memo 全命中，group_by 编译由约 2.4ms 降到约 0.05ms，join_two 由约 0.02ms 降到约 0.03ms 量级（原本已低）。
+
+生产默认对照（prove 开 / 关，v4 库）：group_by 22.58 / 23.52ms，distinct_limit（无序索引的旧路径）21.84 / 29.53ms，join_two 3.75 / 4.03ms，variable_path_count 5.47 / 5.68ms。相对资源对齐基线：group_by 26.41→22.58（对 Ladybug 2.77×），join_two 5.41→3.75（对 Ladybug 2.43×）。完成门（20ms、3ms）尚未同时达成：剩余主因是扫描可见性（约 16ms）与单跳拓扑读取（约 55ms），分区扫描与 CSR 区间读取是下一轮主线。
